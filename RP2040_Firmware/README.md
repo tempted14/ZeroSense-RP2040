@@ -102,7 +102,9 @@ the parser is synchronized for the next valid frame. A pattern profile is not
 allowed to start until every declared point has arrived in order.
 
 General mode emits one movement step every 8 ms. Pattern mode emits one point per
-shot using `60,000,000 / RPM` microseconds and stops at the loaded pattern length.
+shot using a phase-locked `60,000,000 / RPM` interval and stops at the loaded
+pattern length. Pattern points are interpreted as HID counts, sensitivity is
+applied once, and pattern output bypasses the general-mode velocity smoothing.
 Fractional movement is accumulated so sub-count values are retained.
 Supported semi-automatic profiles pulse the left-button report at their configured
 rate and emit one recoil step per pulse. While output is active, the desktop app

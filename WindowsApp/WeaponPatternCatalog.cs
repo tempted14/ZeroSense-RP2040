@@ -194,27 +194,43 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
 
     private static double StageScale(double progress, PatternShape shape, bool largeMagazine)
     {
+        progress = Math.Clamp(progress, 0.0, 1.0);
         if (shape == PatternShape.TwoStage)
         {
-            return progress < 0.24 ? 0.90 : 1.28;
+            // Preserve the two-stage character without an instantaneous jump
+            // between adjacent shots around the transition.
+            return SmoothInterpolate(0.90, 1.28, Normalize(progress, 0.14, 0.38));
         }
 
         if (progress < 0.12)
         {
-            return 1.08;
+            return SmoothInterpolate(1.08, 0.94, Normalize(progress, 0.0, 0.12));
         }
         if (progress < 0.42)
         {
-            return 0.94 + (progress - 0.12) * 0.35;
+            return SmoothInterpolate(0.94, 1.05, Normalize(progress, 0.12, 0.42));
         }
         if (progress < 0.76)
         {
-            return 1.05 + (progress - 0.42) * 0.42;
+            return SmoothInterpolate(
+                1.05,
+                largeMagazine ? 1.24 : 1.18,
+                Normalize(progress, 0.42, 0.76));
         }
 
-        return largeMagazine
-            ? 1.24 + (progress - 0.76) * 0.55
-            : 1.18 + (progress - 0.76) * 0.30;
+        return SmoothInterpolate(
+            largeMagazine ? 1.24 : 1.18,
+            largeMagazine ? 1.372 : 1.252,
+            Normalize(progress, 0.76, 1.0));
+    }
+
+    private static double Normalize(double value, double start, double end) =>
+        Math.Clamp((value - start) / (end - start), 0.0, 1.0);
+
+    private static double SmoothInterpolate(double start, double end, double amount)
+    {
+        var smoothAmount = amount * amount * (3.0 - 2.0 * amount);
+        return start + (end - start) * smoothAmount;
     }
 
     private static double HorizontalEstimate(
@@ -240,9 +256,10 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
             PatternShape.RightDrift => -amplitude,
             PatternShape.Sway => -Math.Sin(shotIndex * 0.72) * amplitude,
             PatternShape.Irregular => -IrregularDirection(shotIndex) * amplitude * 1.45,
-            PatternShape.TwoStage => progress < 0.24
-                ? -0.25 * amplitude
-                : -Math.Sin(shotIndex * 0.93) * amplitude,
+            PatternShape.TwoStage => SmoothInterpolate(
+                -0.25 * amplitude,
+                -Math.Sin(shotIndex * 0.93) * amplitude,
+                Normalize(progress, 0.14, 0.38)),
             _ => 0.0
         };
     }
