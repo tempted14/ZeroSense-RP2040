@@ -44,7 +44,7 @@ class FirmwareContractTests(unittest.TestCase):
     def test_rapid_fire_release_does_not_disable_the_mode(self) -> None:
         release = re.search(
             r"// Rapid button release handling(?P<body>.*?)"
-            r"// Schedule next shot",
+            r"// Schedule the next shot",
             FIRMWARE,
             re.DOTALL,
         )
@@ -58,15 +58,49 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotRegex(FIRMWARE, r"\bsim\.velocity\b")
 
     def test_zero_delta_reports_cannot_create_cursor_drift(self) -> None:
-        zero_guard = re.search(
-            r"static int8_t report_delta_with_noise\(int32_t value\)\s*\{"
-            r"(?P<body>.*?)const int32_t direction",
+        self.assertIn(
+            "std::clamp<int32_t>(value, -100, 100)",
+            FIRMWARE,
+        )
+        self.assertNotIn("DELTA_NOISE_RANGE", FIRMWARE)
+
+    def test_recoil_units_and_sensitivity_are_preserved(self) -> None:
+        self.assertIn("const float scaledX = requested_dx * horizontalSensitivityFactor;", FIRMWARE)
+        self.assertIn("const float scaledY = requested_dy * verticalSensitivityFactor;", FIRMWARE)
+        self.assertIn("sim.velocityX = scaledX;", FIRMWARE)
+        self.assertIn("sim.velocityY = scaledY;", FIRMWARE)
+        self.assertIn("fractionalMouseX += sim.velocityX;", FIRMWARE)
+        self.assertIn("fractionalMouseY += sim.velocityY;", FIRMWARE)
+        self.assertNotIn("raw_dx / 256.0f", FIRMWARE)
+        self.assertNotIn("raw_dy / 256.0f", FIRMWARE)
+        self.assertNotIn("horizontal * 100.0f", FIRMWARE)
+        self.assertNotIn("vertical * 100.0f", FIRMWARE)
+
+    def test_pattern_points_bypass_smoothing_and_double_scaling(self) -> None:
+        movement = re.search(
+            r"static void generate_movement\(\)\s*\{(?P<body>.*?)\n\}",
             FIRMWARE,
             re.DOTALL,
         )
-        self.assertIsNotNone(zero_guard)
-        self.assertIn("if (value == 0)", zero_guard.group("body"))
-        self.assertIn("return 0;", zero_guard.group("body"))
+        self.assertIsNotNone(movement)
+        body = movement.group("body")
+        self.assertNotIn("* horizontalSensitivityFactor", body)
+        self.assertNotIn("* verticalSensitivityFactor", body)
+        self.assertIn(
+            "queue_mouse_movement(horizontal, vertical, activeMode == MODE_GENERAL)",
+            body,
+        )
+
+    def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:
+        self.assertIn(
+            "activeMode == MODE_WEAPON_PATTERN\n"
+            "            ? base_interval\n"
+            "            : get_jittered_interval(base_interval)",
+            FIRMWARE,
+        )
+        self.assertIn("nextMovementAtUs += interval;", FIRMWARE)
+        self.assertIn("const uint32_t shot_interval = base_interval;", FIRMWARE)
+        self.assertIn("nextRapidShotAtUs += shot_interval;", FIRMWARE)
 
 
 if __name__ == "__main__":

@@ -39,8 +39,8 @@ Both interfaces use the RP2040's native USB controller through the board's USB T
 
 Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download both assets:
 
-1. `ZeroSense-1.0.0-Windows-x64.zip` — extract it, then run `zerosense.exe`.
-2. `rainbow-recoil-rp2040-zero-1.0.0.uf2` — copy it to the board's `RPI-RP2` drive while the board is in BOOT mode.
+1. `ZeroSense-1.1.0-Windows-x64.zip` — extract it, then run `zerosense.exe`.
+2. `rainbow-recoil-rp2040-zero-1.1.0.uf2` — copy it to the board's `RPI-RP2` drive while the board is in BOOT mode.
 
 The Windows archive is self-contained; users do not need the .NET SDK. The
 Microsoft Visual C++ 2015–2022 x64 Redistributable is still required. Detailed

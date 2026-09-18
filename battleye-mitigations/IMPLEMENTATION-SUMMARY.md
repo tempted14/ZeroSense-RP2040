@@ -13,13 +13,15 @@ applies.
   1 ms, 2 ms, or 4 ms software pacing according to activity state. The USB HID
   endpoint is configured for a 1 ms minimum interval so software pacing is not
   blocked by a slower descriptor interval.
-- X and Y velocity are simulated independently. Acceleration, maximum velocity,
-  friction, and proportional micro-variation are all applied by the movement
-  path rather than stored as unused configuration.
-- Timing variation is symmetric around the requested movement or shot interval.
-  Weapon-pattern timing still derives from `60,000,000 / RPM` microseconds.
-- HID delta variation cannot reverse an axis, consume more than the queued
-  movement, or create cursor drift from a zero delta.
+- General-mode X and Y velocity are simulated independently with acceleration,
+  maximum velocity, and friction. Pattern points bypass this smoothing so their
+  calibrated displacement is preserved.
+- Pattern and rapid-fire deadlines are phase-locked to exact
+  `60,000,000 / RPM` intervals. Late service calls resynchronize without
+  accumulating timing drift.
+- Sensitivity is applied exactly once, fractional counts are retained, and HID
+  reports drain only movement already present in the queue. A zero delta cannot
+  create cursor drift.
 - Rapid fire releases and presses the button repeatedly until STOP, watchdog
   expiry, or the configured pattern finishes. Releasing one simulated click no
   longer disables the rapid-fire mode.
@@ -35,8 +37,8 @@ The release build was checked with the following independent paths:
 |---|---|
 | RP2040 PlatformIO release build | Pass |
 | RP2040 build with `-Wall -Wextra` | Pass; dependency-only TinyUSB warnings |
-| Desktop/core regression simulator | 25/25 pass |
-| Python profile and firmware-contract tests | 10/10 pass |
+| Desktop/core regression simulator | 26/26 pass |
+| Python profile and firmware-contract tests | 13/13 pass |
 | Windows self-contained x64 publish | Pass |
 | Windows startup smoke test | Pass; process responsive, title `ZeroSense` |
 | UF2 release-copy SHA-256 comparison | Pass |

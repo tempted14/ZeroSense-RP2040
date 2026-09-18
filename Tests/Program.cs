@@ -8,6 +8,7 @@ var tests = new (string Name, Action Run)[]
     ("catalog is complete and unique", CatalogIsCompleteAndUnique),
     ("automatic profiles have bounded patterns", AutomaticProfilesHaveBoundedPatterns),
     ("custom timing controls generated pattern timing and length", CustomPatternTimingIsConsistent),
+    ("generated pattern stages transition smoothly", GeneratedPatternStagesAreContinuous),
     ("per-weapon output strength is isolated and bounded", WeaponOutputStrengthIsSafe),
     ("experimental tuning is isolated and stage-specific", ExperimentalTuningIsIsolated),
     ("operator attachment overrides are isolated", OperatorOverridesAreIsolated),
@@ -112,6 +113,51 @@ static void CustomPatternTimingIsConsistent()
         new ResolvedAttachmentSetup("Vertical grip", "Flash hider"));
     Equal(7, hydrated.Pattern.Length, "attachment hydration preserves custom magazine length");
     Equal(600, hydrated.RoundsPerMinute, "attachment hydration preserves custom RPM");
+}
+
+static void GeneratedPatternStagesAreContinuous()
+{
+    var largeMagazine = WeaponPatternCatalog.CreateEstimatedPattern(
+        "M249", 1.0, 0.0, "Flash hider", 650, 100);
+    var twoStage = WeaponPatternCatalog.CreateEstimatedPattern(
+        "BEARING 9", 1.0, 0.0, "Flash hider", 1098, 25);
+    var repeat = WeaponPatternCatalog.CreateEstimatedPattern(
+        "M249", 1.0, 0.0, "Flash hider", 650, 100);
+
+    True(largeMagazine.SequenceEqual(repeat),
+        "pattern generation must remain deterministic");
+    True(MaxRelativeVerticalStep(largeMagazine) < 0.08,
+        "large-magazine stage boundaries should not introduce abrupt jumps");
+    True(MaxRelativeVerticalStep(twoStage) < 0.20,
+        "two-stage transitions should be blended across adjacent shots");
+    True(MaxHorizontalStepRelativeToVertical(twoStage) < 0.15,
+        "two-stage horizontal transitions should not introduce a boundary jump");
+}
+
+static double MaxRelativeVerticalStep(IReadOnlyList<RecoilPatternPoint> pattern)
+{
+    var maximum = 0.0;
+    for (var index = 1; index < pattern.Count; ++index)
+    {
+        var scale = Math.Max(Math.Abs(pattern[index - 1].Vertical), 0.001f);
+        maximum = Math.Max(
+            maximum,
+            Math.Abs(pattern[index].Vertical - pattern[index - 1].Vertical) / scale);
+    }
+    return maximum;
+}
+
+static double MaxHorizontalStepRelativeToVertical(IReadOnlyList<RecoilPatternPoint> pattern)
+{
+    var maximum = 0.0;
+    for (var index = 1; index < pattern.Count; ++index)
+    {
+        var scale = Math.Max(Math.Abs(pattern[index].Vertical), 0.001f);
+        maximum = Math.Max(
+            maximum,
+            Math.Abs(pattern[index].Horizontal - pattern[index - 1].Horizontal) / scale);
+    }
+    return maximum;
 }
 
 static void WeaponOutputStrengthIsSafe()

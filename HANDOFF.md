@@ -36,10 +36,10 @@ cmd /c .\RP2040_Firmware\build.bat
 
 The last verified state on 2026-09-18 was:
 
-- Core regression tests: 25/25 passed.
-- Python profile-editor and firmware-contract tests: 10/10 passed.
+- Core regression tests: 26/26 passed.
+- Python profile-editor and firmware-contract tests: 13/13 passed.
 - Windows self-contained x64 publish: succeeded with no compiler warnings.
-- RP2040 firmware: succeeded; 17,608 bytes RAM (6.7%) and 70,516 bytes flash
+- RP2040 firmware: succeeded; 17,608 bytes RAM (6.7%) and 70,260 bytes flash
   (3.4%).
 - Published application startup: responsive with title `ZeroSense`.
 

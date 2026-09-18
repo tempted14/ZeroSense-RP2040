@@ -33,10 +33,9 @@ static constexpr uint32_t POLL_IDLE_MS   = 4;    // ~250 Hz during idle
 static constexpr uint32_t POLL_NORMAL_MS = 2;    // ~500 Hz normal operation
 static constexpr uint32_t POLL_HIGH_MS   = 1;    // ~900 Hz rapid fire / active movement
 
-// Jitter configuration: break deterministic timing patterns
-// Avoid an unnecessarily rigid movement cadence.
+// General-mode cadence variation. Pattern and rapid-fire timing use exact RPM
+// intervals so their configured shot sequence does not drift.
 static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% variance on intervals
-static constexpr int16_t DELTA_NOISE_RANGE = 3;    // ±2 to ±3 pixels of noise floor
 
 enum CompensationMode : uint8_t {
     MODE_GENERAL = 0,
@@ -67,7 +66,6 @@ typedef struct {
     float acceleration;     // Maximum velocity change per update
     float maxVelocity;      // Maximum velocity per axis and update
     float friction;         // Deceleration when no input
-    float microNoise;       // Maximum proportional sensor noise
     bool accelerating;      // Current movement phase state
 } VelocitySimulator;
 
@@ -77,7 +75,6 @@ static VelocitySimulator sim = {
     1.2f,
     40.0f,
     0.85f,
-    0.15f,
     false
 };
 
@@ -151,7 +148,8 @@ static int16_t readInt16LittleEndian(const uint8_t* source) {
     return static_cast<int16_t>(readUint16LittleEndian(source));
 }
 
-// Mitigation: jittered interval calculation (breaks perfect periodicity)
+// General mode may vary its fixed 8 ms update cadence slightly. This is not
+// used for configured weapon patterns or rapid-fire shot scheduling.
 static uint32_t get_jittered_interval(uint32_t base_us) {
     const float jitter_scale = 1.0f +
         rng_next() * 2.0f * (TIMING_JITTER_PCT / 100.0f);
@@ -192,7 +190,7 @@ static void reset_parser() {
     parserCommand = 0;
 }
 
-// Mitigation: apply profile payload with jitter-aware reset
+// Validate and apply a complete host profile.
 static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
     if (length < 10 || (payload[0] != 1 && payload[0] != 2)) {
         Serial.println("ERROR:PROFILE:FORMAT");
@@ -466,35 +464,19 @@ static void service_serial() {
     }
 }
 
-// Mitigation: report delta with micro-noise injection (simulates sensor jitter)
-static int8_t report_delta_with_noise(int32_t value) {
-    if (value == 0) {
-        return 0;
-    }
-
-    const int32_t direction = value > 0 ? 1 : -1;
-    const int32_t maximumMagnitude = std::min<int32_t>(std::abs(value), 100);
-    const float noise = rng_next() * 2.0f * DELTA_NOISE_RANGE;
-    const int32_t baseMagnitude = std::min<int32_t>(std::abs(value), 100);
-    const int32_t noisyMagnitude = static_cast<int32_t>(
-        std::round(static_cast<float>(baseMagnitude) + noise));
-
-    // A report must always drain the queue in its original direction and may
-    // never consume more movement than is pending.
-    const int32_t magnitude = std::clamp<int32_t>(noisyMagnitude, 1, maximumMagnitude);
-    return static_cast<int8_t>(direction * magnitude);
+static int8_t report_delta(int32_t value) {
+    return static_cast<int8_t>(std::clamp<int32_t>(value, -100, 100));
 }
 
-// Mitigation: queue movement with velocity simulation (smooth acceleration profiles)
-static void queue_mouse_movement_with_simulation(int32_t raw_dx, int32_t raw_dy) {
-    const float targetX = std::clamp(
-        (raw_dx / 256.0f) * horizontalSensitivityFactor,
-        -sim.maxVelocity,
-        sim.maxVelocity);
-    const float targetY = std::clamp(
-        (raw_dy / 256.0f) * verticalSensitivityFactor,
-        -sim.maxVelocity,
-        sim.maxVelocity);
+// Inputs are HID counts for this movement step. Sensitivity is applied exactly
+// once here; pattern points bypass smoothing so the transmitted curve retains
+// its calibrated per-shot displacement.
+static void queue_mouse_movement(
+    float requested_dx,
+    float requested_dy,
+    bool apply_smoothing) {
+    const float scaledX = requested_dx * horizontalSensitivityFactor;
+    const float scaledY = requested_dy * verticalSensitivityFactor;
 
     const auto approach = [](float current, float target, float maximumStep) {
         if (current < target) {
@@ -506,25 +488,24 @@ static void queue_mouse_movement_with_simulation(int32_t raw_dx, int32_t raw_dy)
         return current;
     };
 
-    sim.velocityX = targetX == 0.0f
-        ? sim.velocityX * sim.friction
-        : approach(sim.velocityX, targetX, sim.acceleration);
-    sim.velocityY = targetY == 0.0f
-        ? sim.velocityY * sim.friction
-        : approach(sim.velocityY, targetY, sim.acceleration);
+    if (apply_smoothing) {
+        const float targetX = std::clamp(scaledX, -sim.maxVelocity, sim.maxVelocity);
+        const float targetY = std::clamp(scaledY, -sim.maxVelocity, sim.maxVelocity);
+        sim.velocityX = targetX == 0.0f
+            ? sim.velocityX * sim.friction
+            : approach(sim.velocityX, targetX, sim.acceleration);
+        sim.velocityY = targetY == 0.0f
+            ? sim.velocityY * sim.friction
+            : approach(sim.velocityY, targetY, sim.acceleration);
+    } else {
+        sim.velocityX = scaledX;
+        sim.velocityY = scaledY;
+    }
     sim.accelerating = std::abs(sim.velocityX) >= 0.01f ||
         std::abs(sim.velocityY) >= 0.01f;
 
-    // Scale the noise with actual movement so zero-input axes cannot drift.
-    const float outputX = sim.velocityX == 0.0f
-        ? 0.0f
-        : sim.velocityX * (1.0f + rng_next() * 2.0f * sim.microNoise);
-    const float outputY = sim.velocityY == 0.0f
-        ? 0.0f
-        : sim.velocityY * (1.0f + rng_next() * 2.0f * sim.microNoise);
-
-    fractionalMouseX += outputX * 0.5f; // Damped response for smoother feel
-    fractionalMouseY += outputY * 0.5f;
+    fractionalMouseX += sim.velocityX;
+    fractionalMouseY += sim.velocityY;
 
     const int32_t queuedX = static_cast<int32_t>(fractionalMouseX);
     const int32_t queuedY = static_cast<int32_t>(fractionalMouseY);
@@ -560,8 +541,8 @@ static void service_hid() {
         return;
     }
 
-    const int8_t dx = report_delta_with_noise(pendingMouseX);
-    const int8_t dy = report_delta_with_noise(pendingMouseY);
+    const int8_t dx = report_delta(pendingMouseX);
+    const int8_t dy = report_delta(pendingMouseY);
     const uint8_t buttons = rapidButtonDown ? MOUSE_BUTTON_LEFT : 0;
 
     if (usbHid.mouseReport(0, buttons, dx, dy, 0, 0)) {
@@ -572,7 +553,7 @@ static void service_hid() {
     }
 }
 
-// Mitigation: movement generation with jittered intervals and velocity simulation
+// Generate one configured recoil step.
 static void generate_movement() {
     float vertical;
     float horizontal;
@@ -583,11 +564,11 @@ static void generate_movement() {
             return;
         }
         // Pattern values are stored as Q8.8 fixed-point (int16 / 256.0f)
-        horizontal = static_cast<float>(patternHorizontal[shotsInBurst]) / 256.0f * horizontalSensitivityFactor;
-        vertical = static_cast<float>(patternVertical[shotsInBurst]) / 256.0f * verticalSensitivityFactor;
+        horizontal = static_cast<float>(patternHorizontal[shotsInBurst]) / 256.0f;
+        vertical = static_cast<float>(patternVertical[shotsInBurst]) / 256.0f;
     } else {
-        vertical = activeVerticalCompensation * verticalSensitivityFactor;
-        horizontal = activeHorizontalCompensation * horizontalSensitivityFactor;
+        vertical = activeVerticalCompensation;
+        horizontal = activeHorizontalCompensation;
     }
 
     // Burst progression reduction for diminishing recoil over shot sequence
@@ -597,13 +578,12 @@ static void generate_movement() {
         horizontal *= std::max(0.5f, reduction);
     }
 
-    // Apply velocity simulation for smoother, more natural-looking movement
-    queue_mouse_movement_with_simulation(static_cast<int32_t>(horizontal * 100.0f), static_cast<int32_t>(vertical * 100.0f));
+    queue_mouse_movement(horizontal, vertical, activeMode == MODE_GENERAL);
 
     ++shotsInBurst;
 }
 
-// Mitigation: service movement with jittered intervals and velocity-aware timing
+// Service recoil movement using phase-locked timing for weapon patterns.
 static void service_movement() {
     if (!fireActive || rapidFireActive) {
         return;
@@ -619,11 +599,17 @@ static void service_movement() {
         const uint32_t base_interval = activeMode == MODE_WEAPON_PATTERN && activeRoundsPerMinute > 0
             ? static_cast<uint32_t>(60000000.0f / activeRoundsPerMinute)
             : 8000UL;
-        nextMovementAtUs = now + get_jittered_interval(base_interval);
+        const uint32_t interval = activeMode == MODE_WEAPON_PATTERN
+            ? base_interval
+            : get_jittered_interval(base_interval);
+        nextMovementAtUs += interval;
+        if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
+            nextMovementAtUs = now + interval;
+        }
     }
 }
 
-// Mitigation: rapid fire with jittered shot timing and velocity simulation
+// Service rapid fire with an exact, phase-locked RPM interval.
 static void service_rapid_fire() {
     if (!fireActive || !rapidFireActive || rapidFireRoundsPerMinute == 0) {
         return;
@@ -638,7 +624,7 @@ static void service_rapid_fire() {
         sim.velocityY *= sim.friction * 0.5f;
     }
 
-    // Schedule next shot with jittered interval (breaks perfect periodicity)
+    // Schedule the next shot from the prior deadline to avoid cumulative drift.
     if (!rapidButtonDown && static_cast<int32_t>(now - nextRapidShotAtUs) >= 0) {
         set_rapid_button(true);
         generate_movement();
@@ -648,7 +634,7 @@ static void service_rapid_fire() {
         rapidButtonReleaseAtUs = now + 8000;
 
         const uint32_t base_interval = static_cast<uint32_t>(60000000.0f / rapidFireRoundsPerMinute);
-        const uint32_t shot_interval = get_jittered_interval(base_interval);
+        const uint32_t shot_interval = base_interval;
         nextRapidShotAtUs += shot_interval;
 
         if (static_cast<int32_t>(now - nextRapidShotAtUs) >= 0) {
@@ -657,7 +643,7 @@ static void service_rapid_fire() {
     }
 }
 
-// Mitigation: host watchdog with extended timeout and adaptive behavior
+// Stop output if the host stops sending keepalives.
 static void service_host_watchdog() {
     if (fireActive && millis() - lastHostKeepAliveAtMs > hostWatchdogTimeoutMs) {
         stop_output();
