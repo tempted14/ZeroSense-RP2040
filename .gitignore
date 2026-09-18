@@ -1,0 +1,50 @@
+# Compiled binaries
+bin/
+*.exe
+*.dll
+*.pdb
+obj/
+Release/
+Debug/
+build/
+
+# Build artifacts (paths are relative to this repository root)
+RP2040_Firmware/.pio/
+RP2040_Firmware/.platformio-core/
+RP2040_Firmware/*.uf2
+RP2040_Firmware/build/
+RP2040_Firmware/.tools/
+RP2040_Firmware/.verify-build/
+WindowsApp/artifacts/
+WindowsApp/bin/
+WindowsApp/obj/
+Tests/bin/
+Tests/obj/
+**/.verify-build/
+.nuget-packages/
+dist/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Local configuration (use environment variables instead)
+RainbowRecoil.json
+local_settings.json
+
+# Temporary files
+temp_build/
+*.tmp
+*.swp
+*.bak
+__pycache__/
+*.py[cod]
