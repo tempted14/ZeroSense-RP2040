@@ -1,0 +1,47 @@
+MIT License
+
+Copyright (c) 2025 Rainbow Recoil Control Project
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+DISCLAIMER — RECOIL CONTROL SOFTWARE
+
+This software is provided for educational and research purposes only. The author(s)
+make no representations or warranties about the suitability of this software for use
+in online multiplayer games, competitive play, or any other activity where fair play
+and sportsmanship are expected.
+
+USE AT YOUR OWN RISK. THE AUTHOR(S) ASSUME NO LIABILITY FOR ANY CONSEQUENCES RESULTING
+FROM USE OF THIS SOFTWARE, INCLUDING BUT NOT LIMITED TO:
+
+- Detection by anti-cheat systems (BattlEye, Easy Anti-Cheat, etc.) and subsequent bans
+- Account suspensions or terminations from game services
+- Loss of progress, items, currency, or any other in-game assets
+- Legal consequences arising from the use of this software
+- Any financial loss
+
+The author(s) recommend using this software only for:
+- Single-player practice sessions
+- Learning about mouse mechanics and recoil patterns
+- Testing in private matches with friends who consent to its use
+- Research into input systems and game development
+
+By using this software, you acknowledge that you understand the risks involved.

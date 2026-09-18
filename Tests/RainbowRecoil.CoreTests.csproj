@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="OcrProbe\**\*.cs" />
+    <Compile Include="..\WindowsApp\HotkeyChord.cs" Link="Source\HotkeyChord.cs" />
+    <Compile Include="..\WindowsApp\ExperimentalRecoilModel.cs" Link="Source\ExperimentalRecoilModel.cs" />
+    <Compile Include="..\WindowsApp\ConfigurationValidator.cs" Link="Source\ConfigurationValidator.cs" />
+    <Compile Include="..\WindowsApp\DetectionDebouncer.cs" Link="Source\DetectionDebouncer.cs" />
+    <Compile Include="..\WindowsApp\DiagnosticLog.cs" Link="Source\DiagnosticLog.cs" />
+    <Compile Include="..\WindowsApp\OperatorNameMatcher.cs" Link="Source\OperatorNameMatcher.cs" />
+    <Compile Include="..\WindowsApp\OpticMagnificationPolicy.cs" Link="Source\OpticMagnificationPolicy.cs" />
+    <Compile Include="..\WindowsApp\RecoilAttachmentModel.cs" Link="Source\RecoilAttachmentModel.cs" />
+    <Compile Include="..\WindowsApp\RecoilStrengthModel.cs" Link="Source\RecoilStrengthModel.cs" />
+    <Compile Include="..\WindowsApp\RapidFireCatalog.cs" Link="Source\RapidFireCatalog.cs" />
+    <Compile Include="..\WindowsApp\SerialProtocol.cs" Link="Source\SerialProtocol.cs" />
+    <Compile Include="..\WindowsApp\IRecoilDeviceConnection.cs" Link="Source\IRecoilDeviceConnection.cs" />
+    <Compile Include="..\WindowsApp\SimulatedRecoilDeviceConnection.cs" Link="Source\SimulatedRecoilDeviceConnection.cs" />
+    <Compile Include="..\WindowsApp\SettingsManager.cs" Link="Source\SettingsManager.cs" />
+    <Compile Include="..\WindowsApp\SiegeCatalog.cs" Link="Source\SiegeCatalog.cs" />
+    <Compile Include="..\WindowsApp\WeaponPatternCatalog.cs" Link="Source\WeaponPatternCatalog.cs" />
+    <Compile Include="..\WindowsApp\WeaponProfiles.cs" Link="Source\WeaponProfiles.cs" />
+    <Compile Include="..\WindowsApp\WeaponSlotCatalog.cs" Link="Source\WeaponSlotCatalog.cs" />
+    <Compile Include="..\WindowsApp\WeaponSlotHotkeyState.cs" Link="Source\WeaponSlotHotkeyState.cs" />
+  </ItemGroup>
+</Project>
