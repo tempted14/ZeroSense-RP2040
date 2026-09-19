@@ -1,11 +1,13 @@
-# Quick start: TENSTAR RP2040-Zero on Windows
+# Quick start: RP2040-Zero or RP2350-USB-C on Windows
 
 Use this checklist after extracting the project. For first-time tool installation, use [INSTALLATION.md](INSTALLATION.md).
 
 ## Hardware
 
-- TENSTAR RP2040-Zero
+- TENSTAR/Waveshare RP2040-Zero, or Waveshare RP2350-USB-C with two female ports
 - Data-capable USB cable with USB Type-C at the board
+- RP2350 only: a second data-capable cable for the mouse and PIO-port CC1/CC2
+  configured as `1 / Source`
 - Windows 10 or Windows 11 x64
 
 The board uses native RP2040 USB. Windows installs its own CDC serial, composite, and HID class drivers automatically.
@@ -26,9 +28,11 @@ Successful outputs:
 ```text
 RP2040_Firmware\.pio\build\waveshare_rp2040_zero\firmware.uf2
 RP2040_Firmware\rainbow_recoil.uf2
+RP2040_Firmware\.pio\build\waveshare_rp2350_usb_c\firmware.uf2
+RP2040_Firmware\rainbow_recoil_rp2350_usb_c.uf2
 ```
 
-If using Arduino IDE instead, install the Earle F. Philhower Arduino-Pico core from:
+If building RP2040 with Arduino IDE instead, install the Earle F. Philhower Arduino-Pico core from:
 
 ```text
 https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
@@ -41,21 +45,30 @@ Board:     Waveshare RP2040 Zero
 USB Stack: Adafruit TinyUSB
 ```
 
+Use PlatformIO for the RP2350 source build. The release already contains both
+board-specific UF2 files.
+
 ## Flash
 
 1. Connect USB Type-C.
 2. Hold `BOOT`.
 3. Press and release `RESET` while holding `BOOT`.
 4. Release `BOOT` when `RPI-RP2` appears in File Explorer.
-5. From `RP2040_Firmware`, run:
+5. From `RP2040_Firmware`, run the command for the exact board:
 
    ```powershell
-   .\flash-firmware.bat
+   .\flash-firmware.bat rp2040
+   # or
+   .\flash-firmware.bat rp2350
    ```
 
-   You can also copy `rainbow_recoil.uf2` to the root of `RPI-RP2` manually.
+   You can also manually copy the matching generated UF2 to `RPI-RP2`.
 
 6. Wait for `RPI-RP2` to eject and the board to restart.
+
+For RP2350, connect the PC to the native port beside `BOOT`/`RESET`, then connect
+the mouse to the opposite female PIO-USB port. Follow
+[RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md) before applying power.
 
 ## Confirm the board is running
 
@@ -64,6 +77,10 @@ Device Manager should now show all of the following:
 - USB Composite Device
 - USB Serial Device (COMx)
 - HID-compliant mouse
+
+The RP2350 Device page must additionally show its board identity and the
+downstream mouse VID:PID. The app keeps output disabled until that mouse is
+connected and decoded.
 
 `RPI-RP2` is expected only in boot-loader mode. If the drive remains mounted, the application firmware is not running.
 

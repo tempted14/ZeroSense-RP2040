@@ -1,6 +1,16 @@
 # ZeroSense
 
-This project contains firmware for the [TENSTAR RP2040-Zero listing](https://www.aliexpress.com/item/1005006865919374.html) and a Windows 10/11 desktop application. The board is compatible with the Arduino-Pico **Waveshare RP2040 Zero** definition: RP2040, 2 MB flash, USB Type-C, and separate `BOOT` and `RESET` buttons.
+This project contains a Windows 10/11 desktop application and two independently
+built firmware targets:
+
+- TENSTAR/Waveshare RP2040-Zero as a standalone CDC + HID output device.
+- [Waveshare RP2350-USB-C](https://docs.waveshare.com/RP2350-USB-C), SKU
+  34641 with two female USB-C ports, as an additive USB mouse proxy.
+
+The RP2350 path is `mouse -> female PIO-USB port -> RP2350 -> native USB-C ->
+Windows`. Physical movement, up to eight buttons, vertical wheel, and horizontal
+pan are forwarded. Software-generated movement is added to the physical deltas,
+so it does not lock or replace normal movement.
 
 ## What is in this repository
 
@@ -9,7 +19,8 @@ RainbowRecoil\
 ├── RP2040_Firmware\
 │   ├── rainbow_recoil\rainbow_recoil.ino   Arduino IDE source
 │   ├── src\main.cpp                        PlatformIO entry point
-│   ├── platformio.ini                      Waveshare RP2040 Zero environment
+│   ├── boards\waveshare_rp2350_usb_c.json  Exact 2 MB RP2350 board target
+│   ├── platformio.ini                      RP2040 and RP2350 environments
 │   ├── build.bat                           PlatformIO build helper
 │   └── flash-firmware.bat                  RPI-RP2 copy helper
 ├── WindowsApp\                             .NET 8 / WinUI application
@@ -22,12 +33,15 @@ RainbowRecoil\
 └── docs\
 ```
 
-The firmware is a single TinyUSB composite device:
+Both firmware targets present one TinyUSB composite device to Windows:
 
 - CDC ACM provides the `USB Serial Device (COMx)` channel used by the Windows app.
 - HID provides a relative mouse interface.
 
-Both interfaces use the RP2040's native USB controller through the board's USB Type-C connector. No USB-to-UART bridge or third-party Windows serial driver is part of this setup.
+The RP2350 build additionally runs Pico-PIO-USB on core 1 using GPIO12/13, the
+official wiring for the female PIO-USB connector. A descriptor-aware parser
+handles report IDs and ordinary 8/16/32-bit relative mouse fields, with a boot
+mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 > **Fair-play warning:** Ubisoft's current Siege player-protection rules prohibit
 > hardware or software that runs recoil macros, rapid-fire scripts, or similar
@@ -37,10 +51,15 @@ Both interfaces use the RP2040's native USB controller through the board's USB T
 
 ## Easiest install
 
-Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download both assets:
+Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the Windows archive plus exactly one firmware image:
 
-1. `ZeroSense-1.1.0-Windows-x64.zip` — extract it, then run `zerosense.exe`.
-2. `rainbow-recoil-rp2040-zero-1.1.0.uf2` — copy it to the board's `RPI-RP2` drive while the board is in BOOT mode.
+1. `ZeroSense-1.2.0-Windows-x64.zip` — extract it, then run `zerosense.exe`.
+2. For TENSTAR/RP2040-Zero: `rainbow-recoil-rp2040-zero-1.2.0.uf2`.
+3. For the two-female-port Waveshare board: `rainbow-recoil-rp2350-usb-c-1.2.0.uf2`.
+
+Never flash the RP2350 UF2 to an RP2040 or the RP2040 UF2 to an RP2350. For the
+RP2350 cabling and CC selector check, follow
+[the mouse-proxy guide](docs/RP2350_MOUSE_PROXY.md) before connecting a mouse.
 
 The Windows archive is self-contained; users do not need the .NET SDK. The
 Microsoft Visual C++ 2015–2022 x64 Redistributable is still required. Detailed
@@ -54,7 +73,7 @@ Use [docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete clean-machine wa
 - Windows 10 or Windows 11 x64
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) for the desktop app
 - [Microsoft Visual C++ 2015-2022 Redistributable (x64)](https://aka.ms/vs/17/release/vc_redist.x64.exe) for the unpackaged Windows App SDK runtime
-- One firmware toolchain:
+- One firmware toolchain for source builds:
   - [Arduino IDE 2](https://www.arduino.cc/en/software) with the Earle F. Philhower Arduino-Pico core, or
   - [PlatformIO](https://platformio.org/install) and Git
 
@@ -64,7 +83,10 @@ The Arduino-Pico Boards Manager URL is:
 https://github.com/earlephilhower/arduino-pico/releases/download/global/package_rp2040_index.json
 ```
 
-Install **Raspberry Pi Pico/RP2040/RP2350 by Earle F. Philhower III**, then select:
+Arduino IDE instructions below apply to the RP2040 target. The RP2350 proxy uses
+the checked-in custom board definition and Pico-PIO-USB pin selection, so build
+that target with PlatformIO (or use the release UF2). Install **Raspberry Pi
+Pico/RP2040/RP2350 by Earle F. Philhower III**, then select for RP2040:
 
 ```text
 Tools > Board > Raspberry Pi Pico/RP2040/RP2350 > Waveshare RP2040 Zero
@@ -95,9 +117,15 @@ The underlying command and outputs are:
 pio run -e waveshare_rp2040_zero
 # .pio\build\waveshare_rp2040_zero\firmware.uf2
 # rainbow_recoil.uf2  (copy made by build.bat)
+
+pio run -e waveshare_rp2350_usb_c
+# .pio\build\waveshare_rp2350_usb_c\firmware.uf2
+# rainbow_recoil_rp2350_usb_c.uf2  (copy made by build.bat)
 ```
 
-`platformio.ini` selects the Arduino-Pico-compatible platform, the `waveshare_rp2040_zero` board, and `-DUSE_TINYUSB`. The first build downloads its compiler and framework dependencies.
+`platformio.ini` pins the Arduino-Pico-compatible platform for both boards and
+pins Pico-PIO-USB for the RP2350 build. `build.bat` compiles both targets. The
+first build downloads its compiler, framework, and library dependencies.
 
 ### Arduino IDE
 
@@ -112,7 +140,8 @@ With the board already connected:
 1. Hold `BOOT`.
 2. Press and release `RESET` while continuing to hold `BOOT`.
 3. Release `BOOT` when File Explorer shows the volume named `RPI-RP2`.
-4. Copy the correct `.uf2` file to the root of `RPI-RP2`, or run `RP2040_Firmware\flash-firmware.bat`.
+4. Copy the board-specific `.uf2` file to the root of `RPI-RP2`, or run
+   `flash-firmware.bat rp2040` / `flash-firmware.bat rp2350`.
 5. Wait for the copy to finish. The volume ejects and the board restarts automatically.
 
 Alternatively, disconnect the cable, hold `BOOT` while reconnecting USB Type-C, and release `BOOT` when `RPI-RP2` appears.
@@ -231,7 +260,7 @@ Tubarão AR-15.50:                 Muzzle brake unavailable on defense
 Maverick AR-15.50:                Muzzle brake retained on attack
 ```
 
-The app sends the selected weapon's numeric profile, pattern chunks, rapid-fire state, and separate horizontal/vertical sensitivity scales over CDC, and waits for the firmware to acknowledge each stage before reporting synchronization. Every configuration is validated before transmission; an invalid configuration sends `STOP`, disarms output, and explains the rejected field. Live profile changes issue `STOP`, apply the full acknowledged configuration, and resume only if aim and fire are still held. **Arm output** does not continuously move the pointer: the app sends `START` only while Rainbow Six is foreground and the physical right mouse (aim) and left mouse (fire) buttons are both held, and sends `STOP` when either is released or the game loses focus. While active, a 250 ms keepalive feeds a 750 ms firmware fail-safe so output stops if the app exits or communication is lost. A new press resets pattern mode to shot one. The RP2040 HID remains a separate device alongside the physical mouse.
+The app sends the selected weapon's numeric profile, pattern chunks, rapid-fire state, and separate horizontal/vertical sensitivity scales over CDC, and waits for the firmware to acknowledge each stage before reporting synchronization. Every configuration is validated before transmission; an invalid configuration sends `STOP`, disarms output, and explains the rejected field. Live profile changes issue `STOP`, apply the full acknowledged configuration, and resume only if aim and fire are still held. **Arm output** does not continuously move the pointer: the app sends `START` only while Rainbow Six is foreground and the physical right mouse (aim) and left mouse (fire) buttons are both held, and sends `STOP` when either is released or the game loses focus. While active, a 250 ms keepalive feeds a 750 ms firmware fail-safe so output stops if the app exits or communication is lost. A new press resets pattern mode to shot one. The RP2040 HID remains a separate device alongside the physical mouse; the RP2350 HID is the additive proxy for the mouse connected to its PIO-USB port.
 
 The Device page includes an explicit **Use simulator** option. It exercises the
 same configuration calculation and binary protocol encoders as real firmware,
@@ -242,7 +271,7 @@ working-set memory, OCR timing events, and recent errors without screenshots.
 
 Automatic optic selection uses `2.5x` for attackers and `1.0x` for defenders. Defender DMR exceptions use `2.5x`: TCSG12, Tubarão's AR-15.50, and Aruni's Mk 14 EBR. Turn off **Automatic** beside the optic selector to unlock a persistent manual override.
 
-Mouse DPI is recorded for reference but is not used to scale the RP2040's own HID reports, because the RP2040 is a separate relative-input device. Display resolution and aspect ratio were removed from calibration because relative HID counts are not resolution-scaled. Siege FOV affects visual/ADS feel but is not an input to this implementation: the app uses the selected per-optic ADS value directly. At the default Siege multiplier of `0.02`, `55` with `0.001` is mathematically equivalent to `2.75`, not `5.5`; the UI displays this so the literal configuration is never silently reinterpreted.
+Mouse DPI is recorded for reference but is not used to scale generated HID reports. Display resolution and aspect ratio were removed from calibration because relative HID counts are not resolution-scaled. Siege FOV affects visual/ADS feel but is not an input to this implementation: the app uses the selected per-optic ADS value directly. At the default Siege multiplier of `0.02`, `55` with `0.001` is mathematically equivalent to `2.75`, not `5.5`; the UI displays this so the literal configuration is never silently reinterpreted.
 
 Research references for the estimates are the current [all-weapons attachment guide](https://www.youtube.com/watch?v=4YhYKtgUrDY), a recent [F2 vertical-versus-angled-grip comparison](https://www.youtube.com/watch?v=ViHd3gEKbEY), Ubisoft's [multi-stage recoil description](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/1k3EGuOGxKxe6mhOlFBhbj/weapon-recoil-overhaul), [input sensitivity formula](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/6kY6b5JByBY3P6vQWWinla/fov-and-input-sensitivity), [Y9S1 grip modifiers](https://www.ubisoft.com/es-es/game/rainbow-six/siege/news-updates/3jBlCdtRBQx2sCjmY2umNu/y9s1-designers-notes), [Y11S3 Split Fire attachment restrictions](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/seasons/splitfire), the supplied 2025 recoil/attachment tables, and the maintained [weapon-statistics dataset](https://github.com/hanslhansl/Rainbow-Six-Siege-Weapon-Statistics). Research was checked on 2026-09-17; re-check after game balance updates.
 
@@ -253,6 +282,12 @@ Research references for the estimates are the current [all-weapons attachment gu
 | UF2 boot loader | `RPI-RP2` removable drive; no firmware COM/HID interfaces | Raspberry Pi VID `2E8A`, boot PID `0003` |
 | Firmware running | USB Composite Device, `USB Serial Device (COMx)`, and HID-compliant mouse | Raspberry Pi VID `2E8A`; runtime PID can depend on core/interface configuration |
 
+For RP2350, Windows sees only the RP2350 composite device; the downstream mouse
+is hosted by PIO-USB and its standard inputs are forwarded through the RP2350
+HID. Vendor-specific configuration interfaces, onboard profile utilities, RGB
+control, and more than eight buttons are not USB-pass-through features. Configure
+those directly before moving the mouse behind the proxy.
+
 Do not hard-code one runtime PID or COM number. Use the present device's hardware ID, composite interfaces, and assigned `PortName`. Windows may assign a new COM number after changing the USB port, rebuilding with different USB descriptors, or clearing device history.
 
 ## More documentation
@@ -260,6 +295,7 @@ Do not hard-code one runtime PID or COM number. Use the present device's hardwar
 - [Installation](docs/INSTALLATION.md)
 - [Quick start](docs/QUICKSTART.md)
 - [Firmware build and USB details](RP2040_Firmware/README.md)
+- [RP2350 mouse-proxy setup](docs/RP2350_MOUSE_PROXY.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Project summary](docs/PROJECT_SUMMARY.md)
 

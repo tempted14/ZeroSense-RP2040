@@ -1,9 +1,9 @@
 # ZeroSense Engineering Handoff
 
 This package is an editable source handoff, not merely a compiled release. It
-contains the Windows application, RP2040 firmware, automated tests, utilities,
-and documentation. Prebuilt Windows and UF2 files are distributed as GitHub
-release assets rather than committed to source control.
+contains the Windows application, RP2040-Zero and RP2350-USB-C firmware targets,
+automated tests, utilities, and documentation. Prebuilt Windows and UF2 files
+are distributed as GitHub release assets rather than committed to source.
 
 ## Start here
 
@@ -12,13 +12,15 @@ release assets rather than committed to source control.
    CLI from the repository root.
 3. Run `build.ps1` to execute the core tests and publish the Windows x64 app.
 4. Build firmware with `RP2040_Firmware/build.bat`.
-5. Flash `RP2040_Firmware/rainbow_recoil.uf2` in RP2040 BOOTSEL mode.
+5. Flash the UF2 matching the exact board. RP2350 users must also read
+   `docs/RP2350_MOUSE_PROXY.md` before connecting a mouse.
 
 ## Repository map
 
 - `WindowsApp/`: WinUI 3 desktop client, device transport, detection, overlay,
   settings, calibration, recoil/profile calculations, and simulator.
-- `RP2040_Firmware/`: Arduino-Pico/TinyUSB firmware and generated UF2.
+- `RP2040_Firmware/`: shared Arduino-Pico/TinyUSB source, two board targets, and
+  generated UF2 images.
 - `Tests/`: dependency-free .NET regression suite, OCR probe, Python profile
   editor tests, and firmware/desktop contract checks.
 - `tools/`: editable JSON profile utility.
@@ -36,11 +38,13 @@ cmd /c .\RP2040_Firmware\build.bat
 
 The last verified state on 2026-09-18 was:
 
-- Core regression tests: 26/26 passed.
-- Python profile-editor and firmware-contract tests: 13/13 passed.
+- Core regression tests: 27/27 passed.
+- Python profile-editor and firmware-contract tests: 19/19 passed.
 - Windows self-contained x64 publish: succeeded with no compiler warnings.
-- RP2040 firmware: succeeded; 17,608 bytes RAM (6.7%) and 70,260 bytes flash
-  (3.4%).
+- RP2040 firmware: succeeded; 17,616 bytes RAM (6.7%), 70,396 bytes flash
+  (3.4%), and a 164,864-byte RP2040-family UF2.
+- RP2350 firmware: succeeded; 31,976 bytes RAM (6.1%), 83,512 bytes flash
+  (4.0%), and a 192,000-byte RP2350-family UF2.
 - Published application startup: responsive with title `ZeroSense`.
 
 ## Principal architecture boundaries
@@ -82,16 +86,21 @@ Dependency caches are restored automatically by the documented build commands.
 
 ## Known verification limits
 
-- Physical RP2040 HID movement, rapid fire, and live disconnect behavior require
-  an attached board for final verification.
+- Physical RP2040 HID behavior and RP2350 connector power, CC selection, signal
+  integrity, mouse-descriptor behavior, and live disconnect require attached
+  hardware for final verification.
 - End-to-end behavior in a running Siege session was not verified in the audit
   environment.
 - OCR matching was tested against the supplied loadout capture and synthetic
   noisy inputs; additional UI scales and exclusive-fullscreen capture still need
   machine-specific verification.
-- The current USB descriptors are manufacturer `RP2040`, product
-  `RP2040 USB Mouse`, and HID interface `USB Mouse`, while retaining the board's
-  legitimate Raspberry Pi USB identity.
+- RP2040 keeps manufacturer `RP2040`, product `RP2040 USB Mouse`, and HID
+  interface `USB Mouse`. RP2350 uses manufacturer `Waveshare`, product
+  `ZeroSense RP2350 Mouse Proxy`, and HID `ZeroSense Mouse Proxy`; both retain
+  the Arduino-Pico Raspberry Pi USB identity rather than claiming another VID.
+- The RP2350 forwards standard relative mouse controls through eight buttons,
+  wheel, and pan. Vendor-specific configuration/RGB interfaces and buttons above
+  eight are outside the proxy descriptor and must be configured directly.
 
 ## Editing guidance
 

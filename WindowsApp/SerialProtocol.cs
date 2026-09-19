@@ -5,7 +5,7 @@ using System.Text;
 
 namespace RainbowRecoil;
 
-/// <summary>Pure encoder for the versioned RP2040 serial protocol.</summary>
+/// <summary>Pure encoder for the versioned ZeroSense firmware protocol.</summary>
 internal static class SerialProtocol
 {
     internal const int MaximumPayloadLength = 63;

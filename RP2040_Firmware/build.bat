@@ -26,11 +26,11 @@ if not defined PIO_EXE if not defined PIO_PYTHON (
     exit /b 1
 )
 
-echo Building for Waveshare RP2040 Zero with Arduino-Pico and Adafruit TinyUSB...
+echo Building the RP2040-Zero and RP2350-USB-C targets...
 if defined PIO_EXE (
-    "%PIO_EXE%" run -e waveshare_rp2040_zero
+    "%PIO_EXE%" run -e waveshare_rp2040_zero -e waveshare_rp2350_usb_c
 ) else (
-    "%PIO_PYTHON%" -m platformio run -e waveshare_rp2040_zero
+    "%PIO_PYTHON%" -m platformio run -e waveshare_rp2040_zero -e waveshare_rp2350_usb_c
 )
 if errorlevel 1 exit /b %errorlevel%
 
@@ -43,8 +43,19 @@ if not exist "%PIO_UF2%" (
 copy /y "%PIO_UF2%" "rainbow_recoil.uf2" >nul
 if errorlevel 1 exit /b %errorlevel%
 
+set "PIO_RP2350_UF2=.pio\build\waveshare_rp2350_usb_c\firmware.uf2"
+if not exist "%PIO_RP2350_UF2%" (
+    echo ERROR: PlatformIO completed but did not create "%PIO_RP2350_UF2%".
+    exit /b 1
+)
+
+copy /y "%PIO_RP2350_UF2%" "rainbow_recoil_rp2350_usb_c.uf2" >nul
+if errorlevel 1 exit /b %errorlevel%
+
 echo.
-echo Build complete: %~dp0rainbow_recoil.uf2
+echo Build complete:
+echo   %~dp0rainbow_recoil.uf2
+echo   %~dp0rainbow_recoil_rp2350_usb_c.uf2
 echo To flash while USB-C is connected: hold BOOT, tap RESET, release BOOT when
 echo RPI-RP2 appears, then run flash-firmware.bat or copy this UF2 to that drive.
 exit /b 0

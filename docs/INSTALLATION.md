@@ -1,18 +1,25 @@
 # Windows 10/11 installation
 
-This guide starts with an unconfigured Windows 10 or Windows 11 x64 machine and a TENSTAR RP2040-Zero. Paths are shown relative to the `RainbowRecoil` directory that contains `WindowsApp`, `RP2040_Firmware`, and `Tests`.
+This guide starts with an unconfigured Windows 10 or Windows 11 x64 machine and
+either a TENSTAR/Waveshare RP2040-Zero or the two-female-port Waveshare
+RP2350-USB-C (SKU 34641). Paths are relative to the `RainbowRecoil` directory.
 
 ## 1. Check the hardware
 
 You need:
 
-- A TENSTAR RP2040-Zero with `BOOT` and `RESET` buttons
+- A TENSTAR/Waveshare RP2040-Zero, or Waveshare RP2350-USB-C with `BOOT` and `RESET`
 - A data-capable cable that connects to the board's USB Type-C receptacle
+- RP2350 only: a data-capable mouse cable and CC1/CC2 on the PIO-USB port set to
+  the silkscreen's `1 / Source` position
 - A free USB port on the PC
 
 A cable that supplies power but does not carry data can light the board without ever creating an `RPI-RP2` drive or a COM port. If the cable's data capability is unknown, test with one already proven to transfer files from another USB device.
 
-The board uses native RP2040 USB. Windows 10/11 already includes the required composite-device, USB CDC serial, and HID class drivers. Do not install a third-party serial-driver package for this board.
+Both boards use native USB toward Windows. Windows 10/11 already includes the
+required composite-device, USB CDC serial, and HID class drivers. Do not install
+a third-party serial driver. RP2350 users must read
+[RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md) before connecting the mouse.
 
 ## 2. Put the source in a short local path
 
@@ -42,9 +49,11 @@ Also install the [Microsoft Visual C++ 2015-2022 Redistributable (x64)](https://
 
 ## 4. Choose and install one firmware toolchain
 
-Arduino IDE is the most direct clean-machine route. PlatformIO is useful for a repeatable command-line build. Both build the same sketch.
+Arduino IDE is the most direct RP2040 route. PlatformIO builds both targets and
+is required for an RP2350 source build because it applies the checked-in 2 MB
+board definition, 120 MHz clock, compile guard, and pinned PIO-USB library.
 
-### Option A: Arduino IDE 2
+### Option A: Arduino IDE 2 (RP2040 only)
 
 1. Install [Arduino IDE 2](https://www.arduino.cc/en/software) using Arduino's Windows EXE or ZIP download. Do not use the Microsoft Store build; Arduino-Pico documents board-detection problems with it.
 2. Open **File > Preferences**.
@@ -62,7 +71,8 @@ Arduino IDE is the most direct clean-machine route. PlatformIO is useful for a r
 9. Choose **Sketch > Verify/Compile**.
 10. Choose **Sketch > Export Compiled Binary**. Arduino IDE writes a `.uf2` with the exported binaries next to the sketch.
 
-Do not choose a generic Pico board and do not install a similarly named board package from another publisher. The selected Waveshare definition supplies the correct 2 MB flash layout, and the Arduino-Pico core supplies the TinyUSB library used by the project.
+Do not use this Arduino path for the RP2350 proxy. Do not choose a generic Pico
+board or a similarly named board package from another publisher.
 
 ### Option B: PlatformIO
 
@@ -85,12 +95,14 @@ The PlatformIO build output is:
 
 ```text
 RP2040_Firmware\.pio\build\waveshare_rp2040_zero\firmware.uf2
+RP2040_Firmware\.pio\build\waveshare_rp2350_usb_c\firmware.uf2
 ```
 
 `build.bat` also creates the convenient copy:
 
 ```text
 RP2040_Firmware\rainbow_recoil.uf2
+RP2040_Firmware\rainbow_recoil_rp2350_usb_c.uf2
 ```
 
 The first build downloads the Arduino-Pico-compatible platform, compiler, framework, and libraries, so it requires internet access and may take several minutes.
@@ -106,19 +118,25 @@ Use the board's two buttons in this order while it is connected:
 
 If the board is disconnected, the equivalent sequence is to hold `BOOT`, connect the USB Type-C cable, wait for `RPI-RP2`, and release `BOOT`.
 
-In this state, the RP2040 ROM is waiting for a UF2 file. The application firmware is not running, so its COM port and HID interface are not expected to exist.
+In this state, the RP2 ROM is waiting for a UF2 file. The application firmware
+is not running, so its COM port and HID interface are not expected to exist.
 
 ## 6. Flash the firmware
 
-Either drag the built `.uf2` to the root of `RPI-RP2`, or run the checked-in helper from `RP2040_Firmware`:
+Drag the board-specific `.uf2` to the root of `RPI-RP2`, or run the checked-in
+helper from `RP2040_Firmware` with an explicit target:
 
 ```powershell
-.\flash-firmware.bat
+.\flash-firmware.bat rp2040
+# or
+.\flash-firmware.bat rp2350
 ```
 
-The helper looks up the volume by its `RPI-RP2` label; it does not assume a drive letter. When the copy completes successfully, the drive disappears and the board restarts on its own.
+Omitting the argument keeps the backward-compatible RP2040 default. When the
+copy completes successfully, the drive disappears and the board restarts.
 
-Do not rename or copy an `.elf`, `.bin`, or source file to the drive. Only use the `.uf2` generated for `waveshare_rp2040_zero`.
+Do not rename or copy an `.elf`, `.bin`, or source file to the drive. Never mix
+the two UF2 targets.
 
 ## 7. Confirm Windows runtime enumeration
 
@@ -128,7 +146,10 @@ Wait several seconds after the board restarts, then open Device Manager. A corre
 - **USB Serial Device (COMx)** under **Ports (COM & LPT)**
 - **HID-compliant mouse** under the HID or pointing-device view
 
-The new HID entry does not replace the user's physical mouse; both can be present.
+With RP2040, the new HID entry remains separate from the user's directly
+connected physical mouse. With RP2350, it is the upstream proxy that forwards
+the mouse attached to the board; Windows does not enumerate that downstream
+mouse separately.
 
 For a command-line check, open PowerShell and run:
 
@@ -171,9 +192,14 @@ Set-ExecutionPolicy -Scope Process Bypass
 ## 9. Start and verify the app
 
 1. Confirm that `RPI-RP2` is no longer mounted and **USB Serial Device (COMx)** is present.
-2. Close Arduino Serial Monitor, PlatformIO Monitor, and any other terminal that may have the COM port open.
-3. Run `WindowsApp\artifacts\win-x64\zerosense.exe`.
-4. Wait for the app's board status to show a connection on the enumerated COM port.
+2. RP2350 only: connect the PC to the native port beside `BOOT`/`RESET`, then
+   connect the mouse to the opposite female PIO-USB port.
+3. Close Arduino Serial Monitor, PlatformIO Monitor, and any other terminal that may have the COM port open.
+4. Run `WindowsApp\artifacts\win-x64\zerosense.exe`.
+5. Wait for the app's board status to show a connection on the enumerated COM port.
+6. RP2350 only: confirm the Device page reports the RP2350 identity and the
+   downstream mouse's VID:PID. Arming remains unavailable until the mouse is
+   successfully decoded.
 
 The first run initializes the supplied calibration: 1600 DPI, horizontal/vertical 55, `MouseSensitivityMultiplierUnit=0.001000`, and ADS values 38/67/72/74 for 1.0x/2.5x/3.5x/8.0x. Resolution and aspect ratio are not calibration inputs because USB mouse reports use relative counts. Select the active weapon and optic magnification in the app; both the numeric weapon profile and per-axis scale are then sent over CDC.
 
@@ -181,8 +207,20 @@ The app lists all 115 weapons in the current catalog. Select **General** for a s
 
 The Overview page's per-weapon output strength is the safe first calibration control. `1.00×` is neutral, and the selected weapon remembers its own value. It scales every output mode, including semi-automatic per-shot recoil. Custom automatic profile RPM and magazine-size values are honored by both the firmware schedule and generated curve length.
 
-Select **Arm output**, then hold right mouse (aim) and left mouse (fire) together to begin a burst. Releasing either button stops the RP2040 immediately; the next aim-plus-fire press starts the selected pattern again at shot one. The host also sends a 250 ms keepalive to a 750 ms firmware watchdog. Arming by itself must not move the pointer. Test this behavior on the desktop before opening the game, then calibrate one weapon at a time in the shooting range.
+Select **Arm output**, then hold right mouse (aim) and left mouse (fire) together
+to begin a burst. Releasing either button stops generated output immediately;
+the next aim-plus-fire press starts the selected pattern again at shot one. On
+RP2350, ordinary physical motion and non-substituted buttons continue through
+the proxy even while generated output is stopped or active. The host also sends
+a 250 ms keepalive to a 750 ms firmware watchdog. Arming by itself must not move
+the pointer. Complete the desktop checklist in
+[RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md) before using the RP2350 build.
 
 Every automatic profile applies the Vertical Grip modifier. Automatic profiles also use Flash Hider wherever they previously selected Compensator. Ela's SCORPION EVO 3 A1 keeps Compensator as its barrel exception while using the same Vertical Grip modifier. Older saved profiles are migrated to these preferences when loaded. The F2 entry uses vertical grip and flash hider. Shared weapons can resolve different attachments by operator: Y11S3 removes the muzzle brake from Aruni's Mk 14 EBR and Tubarão's AR-15.50 while retaining it for Dokkaebi and Maverick. Semi-automatic profiles show rapid-fire rate and per-shot correction in the UI. Attachment recommendations can change with Siege balance patches, so check the research date in the project README before relying on them.
 
-The app discovers currently present ports associated with Raspberry Pi VID `2E8A`, then requires a `PONG:RAINBOW-RECOIL:3` reply before accepting one. This prevents another connected Pico-class CDC device from being mistaken for this firmware. It does not rely on a bridge-chip name, fixed runtime PID, or hard-coded COM number. If it does not connect, follow [TROUBLESHOOTING.md](TROUBLESHOOTING.md) and include the PowerShell enumeration output when reporting a problem.
+The app discovers currently present ports associated with Raspberry Pi VID
+`2E8A`, then requires a `PONG:RAINBOW-RECOIL:3` reply before accepting one. It
+also consumes the subsequent board identity and RP2350 mouse-health messages.
+It does not rely on a bridge-chip name, fixed runtime PID, or hard-coded COM
+number. If it does not connect, follow
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md).

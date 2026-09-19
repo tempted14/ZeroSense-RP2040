@@ -1,4 +1,22 @@
-# Troubleshooting the TENSTAR RP2040-Zero setup
+# Troubleshooting RP2040-Zero and RP2350-USB-C
+
+## RP2350 proxy is online but the mouse is disconnected
+
+- Confirm this is the two-female-port **RP2350-USB-C**, not RP2350-USB-CM.
+- Connect Windows to the native port beside `BOOT`/`RESET` and the mouse to the
+  opposite PIO-USB port.
+- With power removed, confirm both PIO-port CC selectors are in the
+  silkscreen's `1 / Source` position. Never bridge both positions.
+- Use data-capable cables and avoid an unpowered hub.
+- Reflash `rainbow_recoil_rp2350_usb_c.uf2`, not the RP2040 image.
+
+`MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR` means the device exposed no mouse
+layout the firmware could safely decode and boot-protocol fallback was not
+available. `MOUSE:HOST_ERROR` means the PIO-USB host could not continue its
+report transfer. In either case the app intentionally disables arming. Test a
+plain wired mouse to separate descriptor compatibility from cabling/power.
+
+See [RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md) for the physical checklist.
 
 The board has two distinct USB states. Diagnose the state before changing tools or reinstalling anything.
 

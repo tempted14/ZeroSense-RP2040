@@ -2,11 +2,25 @@
 setlocal
 cd /d "%~dp0"
 
-set "UF2=%~dp0rainbow_recoil.uf2"
-if not exist "%UF2%" set "UF2=%~dp0.pio\build\waveshare_rp2040_zero\firmware.uf2"
+set "TARGET=%~1"
+if not defined TARGET set "TARGET=rp2040"
+
+if /i "%TARGET%"=="rp2040" (
+    set "UF2=%~dp0rainbow_recoil.uf2"
+    set "PIO_UF2=%~dp0.pio\build\waveshare_rp2040_zero\firmware.uf2"
+) else if /i "%TARGET%"=="rp2350" (
+    set "UF2=%~dp0rainbow_recoil_rp2350_usb_c.uf2"
+    set "PIO_UF2=%~dp0.pio\build\waveshare_rp2350_usb_c\firmware.uf2"
+) else (
+    echo ERROR: Unknown target "%TARGET%".
+    echo Usage: flash-firmware.bat [rp2040^|rp2350]
+    exit /b 1
+)
+
+if not exist "%UF2%" set "UF2=%PIO_UF2%"
 if not exist "%UF2%" (
     echo ERROR: No firmware UF2 was found.
-    echo Run build.bat, or export a compiled binary from Arduino IDE first.
+    echo Run build.bat first, then retry with the correct target.
     exit /b 1
 )
 
@@ -26,8 +40,8 @@ if not defined RPI_DRIVE (
     exit /b 2
 )
 
-echo Copying "%UF2%" to %RPI_DRIVE%\ ...
-copy /y "%UF2%" "%RPI_DRIVE%\rainbow_recoil.uf2" >nul
+echo Copying %TARGET% firmware "%UF2%" to %RPI_DRIVE%\ ...
+copy /y "%UF2%" "%RPI_DRIVE%\zerosense_%TARGET%.uf2" >nul
 if errorlevel 1 (
     echo ERROR: Copy failed. Re-enter RPI-RP2 mode and try again.
     exit /b 1
@@ -35,4 +49,5 @@ if errorlevel 1 (
 
 echo Flash complete. RPI-RP2 should eject and the board should restart.
 echo Windows will then enumerate one USB Serial Device COM port and one HID mouse.
+if /i "%TARGET%"=="rp2350" echo Connect the physical mouse only after the board restarts.
 exit /b 0

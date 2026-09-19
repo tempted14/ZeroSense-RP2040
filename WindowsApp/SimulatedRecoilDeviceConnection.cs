@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 namespace RainbowRecoil;
 
 /// <summary>
-/// In-process RP2040 simulator. It exercises the same protocol encoders and
+/// In-process firmware simulator. It exercises the same protocol encoders and
 /// configuration sequencing as hardware but never emits HID input.
 /// </summary>
 public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
@@ -147,7 +147,7 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_connected)
             {
-                throw new InvalidOperationException("The simulated RP2040 is not connected.");
+                throw new InvalidOperationException("The simulated device is not connected.");
             }
         }
     }

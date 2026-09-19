@@ -28,6 +28,9 @@ applies.
 - The active-but-stationary heartbeat sends a zero delta and never changes a
   held rapid-fire button.
 - The host watchdog stops all output after 750 ms without a keepalive.
+- The RP2350 target services physical pass-through at 1 ms, decodes ordinary
+  report-ID mouse layouts, and merges physical and generated deltas. START,
+  STOP, and the generated-output watchdog do not clear physical input.
 
 ## Verification performed
 
@@ -36,12 +39,13 @@ The release build was checked with the following independent paths:
 | Check | Result |
 |---|---|
 | RP2040 PlatformIO release build | Pass |
+| RP2350-USB-C PlatformIO release build | Pass |
 | RP2040 build with `-Wall -Wextra` | Pass; dependency-only TinyUSB warnings |
-| Desktop/core regression simulator | 26/26 pass |
-| Python profile and firmware-contract tests | 13/13 pass |
+| Desktop/core regression simulator | 27/27 pass |
+| Python profile and firmware-contract tests | 19/19 pass |
 | Windows self-contained x64 publish | Pass |
 | Windows startup smoke test | Pass; process responsive, title `ZeroSense` |
-| UF2 release-copy SHA-256 comparison | Pass |
+| UF2 framing/family validation | Pass for RP2040 and RP2350 |
 
 The simulator validates framing, profile transfer, pattern chunks, sensitivity,
 rapid-fire configuration, start/keepalive/stop, and error handling. Static
@@ -50,7 +54,8 @@ specific HID, movement-queue, rapid-fire, per-axis, and zero-drift invariants.
 
 ## Hardware limitation
 
-The final USB enumeration, CDC handshake, HID report timing, and physical mouse
-output still require a connected TENSTAR/Waveshare RP2040-Zero for end-to-end
-verification. A simulator and successful cross-compilation cannot replace that
-hardware check.
+Final USB enumeration, CDC handshake, HID timing, and physical mouse output
+still require the respective board. RP2350 additionally requires checking CC
+source selection, connector power, signal integrity, descriptor compatibility,
+and disconnect handling with the actual mouse. A simulator and successful
+cross-compilation cannot replace those hardware checks.

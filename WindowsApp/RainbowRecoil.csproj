@@ -19,8 +19,8 @@
     <Title>ZeroSense</Title>
     <AssemblyTitle>ZeroSense</AssemblyTitle>
     <Company>ZeroSense</Company>
-    <Description>ZeroSense RP2040 configuration and control client</Description>
-    <Version>1.1.0</Version>
+    <Description>ZeroSense RP2040 and RP2350 configuration and control client</Description>
+    <Version>1.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -35,6 +35,10 @@
              CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\docs\INSTALLATION.md"
              Link="Docs\INSTALLATION.md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\docs\RP2350_MOUSE_PROXY.md"
+             Link="Docs\RP2350_MOUSE_PROXY.md"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
