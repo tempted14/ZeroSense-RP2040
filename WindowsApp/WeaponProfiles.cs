@@ -8,7 +8,7 @@ using System.Text.Json.Serialization;
 namespace RainbowRecoil;
 
 /// <summary>
-/// Runtime profile sent to the RP2040. Values represent HID counts per firmware
+/// Runtime profile sent to the connected board. Values represent HID counts per firmware
 /// movement tick at the reference calibration. Full accuracy still requires a
 /// controlled shooting-range pass because the published roster does not provide
 /// authoritative recoil vectors.

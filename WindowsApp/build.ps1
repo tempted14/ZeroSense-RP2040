@@ -2,13 +2,14 @@ $ErrorActionPreference = "Stop"
 
 $project = Join-Path $PSScriptRoot "RainbowRecoil.csproj"
 $output = Join-Path $PSScriptRoot "artifacts\win-x64"
+$nugetConfig = Join-Path (Split-Path $PSScriptRoot -Parent) "NuGet.Config"
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     throw "The .NET 8 SDK is required. Install it from https://dotnet.microsoft.com/download/dotnet/8.0"
 }
 
 Write-Host "Restoring Windows app dependencies..." -ForegroundColor Cyan
-dotnet restore $project --runtime win-x64
+dotnet restore $project --runtime win-x64 --configfile $nugetConfig
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 Write-Host "Publishing the self-contained Windows x64 app..." -ForegroundColor Cyan

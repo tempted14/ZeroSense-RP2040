@@ -183,7 +183,7 @@
                                                        FontSize="13" FontWeight="SemiBold" />
                                         </StackPanel>
                                         <TextBlock x:Name="DeviceMessageText"
-                                                   Text="Connect the flashed RP2040 and scan for its serial interface."
+                                                   Text="Connect a flashed RP2040 or RP2350 and scan for its serial interface."
                                                    Style="{StaticResource MutedTextStyle}" />
                                     </StackPanel>
                                     <ToggleSwitch x:Name="ArmToggle" Grid.Column="2" Header="ARM OUTPUT"
@@ -745,7 +745,7 @@
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
                                 <StackPanel Spacing="4">
                                     <TextBlock Text="Hardware" Style="{StaticResource PageTitleStyle}" />
-                                    <TextBlock Text="Manage the RP2040 connection and output safety state."
+                                    <TextBlock Text="Manage the RP2040 or RP2350 connection and output safety state."
                                                Style="{StaticResource MutedTextStyle}" />
                                 </StackPanel>
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
@@ -792,6 +792,12 @@
                                         <TextBlock Text="Firmware link" Style="{StaticResource SectionTitleStyle}" />
                                         <TextBlock Text="Serial discovery requires the project firmware handshake; unrelated serial devices are ignored."
                                                    Style="{StaticResource MutedTextStyle}" />
+                                        <TextBlock x:Name="HardwareIdentityText"
+                                                   Text="Hardware: waiting for firmware identity"
+                                                   FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="PhysicalMouseStatusText"
+                                                   Text="Physical mouse: status will appear after the firmware handshake"
+                                                   FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -866,7 +872,7 @@
                                         <TextBlock Text="Three components. One clean setup."
                                                    FontFamily="Segoe UI Variable Display"
                                                    FontSize="22" FontWeight="SemiBold" />
-                                        <TextBlock Text="Flash the RP2040, publish the self-contained Windows client, then let ZeroSense verify the firmware handshake before arming output."
+                                        <TextBlock Text="Flash the UF2 for your RP2040 or RP2350, publish the Windows client, then let ZeroSense verify the firmware handshake before arming output."
                                                    Style="{StaticResource MutedTextStyle}" MaxWidth="520"
                                                    HorizontalAlignment="Left" />
                                     </StackPanel>
@@ -882,7 +888,7 @@
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
                                             <TextBlock Text="Flash firmware" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Build the Waveshare RP2040 Zero target and copy the UF2 to RPI-RP2."
+                                            <TextBlock Text="Choose the UF2 matching RP2040-Zero or RP2350-USB-C and copy it to RPI-RP2."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -919,7 +925,7 @@
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
                                     <StackPanel Spacing="5">
                                         <TextBlock Text="Requirements" Style="{StaticResource SectionTitleStyle}" />
-                                        <TextBlock Text="Windows 10/11 x64 · .NET 8 SDK for builds · Visual C++ 2015–2022 x64 runtime · Arduino IDE or PlatformIO · RP2040-Zero"
+                                        <TextBlock Text="Windows 10/11 x64 · .NET 8 SDK for builds · Visual C++ 2015–2022 x64 runtime · PlatformIO · RP2040-Zero or RP2350-USB-C"
                                                    Style="{StaticResource MutedTextStyle}" />
                                         <TextBlock x:Name="InstallationStatusText"
                                                    Text="The full Markdown guide is included beside the published app."

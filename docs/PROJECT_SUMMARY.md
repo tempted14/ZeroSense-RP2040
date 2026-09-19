@@ -2,14 +2,21 @@
 
 ## Supported hardware
 
-The supported target is the TENSTAR RP2040-Zero from the linked listing, using the Arduino-Pico `Waveshare RP2040 Zero` board definition. The board has 2 MB flash, a USB Type-C receptacle, and separate `BOOT` and `RESET` buttons.
+Supported targets are the 2 MB TENSTAR/Waveshare RP2040-Zero and the 2 MB,
+two-female-port Waveshare RP2350-USB-C (SKU 34641). The similarly named
+RP2350-USB-CM male-plug board has a different PIO D+/D- order and is not a
+supported target.
 
-The firmware uses the RP2040 native USB controller as one composite device:
+Both targets use native USB toward Windows as one composite device:
 
 - CDC ACM carries commands between the Windows app and firmware.
 - HID exposes a relative mouse interface.
 
 Windows 10 and 11 provide the composite, CDC serial, and HID class drivers. No USB-to-UART bridge is used.
+
+RP2350 additionally hosts a physical mouse on its GPIO12/13 PIO-USB connector
+and merges that mouse's standard input with generated movement. Host work runs
+on core 1; native device reports and the serial protocol remain on core 0.
 
 ## Repository layout
 
@@ -20,6 +27,7 @@ RainbowRecoil\
 │   ├── App.xaml / App.xaml.cs             WinUI application bootstrap
 │   ├── MainPage.xaml / MainPage.xaml.cs   UI and device connection flow
 │   ├── Rp2040DeviceDiscovery.cs           Native RP2040 CDC discovery
+│   ├── FirmwareStatusParser.cs             Board/mouse health protocol parser
 │   ├── IRecoilDeviceConnection.cs         Testable device boundary and metrics
 │   ├── SimulatedRecoilDeviceConnection.cs Board-free protocol/configuration harness
 │   ├── ConfigurationValidator.cs          Fail-closed output validation
@@ -36,7 +44,8 @@ RainbowRecoil\
 ├── RP2040_Firmware\
 │   ├── rainbow_recoil\rainbow_recoil.ino  Canonical Arduino source
 │   ├── src\main.cpp                       PlatformIO entry point for that source
-│   ├── platformio.ini                     Arduino-Pico board environment
+│   ├── boards\waveshare_rp2350_usb_c.json Exact RP2350 2 MB board definition
+│   ├── platformio.ini                     Both Arduino-Pico environments
 │   ├── build.bat                          PlatformIO build helper
 │   └── flash-firmware.bat                 RPI-RP2 UF2 copy helper
 └── docs\                                  Setup and troubleshooting guides
@@ -46,7 +55,7 @@ The removed Pico-SDK/CMake, Make, and custom UF2-converter paths were not valid 
 
 ## Firmware configuration
 
-Arduino IDE must use:
+Arduino IDE can build the RP2040 target with:
 
 ```text
 Package:   Raspberry Pi Pico/RP2040/RP2350 by Earle F. Philhower III
@@ -55,7 +64,9 @@ USB stack: Adafruit TinyUSB
 FQBN:      rp2040:rp2040:waveshare_rp2040_zero:usbstack=tinyusb
 ```
 
-The sketch includes `Adafruit_TinyUSB.h`, starts `Serial` for the CDC interface, and registers one `Adafruit_USBD_HID` mouse interface. The Arduino-Pico core supplies the compatible TinyUSB library and its one-CDC/one-HID configuration.
+Use PlatformIO for RP2350; it selects the custom board, 120 MHz clock,
+`ZEROSENSE_RP2350_USB_C`, and pinned Pico-PIO-USB dependency. The sketch starts
+CDC and one upstream HID interface for either build.
 
 PlatformIO uses the same Arduino-Pico core through:
 
@@ -65,6 +76,11 @@ board = waveshare_rp2040_zero
 board_build.core = earlephilhower
 framework = arduino
 build_flags = -DUSE_TINYUSB
+
+[env:waveshare_rp2350_usb_c]
+board = waveshare_rp2350_usb_c
+board_build.f_cpu = 120000000L
+build_flags = -DUSE_TINYUSB -DZEROSENSE_RP2350_USB_C
 ```
 
 ## Build outputs
@@ -72,16 +88,18 @@ build_flags = -DUSE_TINYUSB
 From `RP2040_Firmware`:
 
 ```powershell
-pio run -e waveshare_rp2040_zero
+pio run -e waveshare_rp2040_zero -e waveshare_rp2350_usb_c
 ```
 
 creates:
 
 ```text
 .pio\build\waveshare_rp2040_zero\firmware.uf2
+.pio\build\waveshare_rp2350_usb_c\firmware.uf2
 ```
 
-`build.bat` also copies that file to `RP2040_Firmware\rainbow_recoil.uf2`.
+`build.bat` also creates `rainbow_recoil.uf2` and
+`rainbow_recoil_rp2350_usb_c.uf2`.
 
 From `WindowsApp`:
 

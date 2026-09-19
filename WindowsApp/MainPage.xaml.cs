@@ -65,6 +65,10 @@ public sealed partial class MainPage : UserControl, IDisposable
     private bool _isDisposed;
     private int _configurationRevision;
     private CalibrationSnapshot? _calibrationUndo;
+    private FirmwareStatusKind? _firmwareDeviceKind;
+    private FirmwareStatusKind? _physicalMouseStatus;
+    private ushort _physicalMouseVendorId;
+    private ushort _physicalMouseProductId;
 
     public MainPage()
     {
@@ -311,6 +315,7 @@ public sealed partial class MainPage : UserControl, IDisposable
                 "Simulator connected",
                 "Full protocol path is active. The simulator never emits mouse input.",
                 WarningBrush);
+            UpdateHardwareStatusPresentation();
             DiagnosticLog.Record("device", "Simulator connected and configuration accepted.");
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
@@ -368,6 +373,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             foreach (var portName in ports)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                ResetFirmwareHardwareStatus();
                 SetConnectionStatus("Connecting…", $"Trying {portName}.", WarningBrush);
 
                 var candidate = new SerialConnection(portName);
@@ -391,12 +397,13 @@ public sealed partial class MainPage : UserControl, IDisposable
                         errors.Add($"{portName}: connected, but initial synchronization failed.");
                         continue;
                     }
-                    SetArmControls(false, true);
+                    SetArmControls(false, CanArmConnectedHardware());
                     SetConnectButtonContent("Reconnect");
                     SetConnectionStatus(
                         $"Connected on {portName}",
-                        "Profile and calibration are synchronized.",
+                        BuildConnectedHardwareDetail(),
                         ConnectedBrush);
+                    UpdateHardwareStatusPresentation();
                     DiagnosticLog.Record("device", $"Connected to verified firmware on {portName}.");
                     return;
                 }
@@ -446,11 +453,16 @@ public sealed partial class MainPage : UserControl, IDisposable
         {
             if (message is null)
             {
-                HandleConnectionLost("The RP2040 stopped responding.");
+                HandleConnectionLost("The hardware stopped responding.");
             }
             else if (message.StartsWith("ERROR:", StringComparison.OrdinalIgnoreCase))
             {
                 HandleFirmwareFault(message);
+            }
+            else if (FirmwareStatusParser.TryParse(message, out var status))
+            {
+                ApplyFirmwareStatus(status);
+                DiagnosticLog.Record("firmware", message);
             }
             else if (!message.StartsWith("PONG:", StringComparison.Ordinal))
             {
@@ -494,6 +506,114 @@ public sealed partial class MainPage : UserControl, IDisposable
         SetArmControls(false, connection?.IsConnected == true);
         SetConnectionStatus("Firmware reported an error", detail, ErrorBrush);
         DiagnosticLog.Record("firmware-error", detail);
+    }
+
+    private void ApplyFirmwareStatus(FirmwareStatusUpdate update)
+    {
+        switch (update.Kind)
+        {
+            case FirmwareStatusKind.Rp2040Device:
+            case FirmwareStatusKind.Rp2350MouseProxy:
+                _firmwareDeviceKind = update.Kind;
+                if (update.Kind == FirmwareStatusKind.Rp2040Device)
+                {
+                    _physicalMouseStatus = null;
+                }
+                break;
+            case FirmwareStatusKind.MouseConnected:
+                _physicalMouseStatus = update.Kind;
+                _physicalMouseVendorId = update.VendorId;
+                _physicalMouseProductId = update.ProductId;
+                break;
+            case FirmwareStatusKind.MouseDisconnected:
+            case FirmwareStatusKind.MouseUnsupported:
+            case FirmwareStatusKind.MouseHostError:
+                _physicalMouseStatus = update.Kind;
+                _physicalMouseVendorId = 0;
+                _physicalMouseProductId = 0;
+                break;
+        }
+
+        if (_connection?.IsConnected == true && !_connection.IsSimulator)
+        {
+            var canArm = CanArmConnectedHardware();
+            SetArmControls(canArm && _isArmed, canArm);
+            DeviceMessageText.Text = BuildConnectedHardwareDetail();
+            DevicePageConnectionDetail.Text = DeviceMessageText.Text;
+        }
+        UpdateHardwareStatusPresentation();
+    }
+
+    private bool CanArmConnectedHardware() =>
+        _firmwareDeviceKind != FirmwareStatusKind.Rp2350MouseProxy ||
+        _physicalMouseStatus == FirmwareStatusKind.MouseConnected;
+
+    private string BuildConnectedHardwareDetail()
+    {
+        if (_connection?.IsSimulator == true)
+        {
+            return "Full protocol path is active. The simulator never emits mouse input.";
+        }
+        return _firmwareDeviceKind switch
+        {
+            FirmwareStatusKind.Rp2350MouseProxy when
+                _physicalMouseStatus == FirmwareStatusKind.MouseConnected =>
+                $"RP2350 mouse proxy and physical mouse {_physicalMouseVendorId:X4}:{_physicalMouseProductId:X4} are online; profile and calibration are synchronized.",
+            FirmwareStatusKind.Rp2350MouseProxy when
+                _physicalMouseStatus == FirmwareStatusKind.MouseUnsupported =>
+                "RP2350 proxy is online, but the attached mouse report descriptor is unsupported. Output remains disarmed.",
+            FirmwareStatusKind.Rp2350MouseProxy when
+                _physicalMouseStatus == FirmwareStatusKind.MouseHostError =>
+                "RP2350 proxy is online, but its PIO-USB host reported an error. Output remains disarmed.",
+            FirmwareStatusKind.Rp2350MouseProxy =>
+                "RP2350 proxy is online. Connect the mouse to the female PIO-USB port to enable output.",
+            FirmwareStatusKind.Rp2040Device =>
+                "RP2040-Zero is online; profile and calibration are synchronized.",
+            _ => "Verified firmware is online; profile and calibration are synchronized."
+        };
+    }
+
+    private void ResetFirmwareHardwareStatus()
+    {
+        _firmwareDeviceKind = null;
+        _physicalMouseStatus = null;
+        _physicalMouseVendorId = 0;
+        _physicalMouseProductId = 0;
+        UpdateHardwareStatusPresentation();
+    }
+
+    private void UpdateHardwareStatusPresentation()
+    {
+        if (_connection?.IsSimulator == true)
+        {
+            HardwareIdentityText.Text = "Hardware: in-process simulator";
+            PhysicalMouseStatusText.Text = "Physical mouse: not used; simulator emits no HID input";
+            return;
+        }
+
+        HardwareIdentityText.Text = _firmwareDeviceKind switch
+        {
+            FirmwareStatusKind.Rp2350MouseProxy => "Hardware: Waveshare RP2350-USB-C mouse proxy",
+            FirmwareStatusKind.Rp2040Device => "Hardware: TENSTAR/Waveshare RP2040-Zero",
+            _ => "Hardware: waiting for firmware identity"
+        };
+        PhysicalMouseStatusText.Text = _firmwareDeviceKind switch
+        {
+            FirmwareStatusKind.Rp2040Device =>
+                "Physical mouse: connected directly to Windows (separate from RP2040)",
+            FirmwareStatusKind.Rp2350MouseProxy when
+                _physicalMouseStatus == FirmwareStatusKind.MouseConnected =>
+                $"Physical mouse: {_physicalMouseVendorId:X4}:{_physicalMouseProductId:X4} · forwarding movement, 8 buttons, wheel, and pan",
+            FirmwareStatusKind.Rp2350MouseProxy when
+                _physicalMouseStatus == FirmwareStatusKind.MouseUnsupported =>
+                "Physical mouse: detected, but its HID report layout could not be decoded",
+            FirmwareStatusKind.Rp2350MouseProxy when
+                _physicalMouseStatus == FirmwareStatusKind.MouseHostError =>
+                "Physical mouse: PIO-USB host error; check the cable and CC source configuration",
+            FirmwareStatusKind.Rp2350MouseProxy =>
+                "Physical mouse: disconnected from the female PIO-USB port",
+            _ => "Physical mouse: status will appear after the firmware handshake"
+        };
     }
 
     private void OperatorSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -911,7 +1031,14 @@ public sealed partial class MainPage : UserControl, IDisposable
         if (requested && _connection?.IsConnected != true)
         {
             SetArmControls(false, false);
-            DeviceMessageText.Text = "Connect the RP2040 before arming output.";
+            DeviceMessageText.Text = "Connect a supported board before arming output.";
+            DevicePageConnectionDetail.Text = DeviceMessageText.Text;
+            return;
+        }
+        if (requested && !CanArmConnectedHardware())
+        {
+            SetArmControls(false, false);
+            DeviceMessageText.Text = BuildConnectedHardwareDetail();
             DevicePageConnectionDetail.Text = DeviceMessageText.Text;
             return;
         }
@@ -1942,6 +2069,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     {
         var connection = _connection;
         _connection = null;
+        ResetFirmwareHardwareStatus();
         if (connection is null)
         {
             return;

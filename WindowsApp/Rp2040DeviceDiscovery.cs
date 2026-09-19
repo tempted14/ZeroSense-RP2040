@@ -8,7 +8,7 @@ using System.Security;
 namespace RainbowRecoil
 {
     /// <summary>
-    /// Finds present RP2040 CDC interfaces. The Raspberry Pi VID is preferred;
+    /// Finds present RP2040/RP2350 CDC interfaces. The Raspberry Pi VID is preferred;
     /// legacy Microsoft/Logitech identities remain discoverable so existing
     /// flashed boards can be migrated. Every candidate must still pass the
     /// firmware-specific serial handshake before the application accepts it.

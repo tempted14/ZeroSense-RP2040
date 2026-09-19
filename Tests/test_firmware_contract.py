@@ -1,3 +1,4 @@
+import json
 import re
 import unittest
 from pathlib import Path
@@ -8,6 +9,12 @@ FIRMWARE = (
     ROOT / "RP2040_Firmware" / "rainbow_recoil" / "rainbow_recoil.ino"
 ).read_text()
 CS_PROTOCOL = (ROOT / "WindowsApp" / "SerialProtocol.cs").read_text()
+PLATFORMIO = (ROOT / "RP2040_Firmware" / "platformio.ini").read_text()
+RP2350_BOARD = json.loads((
+    ROOT / "RP2040_Firmware" / "boards" / "waveshare_rp2350_usb_c.json"
+).read_text())
+FLASH_HELPER = (ROOT / "RP2040_Firmware" / "flash-firmware.bat").read_text()
+CI_WORKFLOW = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
 
 
 def enum_values(source: str, prefix: str = "") -> dict[str, int]:
@@ -101,6 +108,66 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("nextMovementAtUs += interval;", FIRMWARE)
         self.assertIn("const uint32_t shot_interval = base_interval;", FIRMWARE)
         self.assertIn("nextRapidShotAtUs += shot_interval;", FIRMWARE)
+
+    def test_rp2350_target_is_separate_and_pinned(self) -> None:
+        self.assertIn("[env:waveshare_rp2040_zero]", PLATFORMIO)
+        self.assertIn("[env:waveshare_rp2350_usb_c]", PLATFORMIO)
+        self.assertIn("-DZEROSENSE_RP2350_USB_C", PLATFORMIO)
+        self.assertIn("board_build.f_cpu = 120000000L", PLATFORMIO)
+        self.assertIn("Pico-PIO-USB.git#5a37a66", PLATFORMIO)
+        self.assertEqual("rp2350", RP2350_BOARD["build"]["mcu"])
+        self.assertEqual(2_097_152, RP2350_BOARD["upload"]["maximum_size"])
+
+    def test_rp2350_uses_exact_female_port_pinout(self) -> None:
+        self.assertIn("static constexpr uint8_t hostMouseDpPin = 12;", FIRMWARE)
+        self.assertIn("configuration.pin_dp = hostMouseDpPin;", FIRMWARE)
+        self.assertIn("configuration.pinout = PIO_USB_PINOUT_DPDM;", FIRMWARE)
+        self.assertIn("F_CPU == 120000000L || F_CPU == 240000000L", FIRMWARE)
+
+    def test_physical_input_is_additive_and_not_cleared_by_stop(self) -> None:
+        self.assertIn(
+            "hostMouseX.exchange(0, std::memory_order_acq_rel)",
+            FIRMWARE,
+        )
+        self.assertIn("pendingMouseX + pendingPhysicalMouseX", FIRMWARE)
+        self.assertIn("pendingMouseY + pendingPhysicalMouseY", FIRMWARE)
+        reset = re.search(
+            r"static void reset_movement_state\(\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(reset)
+        self.assertNotIn("pendingPhysicalMouse", reset.group("body"))
+
+    def test_proxy_preserves_buttons_wheel_pan_and_requeues_reports(self) -> None:
+        self.assertIn("hostMouseButtons.store(buttons", FIRMWARE)
+        self.assertIn("HostMouseFieldKind::Wheel", FIRMWARE)
+        self.assertIn("HostMouseFieldKind::Pan", FIRMWARE)
+        self.assertIn("usbHid.mouseReport(0, buttons, dx, dy, wheel, pan)", FIRMWARE)
+        self.assertIn("(physical & ~MOUSE_BUTTON_LEFT)", FIRMWARE)
+        self.assertIn("if (!rapidFireActive)", FIRMWARE)
+        callback = re.search(
+            r"void tuh_hid_report_received_cb\((?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(callback)
+        self.assertIn("decode_host_mouse_report", callback.group("body"))
+        self.assertIn("tuh_hid_receive_report", callback.group("body"))
+
+    def test_proxy_reports_identity_and_mouse_health(self) -> None:
+        self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
+        self.assertIn("MOUSE:CONNECTED:VID=%04X:PID=%04X", FIRMWARE)
+        self.assertIn("MOUSE:DISCONNECTED", FIRMWARE)
+        self.assertIn("MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR", FIRMWARE)
+        self.assertIn("MOUSE:HOST_ERROR", FIRMWARE)
+
+    def test_build_flash_and_ci_routes_keep_targets_distinct(self) -> None:
+        self.assertIn('if /i "%TARGET%"=="rp2040"', FLASH_HELPER)
+        self.assertIn('else if /i "%TARGET%"=="rp2350"', FLASH_HELPER)
+        self.assertIn("rainbow_recoil_rp2350_usb_c.uf2", FLASH_HELPER)
+        self.assertIn("tools/verify_uf2.py rp2040", CI_WORKFLOW)
+        self.assertIn("tools/verify_uf2.py rp2350", CI_WORKFLOW)
 
 
 if __name__ == "__main__":

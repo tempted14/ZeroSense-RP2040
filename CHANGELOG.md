@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0 - 2026-09-18
+
+- Add a separate Waveshare RP2350-USB-C UF2 target for the exact 2 MB,
+  two-female-port board.
+- Host the downstream mouse through PIO-USB on GPIO12/13 and core 1 while native
+  USB remains the Windows CDC + HID device.
+- Decode report IDs and common 8/16/32-bit relative mouse fields, with boot
+  mouse fallback; forward movement, eight buttons, wheel, and horizontal pan.
+- Merge physical and generated deltas additively at a 1 ms upstream service
+  interval, preserving physical input across START, STOP, and output watchdogs.
+- Report board identity and mouse health to the Windows app, and keep RP2350
+  arming disabled while its downstream mouse is unavailable or unsupported.
+- Build both firmware environments in CI and add an RP2350 installation and
+  physical-validation checklist.
+
 ## 1.1.0 - 2026-09-18
 
 - Apply horizontal and vertical sensitivity exactly once in firmware.

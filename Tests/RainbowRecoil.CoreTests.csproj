@@ -20,6 +20,7 @@
     <Compile Include="..\WindowsApp\RecoilStrengthModel.cs" Link="Source\RecoilStrengthModel.cs" />
     <Compile Include="..\WindowsApp\RapidFireCatalog.cs" Link="Source\RapidFireCatalog.cs" />
     <Compile Include="..\WindowsApp\SerialProtocol.cs" Link="Source\SerialProtocol.cs" />
+    <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />
     <Compile Include="..\WindowsApp\IRecoilDeviceConnection.cs" Link="Source\IRecoilDeviceConnection.cs" />
     <Compile Include="..\WindowsApp\SimulatedRecoilDeviceConnection.cs" Link="Source\SimulatedRecoilDeviceConnection.cs" />
     <Compile Include="..\WindowsApp\SettingsManager.cs" Link="Source\SettingsManager.cs" />

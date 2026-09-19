@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace RainbowRecoil;
 
-/// <summary>Thread-safe USB CDC transport for the RP2040 firmware protocol.</summary>
+/// <summary>Thread-safe USB CDC transport for the ZeroSense firmware protocol.</summary>
 public sealed class SerialConnection : IRecoilDeviceConnection
 {
     private readonly string _portName;
@@ -182,7 +182,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         }
 
         CloseAndDispose(failedPort);
-        FailPendingResponse(new IOException("The RP2040 CDC port was disconnected."));
+        FailPendingResponse(new IOException("The device CDC port was disconnected."));
     }
 
     public byte[] BuildCommand(string commandType, string payload) =>
@@ -297,7 +297,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             port = _serialPort ?? throw new InvalidOperationException(
-                "The RP2040 CDC port is not connected.");
+                "The device CDC port is not connected.");
         }
 
         try
@@ -306,7 +306,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             {
                 if (!port.IsOpen)
                 {
-                    throw new IOException("The RP2040 CDC port was disconnected.");
+                    throw new IOException("The device CDC port was disconnected.");
                 }
                 port.Write(data, 0, data.Length);
             }
@@ -358,7 +358,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             cancellation?.Cancel();
             CloseAndDispose(port);
             cancellation?.Dispose();
-            FailPendingResponse(new IOException("The RP2040 CDC port was disconnected."));
+            FailPendingResponse(new IOException("The device CDC port was disconnected."));
             RaiseStatusChanged("Disconnected");
         }
     }

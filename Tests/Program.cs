@@ -30,6 +30,7 @@ var tests = new (string Name, Action Run)[]
     ("serial packets preserve framing and UTF-8", SerialPacketsAreValid),
     ("all commands and pattern chunks encode exactly", SerialProtocolCoverageIsComplete),
     ("configuration validator rejects unsafe output", ConfigurationValidationFailsClosed),
+    ("firmware status identifies both boards and proxy mouse state", FirmwareStatusIsParsed),
     ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath)
 };
 
@@ -743,6 +744,46 @@ static void ConfigurationValidationFailsClosed()
         CompensationMode.WeaponPattern,
         false);
     True(valid.IsValid, $"stock F2 should validate: {valid.Summary}");
+}
+
+static void FirmwareStatusIsParsed()
+{
+    True(
+        FirmwareStatusParser.TryParse(
+            "DEVICE:RP2040-ZERO:CDC+HID",
+            out var rp2040),
+        "RP2040 identity should parse");
+    Equal(FirmwareStatusKind.Rp2040Device, rp2040.Kind, "RP2040 identity");
+
+    True(
+        FirmwareStatusParser.TryParse(
+            "DEVICE:RP2350-USB-C:MOUSE-PROXY",
+            out var rp2350),
+        "RP2350 identity should parse");
+    Equal(FirmwareStatusKind.Rp2350MouseProxy, rp2350.Kind, "RP2350 identity");
+
+    True(
+        FirmwareStatusParser.TryParse(
+            "MOUSE:CONNECTED:VID=046D:PID=C539",
+            out var mouse),
+        "mouse identity should parse");
+    Equal(FirmwareStatusKind.MouseConnected, mouse.Kind, "mouse state");
+    Equal((ushort)0x046d, mouse.VendorId, "mouse VID");
+    Equal((ushort)0xc539, mouse.ProductId, "mouse PID");
+
+    True(
+        FirmwareStatusParser.TryParse("MOUSE:DISCONNECTED", out var disconnected),
+        "mouse disconnect should parse");
+    Equal(FirmwareStatusKind.MouseDisconnected, disconnected.Kind, "disconnect state");
+    True(
+        FirmwareStatusParser.TryParse(
+            "MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR",
+            out var unsupported),
+        "unsupported mouse should parse");
+    Equal(FirmwareStatusKind.MouseUnsupported, unsupported.Kind, "unsupported state");
+    True(
+        !FirmwareStatusParser.TryParse("MOUSE:CONNECTED:VID=NOPE:PID=0001", out _),
+        "invalid hexadecimal identity should fail closed");
 }
 
 static void SimulatorExercisesConfigurationPath()
