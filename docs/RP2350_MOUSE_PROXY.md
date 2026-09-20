@@ -48,7 +48,7 @@ cannot change a soldered CC resistor selection in software.
 
 ## Flash the board
 
-1. Download `ZeroSense-RP2350-USB-C-1.3.0.uf2` from the latest release.
+1. Download `ZeroSense-RP2350-USB-C-<version>.uf2` from the latest release.
 2. Disconnect the mouse during the first flash.
 3. Hold `BOOT`, connect the native PC-side port, and release `BOOT` when the
    `RPI-RP2` drive appears. With the board already connected, hold `BOOT`, tap

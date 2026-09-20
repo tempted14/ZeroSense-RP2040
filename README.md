@@ -53,10 +53,10 @@ mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the Windows package plus exactly one firmware image:
 
-1. `ZeroSense-1.3.0-Windows-x64.zip` — verify it against `SHA256SUMS.txt`, extract it, and run `zerosense.exe`.
-   A signed `ZeroSense-Setup-1.3.0-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.
-2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-1.3.0.uf2`.
-3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-1.3.0.uf2`.
+1. `ZeroSense-<version>-Windows-x64.zip` — verify it against `SHA256SUMS.txt`, extract it, and run `zerosense.exe`.
+   A signed `ZeroSense-Setup-<version>-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.
+2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-<version>.uf2`.
+3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-<version>.uf2`.
 
 Never flash the RP2350 UF2 to an RP2040 or the RP2040 UF2 to an RP2350. For the
 RP2350 cabling and CC selector check, follow
@@ -67,9 +67,11 @@ Microsoft Visual C++ 2015–2022 x64 Redistributable is still required. Detailed
 setup, flashing, and troubleshooting steps are in
 [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
-## Fresh Windows setup
+## Building from source
 
-Use [docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete clean-machine walkthrough. The required software is:
+Release users do not need the .NET SDK, Arduino IDE, PlatformIO, or Git. Use
+[docs/INSTALLATION.md](docs/INSTALLATION.md) for the no-build release path.
+Developers building the project from source need:
 
 - Windows 10 or Windows 11 x64
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) for the desktop app

@@ -72,7 +72,8 @@
                                        FontWeight="SemiBold" Foreground="#5F5F5F" CharacterSpacing="100" />
 
                             <Button x:Name="OverviewNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Overview">
+                                    Click="NavigationButton_Click" Tag="Overview" AccessKey="O"
+                                    AutomationProperties.Name="Overview navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="OverviewNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" />
@@ -83,7 +84,8 @@
                             </Button>
 
                             <Button x:Name="DetectionNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Detection">
+                                    Click="NavigationButton_Click" Tag="Detection" AccessKey="D"
+                                    AutomationProperties.Name="Detection navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="DetectionNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -94,7 +96,8 @@
                             </Button>
 
                             <Button x:Name="CalibrationNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Calibration">
+                                    Click="NavigationButton_Click" Tag="Calibration" AccessKey="C"
+                                    AutomationProperties.Name="Calibration navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="CalibrationNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -105,7 +108,8 @@
                             </Button>
 
                             <Button x:Name="DeviceNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Device">
+                                    Click="NavigationButton_Click" Tag="Device" AccessKey="V"
+                                    AutomationProperties.Name="Device navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="DeviceNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -116,7 +120,8 @@
                             </Button>
 
                             <Button x:Name="InstallationNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Installation">
+                                    Click="NavigationButton_Click" Tag="Installation" AccessKey="I"
+                                    AutomationProperties.Name="Installation navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="InstallationNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -166,7 +171,8 @@
                                 </StackPanel>
                                 <Button x:Name="ConnectButton" Grid.Column="1" Content="Scan for device"
                                         Style="{StaticResource AccentButtonStyle}"
-                                        VerticalAlignment="Center" Click="ConnectButton_Click" />
+                                        VerticalAlignment="Center" Click="ConnectButton_Click"
+                                        AccessKey="S" AutomationProperties.Name="Scan for ZeroSense device" />
                             </Grid>
 
                             <Border Grid.Row="1" Margin="0,20,0,0" Style="{StaticResource CardStyle}">
@@ -187,7 +193,8 @@
                                                    Style="{StaticResource MutedTextStyle}" />
                                     </StackPanel>
                                     <ToggleSwitch x:Name="ArmToggle" Grid.Column="2" Header="ARM OUTPUT"
-                                                  IsEnabled="False" Toggled="ArmToggle_Toggled" />
+                                                  IsEnabled="False" Toggled="ArmToggle_Toggled"
+                                                  AutomationProperties.Name="Arm output" />
                                 </Grid>
                             </Border>
 
@@ -213,6 +220,7 @@
                                                 <ComboBox x:Name="OperatorSelector" HorizontalAlignment="Stretch"
                                                           DisplayMemberPath="OperatorName"
                                                           IsEditable="True" IsTextSearchEnabled="True"
+                                                          AutomationProperties.Name="Active operator"
                                                           SelectionChanged="OperatorSelector_SelectionChanged" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="1" Spacing="6">
@@ -220,6 +228,7 @@
                                                 <ComboBox x:Name="WeaponSelector" HorizontalAlignment="Stretch"
                                                           DisplayMemberPath="Name"
                                                           IsEditable="True" IsTextSearchEnabled="True"
+                                                          AutomationProperties.Name="Active weapon"
                                                           SelectionChanged="WeaponSelector_SelectionChanged" />
                                             </StackPanel>
                                         </Grid>
@@ -245,6 +254,7 @@
                                             <TextBlock Text="Output model" Style="{StaticResource SectionTitleStyle}" />
                                             <ComboBox x:Name="CompensationModeSelector" HorizontalAlignment="Stretch"
                                                       DisplayMemberPath="DisplayName"
+                                                      AutomationProperties.Name="Output model"
                                                       SelectionChanged="CompensationModeSelector_SelectionChanged" />
                                             <TextBlock x:Name="ModeDescriptionText"
                                                        Style="{StaticResource MutedTextStyle}" />
@@ -322,6 +332,7 @@
                                             <ToggleSwitch x:Name="RapidFireToggle"
                                                           Header="Rapid fire for semi-automatic weapons"
                                                           IsOn="True"
+                                                          AutomationProperties.Name="Rapid fire"
                                                           Toggled="RapidFireToggle_Toggled" />
                                             <TextBlock x:Name="RapidFireStatusText"
                                                        Text="Select a semi-automatic profile to see its rate."
@@ -751,9 +762,11 @@
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                                     <Button x:Name="ConnectSimulatorButton" Content="Use simulator"
                                             Click="ConnectSimulatorButton_Click"
+                                            AutomationProperties.Name="Use software device simulator"
                                             ToolTipService.ToolTip="Tests the full app configuration path without producing mouse input." />
                                     <Button x:Name="DeviceConnectButton" Content="Scan for device"
-                                            Style="{StaticResource AccentButtonStyle}" Click="ConnectButton_Click" />
+                                            Style="{StaticResource AccentButtonStyle}" Click="ConnectButton_Click"
+                                            AutomationProperties.Name="Scan for ZeroSense device" />
                                 </StackPanel>
                             </Grid>
 
@@ -775,7 +788,8 @@
                                                    Style="{StaticResource MutedTextStyle}" />
                                     </StackPanel>
                                     <ToggleSwitch x:Name="DevicePageArmToggle" Grid.Column="2" Header="ARM OUTPUT"
-                                                  IsEnabled="False" Toggled="DevicePageArmToggle_Toggled" />
+                                                  IsEnabled="False" Toggled="DevicePageArmToggle_Toggled"
+                                                  AutomationProperties.Name="Arm output" />
                                 </Grid>
                             </Border>
 
@@ -935,10 +949,13 @@
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
                                                 VerticalAlignment="Center">
                                         <Button Content="Open latest release"
+                                                AutomationProperties.Name="Open latest ZeroSense release"
                                                 Click="OpenLatestRelease_Click" />
                                         <Button Content="Installation guide"
+                                                AutomationProperties.Name="Open installation guide"
                                                 Click="OpenInstallationGuide_Click" />
                                         <Button Content="Troubleshooting"
+                                                AutomationProperties.Name="Open troubleshooting guide"
                                                 Click="OpenTroubleshootingGuide_Click" />
                                     </StackPanel>
                                 </Grid>
@@ -954,6 +971,7 @@
                                     </StackPanel>
                                     <Button x:Name="CheckForUpdatesButton" Grid.Column="1"
                                             Content="Check for updates" VerticalAlignment="Center"
+                                            AutomationProperties.Name="Check GitHub for ZeroSense updates"
                                             Click="CheckForUpdatesButton_Click" />
                                 </Grid>
                             </Border>
@@ -985,6 +1003,7 @@
                 </StackPanel>
                 <Button x:Name="ExitOverlayButton" Grid.Column="2" Content="&#xE711;"
                         FontFamily="Segoe Fluent Icons" Width="32" Height="32" Padding="0"
+                        AutomationProperties.Name="Close overlay and open full client"
                         Click="ExitOverlayButton_Click" />
             </Grid>
 
@@ -999,7 +1018,8 @@
                                    Foreground="{StaticResource TextMutedBrush}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <ToggleSwitch x:Name="OverlayArmToggle" Grid.Column="2" Header="ARM"
-                                  IsEnabled="False" Toggled="OverlayArmToggle_Toggled" />
+                                  IsEnabled="False" Toggled="OverlayArmToggle_Toggled"
+                                  AutomationProperties.Name="Arm output" />
                 </Grid>
             </Border>
 

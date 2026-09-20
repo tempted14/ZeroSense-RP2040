@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.4.0 - unreleased
+
+- Normalize General-mode smoothing and displacement to elapsed time so cadence
+  jitter does not change average correction strength.
+- Resolve measured patterns against the complete attachment, optic, and optional
+  operator context instead of allowing a newer unrelated optic to shadow a match.
+- Replace developer-oriented in-app setup instructions with the prebuilt release
+  path and make updater asset/signature wording accurate.
+- Debounce settings persistence and device synchronization during rapid edits,
+  and add keyboard/accessibility metadata to the primary UI controls.
+- Centralize v1.4 version metadata, reduce release-job permissions, add release
+  contract checks, and update CI firmware builds to PlatformIO 6.2.0.
+
 ## 1.3.0 - 2026-09-19
 
 - Gate RP2350 compensation from raw downstream M1+M2 plus a short host arm
