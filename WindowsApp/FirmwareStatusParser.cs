@@ -24,7 +24,8 @@ public readonly record struct FirmwareStatusUpdate(
     uint MaximumActiveReportGapUs = 0,
     uint HostReportsReceived = 0,
     uint HostDecodeErrors = 0,
-    uint HostAccumulatorSaturations = 0);
+    uint HostAccumulatorSaturations = 0,
+    uint UpstreamDisconnectStops = 0);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -98,14 +99,17 @@ public static class FirmwareStatusParser
     {
         update = default;
         var fields = value.Split(':', StringSplitOptions.None);
-        if (fields.Length != 8 || fields[0] != "METRICS" ||
+        var upstreamDisconnectStops = 0u;
+        if (fields.Length is not (8 or 9) || fields[0] != "METRICS" ||
             !TryParseMetric(fields[1], "HID_SENT", out var hidReportsSent) ||
             !TryParseMetric(fields[2], "HID_BUSY", out var hidBusyDeferrals) ||
             !TryParseMetric(fields[3], "MAX_QUEUE", out var maximumQueuedDelta) ||
             !TryParseMetric(fields[4], "MAX_ACTIVE_GAP_US", out var maximumActiveReportGapUs) ||
             !TryParseMetric(fields[5], "HOST_REPORTS", out var hostReportsReceived) ||
             !TryParseMetric(fields[6], "HOST_DECODE_ERRORS", out var hostDecodeErrors) ||
-            !TryParseMetric(fields[7], "HOST_SATURATIONS", out var hostAccumulatorSaturations))
+            !TryParseMetric(fields[7], "HOST_SATURATIONS", out var hostAccumulatorSaturations) ||
+            (fields.Length == 9 &&
+             !TryParseMetric(fields[8], "USB_STOPS", out upstreamDisconnectStops)))
         {
             return false;
         }
@@ -118,7 +122,8 @@ public static class FirmwareStatusParser
             MaximumActiveReportGapUs: maximumActiveReportGapUs,
             HostReportsReceived: hostReportsReceived,
             HostDecodeErrors: hostDecodeErrors,
-            HostAccumulatorSaturations: hostAccumulatorSaturations);
+            HostAccumulatorSaturations: hostAccumulatorSaturations,
+            UpstreamDisconnectStops: upstreamDisconnectStops);
         return true;
     }
 

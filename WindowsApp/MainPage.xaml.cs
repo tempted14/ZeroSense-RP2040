@@ -642,7 +642,8 @@ public sealed partial class MainPage : UserControl, IDisposable
                     $"max active gap {update.MaximumActiveReportGapUs} µs · " +
                     $"downstream {update.HostReportsReceived} reports / " +
                     $"{update.HostDecodeErrors} decode errors / " +
-                    $"{update.HostAccumulatorSaturations} saturations";
+                    $"{update.HostAccumulatorSaturations} saturations · " +
+                    $"{update.UpstreamDisconnectStops} upstream safety stops";
                 return;
         }
 

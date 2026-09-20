@@ -155,6 +155,7 @@ static uint32_t hidReportsSent = 0;
 static uint32_t hidBusyDeferrals = 0;
 static uint32_t maximumQueuedDelta = 0;
 static uint32_t maximumActiveReportGapUs = 0;
+static uint32_t upstreamDisconnectStops = 0;
 static const uint32_t hostWatchdogTimeoutMs = 750; // ms - matches original constant value
 static uint32_t rapidButtonReleaseAtUs = 0;
 
@@ -1222,26 +1223,27 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(current_configuration_hash()),
                     configurationTransactionActive ? "ACTIVE" : "IDLE",
                     fireActive ? "ON" : "OFF");
+                uint32_t hostReports = 0;
+                uint32_t hostErrors = 0;
+                uint32_t hostSaturations = 0;
+#ifdef ZEROSENSE_RP2350_USB_C
+                hostReports = hostReportsReceived.load(std::memory_order_relaxed);
+                hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
+                hostSaturations =
+                    hostAccumulatorSaturations.load(std::memory_order_relaxed);
+#endif
                 Serial.printf(
                     "METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:"
                     "MAX_ACTIVE_GAP_US=%lu:HOST_REPORTS=%lu:"
-                    "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu\n",
+                    "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
                     static_cast<unsigned long>(maximumActiveReportGapUs),
-#ifdef ZEROSENSE_RP2350_USB_C
-                    static_cast<unsigned long>(
-                        hostReportsReceived.load(std::memory_order_relaxed)),
-                    static_cast<unsigned long>(
-                        hostDecodeErrors.load(std::memory_order_relaxed)),
-                    static_cast<unsigned long>(
-                        hostAccumulatorSaturations.load(std::memory_order_relaxed)));
-#else
-                    0UL,
-                    0UL,
-                    0UL);
-#endif
+                    static_cast<unsigned long>(hostReports),
+                    static_cast<unsigned long>(hostErrors),
+                    static_cast<unsigned long>(hostSaturations),
+                    static_cast<unsigned long>(upstreamDisconnectStops));
             }
             break;
 
@@ -1818,6 +1820,25 @@ static void service_host_watchdog() {
     }
 }
 
+// Never retain generated movement across loss of the upstream PC connection.
+// RP2350 also revokes the host arm lease and requires a fresh physical button
+// transition, while leaving downstream physical input state untouched.
+static void service_upstream_usb_fail_safe() {
+    if (TinyUSBDevice.mounted()) {
+        return;
+    }
+#ifdef ZEROSENSE_RP2350_USB_C
+    if (rp2350ArmLeaseEnabled || fireActive) {
+        rp2350TriggerLatched = true;
+    }
+    rp2350ArmLeaseEnabled = false;
+#endif
+    if (fireActive) {
+        ++upstreamDisconnectStops;
+        stop_output();
+    }
+}
+
 void setup() {
 #ifdef ZEROSENSE_RP2350_USB_C
     TinyUSBDevice.setManufacturerDescriptor("Waveshare");
@@ -1865,6 +1886,7 @@ void loop() {
 #endif
     service_serial();
     service_configuration_transaction();
+    service_upstream_usb_fail_safe();
 #ifdef ZEROSENSE_RP2350_USB_C
     service_mouse_proxy_status();
     service_rp2350_local_activation();

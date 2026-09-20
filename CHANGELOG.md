@@ -14,7 +14,10 @@
 - Debounce settings persistence and device synchronization during rapid edits,
   and add keyboard/accessibility metadata to the primary UI controls.
 - Report HID backpressure, queue high-water marks, active report gaps, downstream
-  report/decode counts, and accumulator saturation on the Device page.
+  report/decode counts, accumulator saturation, and upstream safety stops on the
+  Device page.
+- Stop immediately and discard generated movement if the PC-side USB link is
+  lost; RP2350 also revokes its local arm lease without clearing physical input.
 - Centralize v1.4 version metadata, reduce release-job permissions, add release
   contract checks, and update CI firmware builds to PlatformIO 6.2.0.
 

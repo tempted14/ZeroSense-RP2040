@@ -1057,7 +1057,7 @@ static void FirmwareStatusIsParsed()
         FirmwareStatusParser.TryParse(
             "METRICS:HID_SENT=120:HID_BUSY=3:MAX_QUEUE=18:" +
             "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
-            "HOST_SATURATIONS=1",
+            "HOST_SATURATIONS=1:USB_STOPS=4",
             out var metrics),
         "transport metrics should parse");
     Equal(FirmwareStatusKind.TransportMetrics, metrics.Kind, "metrics kind");
@@ -1068,11 +1068,19 @@ static void FirmwareStatusIsParsed()
     Equal(875u, metrics.HostReportsReceived, "host reports");
     Equal(2u, metrics.HostDecodeErrors, "host decode errors");
     Equal(1u, metrics.HostAccumulatorSaturations, "host saturations");
+    Equal(4u, metrics.UpstreamDisconnectStops, "upstream safety stops");
+    True(
+        FirmwareStatusParser.TryParse(
+            "METRICS:HID_SENT=1:HID_BUSY=0:MAX_QUEUE=0:" +
+            "MAX_ACTIVE_GAP_US=0:HOST_REPORTS=0:HOST_DECODE_ERRORS=0:" +
+            "HOST_SATURATIONS=0",
+            out var legacyMetrics) && legacyMetrics.UpstreamDisconnectStops == 0,
+        "pre-USB-stop telemetry should remain parseable");
     True(
         !FirmwareStatusParser.TryParse(
             "METRICS:HID_SENT=120:HID_BUSY=bad:MAX_QUEUE=18:" +
             "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
-            "HOST_SATURATIONS=1",
+            "HOST_SATURATIONS=1:USB_STOPS=4",
             out _),
         "malformed metrics must fail closed");
 }

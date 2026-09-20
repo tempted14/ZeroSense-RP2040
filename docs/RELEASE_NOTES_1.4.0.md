@@ -30,14 +30,17 @@
 - Core navigation, loadout, device, arming, update, and overlay controls expose
   accessible names; primary navigation includes keyboard access keys.
 - The Device page now shows cumulative HID backpressure, queue, active-gap, and
-  RP2350 downstream decode/saturation telemetry after configuration sync.
+  RP2350 downstream decode/saturation telemetry plus upstream-disconnect safety
+  stops after configuration sync.
+- Loss of the PC-side USB connection now stops output immediately, clears stale
+  generated movement, and revokes the RP2350 arm lease before reconnection.
 - PlatformIO 6.2.0 is pinned for CI and tagged-release firmware builds.
 
 ## Verification before release
 
 - Windows app: clean Release build with warnings treated as errors.
 - Core simulator/regression suite: 33 tests.
-- Firmware/profile and release contract suite: 31 tests.
+- Firmware/profile and release contract suite: 32 tests.
 - Firmware: RP2040-Zero and RP2350-USB-C targets compile successfully, and both
   UF2 files validate against their expected target-family identifiers.
 

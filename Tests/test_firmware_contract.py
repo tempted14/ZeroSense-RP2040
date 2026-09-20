@@ -60,8 +60,25 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("now - lastHidReportAtUs", FIRMWARE)
         self.assertIn("usbHid.setPollInterval(1)", FIRMWARE)
         self.assertIn("METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:", FIRMWARE)
+        self.assertIn("HOST_SATURATIONS=%lu:USB_STOPS=%lu", FIRMWARE)
         self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
         self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
+
+    def test_upstream_disconnect_immediately_clears_generated_output(self) -> None:
+        fail_safe = re.search(
+            r"static void service_upstream_usb_fail_safe\(\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(fail_safe)
+        body = fail_safe.group("body")
+        self.assertIn("TinyUSBDevice.mounted()", body)
+        self.assertIn("rp2350ArmLeaseEnabled = false", body)
+        self.assertIn("stop_output();", body)
+        loop_position = FIRMWARE.index("void loop()")
+        fail_safe_call = FIRMWARE.index("service_upstream_usb_fail_safe();", loop_position)
+        movement_call = FIRMWARE.index("service_movement();", loop_position)
+        self.assertLess(fail_safe_call, movement_call)
 
     def test_fractional_movement_reaches_pending_reports(self) -> None:
         self.assertIn("pendingMouseX += queuedX;", FIRMWARE)
