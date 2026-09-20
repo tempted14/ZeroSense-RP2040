@@ -150,6 +150,11 @@ static uint32_t configurationTransactionTouchedAtMs = 0;
 
 // Mitigation: additional global variables for adaptive polling and watchdog
 static uint32_t lastHidReportAtUs = 0;
+static uint32_t lastHighActivityReportAtUs = 0;
+static uint32_t hidReportsSent = 0;
+static uint32_t hidBusyDeferrals = 0;
+static uint32_t maximumQueuedDelta = 0;
+static uint32_t maximumActiveReportGapUs = 0;
 static const uint32_t hostWatchdogTimeoutMs = 750; // ms - matches original constant value
 static uint32_t rapidButtonReleaseAtUs = 0;
 
@@ -253,6 +258,9 @@ static std::atomic<uint16_t> hostMouseVid{0};
 static std::atomic<uint16_t> hostMousePid{0};
 static std::atomic<MouseProxyEvent> mouseProxyEvent{MouseProxyEvent::None};
 static std::atomic<bool> hostMouseFaultPending{false};
+static std::atomic<uint32_t> hostReportsReceived{0};
+static std::atomic<uint32_t> hostDecodeErrors{0};
+static std::atomic<uint32_t> hostAccumulatorSaturations{0};
 
 // Parse the standard HID short-item format so report-ID, 16-bit movement, and
 // ordinary gaming-mouse descriptors work without assuming a fixed byte layout.
@@ -275,8 +283,9 @@ static void configure_boot_mouse_layout(HostMouseInterface& mouseInterface) {
 static void add_host_accumulator(std::atomic<int32_t>& accumulator, int32_t value) {
     int32_t current = accumulator.load(std::memory_order_relaxed);
     while (true) {
+        const int64_t unbounded = static_cast<int64_t>(current) + value;
         const int32_t next = static_cast<int32_t>(std::clamp<int64_t>(
-            static_cast<int64_t>(current) + value,
+            unbounded,
             -maxHostAccumulator,
             maxHostAccumulator));
         if (accumulator.compare_exchange_weak(
@@ -284,6 +293,9 @@ static void add_host_accumulator(std::atomic<int32_t>& accumulator, int32_t valu
                 next,
                 std::memory_order_release,
                 std::memory_order_relaxed)) {
+            if (unbounded != next) {
+                hostAccumulatorSaturations.fetch_add(1, std::memory_order_relaxed);
+            }
             return;
         }
     }
@@ -486,7 +498,10 @@ void tuh_hid_report_received_cb(
         deviceAddress,
         instance);
     if (mouseInterface != nullptr && mouseInterface->connected) {
-        decode_host_mouse_report(*mouseInterface, report, length);
+        hostReportsReceived.fetch_add(1, std::memory_order_relaxed);
+        if (!decode_host_mouse_report(*mouseInterface, report, length)) {
+            hostDecodeErrors.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!tuh_hid_receive_report(deviceAddress, instance)) {
             clear_host_mouse_interface(*mouseInterface);
             mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
@@ -1207,6 +1222,26 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(current_configuration_hash()),
                     configurationTransactionActive ? "ACTIVE" : "IDLE",
                     fireActive ? "ON" : "OFF");
+                Serial.printf(
+                    "METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:"
+                    "MAX_ACTIVE_GAP_US=%lu:HOST_REPORTS=%lu:"
+                    "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu\n",
+                    static_cast<unsigned long>(hidReportsSent),
+                    static_cast<unsigned long>(hidBusyDeferrals),
+                    static_cast<unsigned long>(maximumQueuedDelta),
+                    static_cast<unsigned long>(maximumActiveReportGapUs),
+#ifdef ZEROSENSE_RP2350_USB_C
+                    static_cast<unsigned long>(
+                        hostReportsReceived.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long>(
+                        hostDecodeErrors.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long>(
+                        hostAccumulatorSaturations.load(std::memory_order_relaxed)));
+#else
+                    0UL,
+                    0UL,
+                    0UL);
+#endif
             }
             break;
 
@@ -1341,11 +1376,11 @@ static void service_serial() {
     }
 }
 
-static int8_t report_delta(int32_t value) {
+static int8_t report_delta(int64_t value) {
 #ifdef ZEROSENSE_RP2350_USB_C
-    return static_cast<int8_t>(std::clamp<int32_t>(value, -127, 127));
+    return static_cast<int8_t>(std::clamp<int64_t>(value, -127, 127));
 #else
-    return static_cast<int8_t>(std::clamp<int32_t>(value, -100, 100));
+    return static_cast<int8_t>(std::clamp<int64_t>(value, -100, 100));
 #endif
 }
 
@@ -1601,6 +1636,9 @@ static void service_hid() {
         pendingPhysicalMouseX == 0 && pendingPhysicalMouseY == 0 &&
         pendingPhysicalWheel == 0 && pendingPhysicalPan == 0 &&
         buttons == lastSentButtons && !hidStateDirty) {
+        if (!fireActive && !rapidFireActive) {
+            lastHighActivityReportAtUs = 0;
+        }
         return;
     }
 
@@ -1630,12 +1668,24 @@ static void service_hid() {
 
     const uint32_t now = micros();
     if (static_cast<uint32_t>(now - lastHidReportAtUs) < poll_interval_us ||
-        !TinyUSBDevice.mounted() || !usbHid.ready()) {
+        !TinyUSBDevice.mounted()) {
         return;
     }
 
-    const int8_t dx = report_delta(pendingMouseX + pendingPhysicalMouseX);
-    const int8_t dy = report_delta(pendingMouseY + pendingPhysicalMouseY);
+    if (!usbHid.ready()) {
+        ++hidBusyDeferrals;
+        return;
+    }
+
+    const int64_t combinedX = static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
+    const int64_t combinedY = static_cast<int64_t>(pendingMouseY) + pendingPhysicalMouseY;
+    const uint32_t queuedMagnitude = static_cast<uint32_t>(std::min<int64_t>(
+        std::max(std::abs(combinedX), std::abs(combinedY)),
+        UINT32_MAX));
+    maximumQueuedDelta = std::max(maximumQueuedDelta, queuedMagnitude);
+
+    const int8_t dx = report_delta(combinedX);
+    const int8_t dy = report_delta(combinedY);
     const int8_t wheel = report_delta(pendingPhysicalWheel);
     const int8_t pan = report_delta(pendingPhysicalPan);
 
@@ -1651,6 +1701,17 @@ static void service_hid() {
         pendingPhysicalPan -= pan;
         lastSentButtons = buttons;
         hidStateDirty = false;
+        ++hidReportsSent;
+        if (is_high_activity) {
+            if (lastHighActivityReportAtUs != 0) {
+                maximumActiveReportGapUs = std::max(
+                    maximumActiveReportGapUs,
+                    static_cast<uint32_t>(now - lastHighActivityReportAtUs));
+            }
+            lastHighActivityReportAtUs = now;
+        } else {
+            lastHighActivityReportAtUs = 0;
+        }
         lastHidReportAtUs = now;
     }
 }

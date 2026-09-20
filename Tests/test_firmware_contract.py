@@ -59,6 +59,9 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertGreater(FIRMWARE.index("service_hid();", loop_position), loop_position)
         self.assertIn("now - lastHidReportAtUs", FIRMWARE)
         self.assertIn("usbHid.setPollInterval(1)", FIRMWARE)
+        self.assertIn("METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:", FIRMWARE)
+        self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
+        self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
 
     def test_fractional_movement_reaches_pending_reports(self) -> None:
         self.assertIn("pendingMouseX += queuedX;", FIRMWARE)
@@ -84,7 +87,7 @@ class FirmwareContractTests(unittest.TestCase):
 
     def test_zero_delta_reports_cannot_create_cursor_drift(self) -> None:
         self.assertIn(
-            "std::clamp<int32_t>(value, -100, 100)",
+            "std::clamp<int64_t>(value, -100, 100)",
             FIRMWARE,
         )
         self.assertNotIn("DELTA_NOISE_RANGE", FIRMWARE)
@@ -208,8 +211,14 @@ class FirmwareContractTests(unittest.TestCase):
             "hostMouseX.exchange(0, std::memory_order_acq_rel)",
             FIRMWARE,
         )
-        self.assertIn("pendingMouseX + pendingPhysicalMouseX", FIRMWARE)
-        self.assertIn("pendingMouseY + pendingPhysicalMouseY", FIRMWARE)
+        self.assertIn(
+            "static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX",
+            FIRMWARE,
+        )
+        self.assertIn(
+            "static_cast<int64_t>(pendingMouseY) + pendingPhysicalMouseY",
+            FIRMWARE,
+        )
         reset = re.search(
             r"static void reset_movement_state\(\)\s*\{(?P<body>.*?)\n\}",
             FIRMWARE,

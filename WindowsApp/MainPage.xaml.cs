@@ -631,6 +631,16 @@ public sealed partial class MainPage : UserControl, IDisposable
                 _physicalMouseVendorId = 0;
                 _physicalMouseProductId = 0;
                 break;
+            case FirmwareStatusKind.TransportMetrics:
+                FirmwareTelemetryText.Text =
+                    $"Transport: {update.HidReportsSent} HID reports · " +
+                    $"{update.HidBusyDeferrals} busy deferrals · " +
+                    $"max queue {update.MaximumQueuedDelta} · " +
+                    $"max active gap {update.MaximumActiveReportGapUs} µs · " +
+                    $"downstream {update.HostReportsReceived} reports / " +
+                    $"{update.HostDecodeErrors} decode errors / " +
+                    $"{update.HostAccumulatorSaturations} saturations";
+                return;
         }
 
         if (_connection?.IsConnected == true && !_connection.IsSimulator)
@@ -678,6 +688,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         _physicalMouseStatus = null;
         _physicalMouseVendorId = 0;
         _physicalMouseProductId = 0;
+        FirmwareTelemetryText.Text = "Transport: metrics appear after configuration sync";
         UpdateHardwareStatusPresentation();
     }
 
@@ -1968,6 +1979,10 @@ public sealed partial class MainPage : UserControl, IDisposable
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
                     effectiveProfile.RapidFireRoundsPerMinute),
                 cancellationToken);
+            if (!connection.IsSimulator)
+            {
+                connection.SendCommand("STATUS");
+            }
             synchronized = true;
             DiagnosticLog.Record(
                 "configuration",

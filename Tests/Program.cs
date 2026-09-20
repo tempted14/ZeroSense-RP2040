@@ -1053,6 +1053,28 @@ static void FirmwareStatusIsParsed()
     True(
         !FirmwareStatusParser.TryParse("MOUSE:CONNECTED:VID=NOPE:PID=0001", out _),
         "invalid hexadecimal identity should fail closed");
+    True(
+        FirmwareStatusParser.TryParse(
+            "METRICS:HID_SENT=120:HID_BUSY=3:MAX_QUEUE=18:" +
+            "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
+            "HOST_SATURATIONS=1",
+            out var metrics),
+        "transport metrics should parse");
+    Equal(FirmwareStatusKind.TransportMetrics, metrics.Kind, "metrics kind");
+    Equal(120u, metrics.HidReportsSent, "sent reports");
+    Equal(3u, metrics.HidBusyDeferrals, "busy deferrals");
+    Equal(18u, metrics.MaximumQueuedDelta, "maximum queue");
+    Equal(1320u, metrics.MaximumActiveReportGapUs, "maximum active gap");
+    Equal(875u, metrics.HostReportsReceived, "host reports");
+    Equal(2u, metrics.HostDecodeErrors, "host decode errors");
+    Equal(1u, metrics.HostAccumulatorSaturations, "host saturations");
+    True(
+        !FirmwareStatusParser.TryParse(
+            "METRICS:HID_SENT=120:HID_BUSY=bad:MAX_QUEUE=18:" +
+            "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
+            "HOST_SATURATIONS=1",
+            out _),
+        "malformed metrics must fail closed");
 }
 
 static void SimulatorExercisesConfigurationPath()

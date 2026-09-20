@@ -812,6 +812,10 @@
                                         <TextBlock x:Name="PhysicalMouseStatusText"
                                                    Text="Physical mouse: status will appear after the firmware handshake"
                                                    FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="FirmwareTelemetryText"
+                                                   Text="Transport: metrics appear after configuration sync"
+                                                   FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap"
+                                                   AutomationProperties.LiveSetting="Polite" />
                                     </StackPanel>
                                 </Border>
                             </Grid>

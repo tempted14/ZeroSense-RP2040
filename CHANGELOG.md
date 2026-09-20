@@ -10,6 +10,8 @@
   path and make updater asset/signature wording accurate.
 - Debounce settings persistence and device synchronization during rapid edits,
   and add keyboard/accessibility metadata to the primary UI controls.
+- Report HID backpressure, queue high-water marks, active report gaps, downstream
+  report/decode counts, and accumulator saturation on the Device page.
 - Centralize v1.4 version metadata, reduce release-job permissions, add release
   contract checks, and update CI firmware builds to PlatformIO 6.2.0.
 

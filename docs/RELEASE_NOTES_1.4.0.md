@@ -25,6 +25,8 @@
   synchronization, reducing disk and serial-command churn.
 - Core navigation, loadout, device, arming, update, and overlay controls expose
   accessible names; primary navigation includes keyboard access keys.
+- The Device page now shows cumulative HID backpressure, queue, active-gap, and
+  RP2350 downstream decode/saturation telemetry after configuration sync.
 - PlatformIO 6.2.0 is pinned for CI and tagged-release firmware builds.
 
 ## Verification before release
