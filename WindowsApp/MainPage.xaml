@@ -888,10 +888,10 @@
                                             <TextBlock Text="SETUP PATH" FontSize="9" FontWeight="SemiBold"
                                                        Foreground="#C0B5FF" CharacterSpacing="110" />
                                         </Border>
-                                        <TextBlock Text="Three components. One clean setup."
+                                        <TextBlock Text="One download. One board-specific flash."
                                                    FontFamily="Segoe UI Variable Display"
                                                    FontSize="22" FontWeight="SemiBold" />
-                                        <TextBlock Text="Download the release, flash the UF2 matching your board, then let ZeroSense verify the firmware handshake before arming output."
+                                        <TextBlock Text="Get the starter bundle, verify its checksum, flash only the UF2 matching your board, then let ZeroSense verify the firmware handshake before arming output."
                                                    Style="{StaticResource MutedTextStyle}" MaxWidth="520"
                                                    HorizontalAlignment="Left" />
                                     </StackPanel>
@@ -906,8 +906,8 @@
                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
-                                            <TextBlock Text="Flash firmware" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Choose the UF2 matching RP2040-Zero or RP2350-USB-C and copy it to RPI-RP2."
+                                            <TextBlock Text="Download and verify" Style="{StaticResource SectionTitleStyle}" />
+                                            <TextBlock Text="Get the Starter Bundle and SHA256SUMS.txt, then verify the ZIP before extracting it."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -919,8 +919,8 @@
                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
-                                            <TextBlock Text="Install ZeroSense" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Download the Windows ZIP, verify SHA256SUMS.txt, extract every file, then run zerosense.exe."
+                                            <TextBlock Text="Flash firmware" Style="{StaticResource SectionTitleStyle}" />
+                                            <TextBlock Text="Choose only the UF2 matching RP2040-Zero or RP2350-USB-C and copy it to RPI-RP2."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -933,7 +933,7 @@
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
                                             <TextBlock Text="Connect and verify" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Open zerosense.exe, scan for the board, select a loadout, then arm deliberately."
+                                            <TextBlock Text="Open the bundled app, scan for the board, confirm its identity, select a loadout, then arm deliberately."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>

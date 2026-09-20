@@ -5,8 +5,10 @@
 - The in-app installation page now describes the prebuilt release path instead
   of requiring the .NET SDK and PlatformIO.
 - Installation and troubleshooting guides ship beside the portable app.
-- Update results distinguish an installer asset from a cryptographically signed
-  installer and report whether `SHA256SUMS.txt` is present.
+- A checked release also includes one starter bundle containing the portable
+  app, quick-start instructions, and clearly separated firmware for both boards.
+- Update results report starter-bundle, installer, and checksum availability
+  without assuming that an installer filename proves an Authenticode signature.
 - Release version metadata is centralized, release jobs use least-privilege
   permissions, and sensitive certificate/key file extensions are ignored.
 
@@ -35,7 +37,7 @@
 
 - Windows app: clean Release build with warnings treated as errors.
 - Core simulator/regression suite: 33 tests.
-- Firmware/profile contract suite: 24 tests.
+- Firmware/profile and release contract suite: 31 tests.
 - Firmware: RP2040-Zero and RP2350-USB-C targets compile successfully, and both
   UF2 files validate against their expected target-family identifiers.
 

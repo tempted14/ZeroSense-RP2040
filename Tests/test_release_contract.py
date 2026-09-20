@@ -33,6 +33,25 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('RELEASE_NOTES_${GITHUB_REF_NAME#v}.md', workflow)
         self.assertNotIn("RELEASE_NOTES_1.3.0.md", workflow)
 
+    def test_starter_bundle_contains_app_firmware_and_quick_start(self) -> None:
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
+        self.assertIn('ZeroSense-$version-Windows-x64.zip', workflow)
+        self.assertIn('ZeroSense-RP2040-Zero-$version.uf2', workflow)
+        self.assertIn('ZeroSense-RP2350-USB-C-$version.uf2', workflow)
+        self.assertIn('docs/START_HERE.txt', workflow)
+        self.assertIn('tools/build_starter_bundle.py', workflow)
+        self.assertLess(
+            workflow.index("Build one-download starter bundle"),
+            workflow.index("Refresh combined checksums"),
+        )
+
+        quick_start = (ROOT / "docs" / "START_HERE.txt").read_text()
+        self.assertIn("only flash ONE firmware file", quick_start)
+        self.assertIn("SHA256SUMS.txt", quick_start)
+        self.assertIn("1 / Source", quick_start)
+        bundler = (ROOT / "tools" / "build_starter_bundle.py").read_text()
+        self.assertIn('f"ZeroSense-{version}-Starter-Bundle.zip"', bundler)
+
     def test_private_key_formats_are_ignored(self) -> None:
         ignore = (ROOT / ".gitignore").read_text().splitlines()
         for pattern in ("*.pfx", "*.p12", "*.pem", "*.key", ".env"):

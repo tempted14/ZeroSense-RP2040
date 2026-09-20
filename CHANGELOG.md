@@ -9,7 +9,8 @@
 - Resolve measured patterns against the complete attachment, optic, and optional
   operator context instead of allowing a newer unrelated optic to shadow a match.
 - Replace developer-oriented in-app setup instructions with the prebuilt release
-  path and make updater asset/signature wording accurate.
+  path, add a one-download app-and-firmware starter bundle, and make updater
+  asset/signature wording accurate.
 - Debounce settings persistence and device synchronization during rapid edits,
   and add keyboard/accessibility metadata to the primary UI controls.
 - Report HID backpressure, queue high-water marks, active report gaps, downstream

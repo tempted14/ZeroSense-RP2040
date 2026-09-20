@@ -1121,6 +1121,7 @@ static void ReleaseUpdatesAreReportedTruthfully()
           "prerelease": false,
           "assets": [
             { "name": "ZeroSense-Setup-1.5.0-win-x64.exe" },
+            { "name": "ZeroSense-1.5.0-Starter-Bundle.zip" },
             { "name": "SHA256SUMS.txt" }
           ]
         }
@@ -1134,6 +1135,7 @@ static void ReleaseUpdatesAreReportedTruthfully()
 
     True(result.IsUpdateAvailable, "newer version should be reported");
     True(result.HasInstaller, "installer filename should be detected");
+    True(result.HasStarterBundle, "starter bundle filename should be detected");
     True(result.HasChecksumManifest, "checksum manifest should be detected");
     Equal(new Version(1, 5, 0), result.AvailableVersion, "available version");
 
@@ -1154,6 +1156,7 @@ static void ReleaseUpdatesAreReportedTruthfully()
         .GetAwaiter().GetResult();
     True(!portableResult.IsUpdateAvailable, "equal version should remain current");
     True(!portableResult.HasInstaller, "portable archive is not an installer");
+    True(!portableResult.HasStarterBundle, "ordinary portable archive is not the starter bundle");
     True(!portableResult.HasChecksumManifest, "missing checksum must be explicit");
 }
 

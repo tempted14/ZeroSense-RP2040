@@ -7,16 +7,18 @@ RP2350-USB-C (SKU 34641). Paths are relative to the `RainbowRecoil` directory.
 ## Recommended release install (no developer tools)
 
 1. Open the [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest).
-2. Download `SHA256SUMS.txt`, `ZeroSense-<version>-Windows-x64.zip`, and exactly
-   one board image:
+2. Download `SHA256SUMS.txt` and the recommended
+   `ZeroSense-<version>-Starter-Bundle.zip`. It contains the portable app,
+   `START_HERE.txt`, and both board images. The same app and firmware files are
+   also published separately for users who prefer individual downloads:
    - RP2040-Zero: `ZeroSense-RP2040-Zero-<version>.uf2`
    - Waveshare RP2350-USB-C: `ZeroSense-RP2350-USB-C-<version>.uf2`
-3. Run `Get-FileHash -Algorithm SHA256 <downloaded-file>` in PowerShell for the
-   ZIP and UF2, and compare each result with `SHA256SUMS.txt`. Do not continue
-   if a hash differs.
-4. Extract the entire Windows ZIP to a normal local folder. Do not launch the
-   executable from inside the ZIP and do not separate `zerosense.exe` from the
-   files beside it.
+3. Run `Get-FileHash -Algorithm SHA256 <downloaded-file>` in PowerShell for each
+   downloaded release asset and compare the result with `SHA256SUMS.txt`. Do
+   not continue if a hash differs.
+4. Extract the entire starter bundle or Windows ZIP to a normal local folder.
+   Do not launch the executable from inside the ZIP and do not separate
+   `zerosense.exe` from the files beside it.
 5. Put the board into UF2 boot mode: hold `BOOT`, tap `RESET`, release `BOOT`
    when `RPI-RP2` appears, and copy the matching UF2 to that drive. The board
    restarts automatically.

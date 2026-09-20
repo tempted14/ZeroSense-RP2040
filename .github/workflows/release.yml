@@ -124,10 +124,20 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Build one-download starter bundle
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python tools/build_starter_bundle.py \
+            --assets release-assets \
+            --version "$version" \
+            --quick-start docs/START_HERE.txt
       - name: Refresh combined checksums
         working-directory: release-assets
         run: sha256sum ZeroSense-* > SHA256SUMS.txt

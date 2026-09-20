@@ -51,7 +51,9 @@ mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 ## Easiest install
 
-Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the Windows package plus exactly one firmware image:
+Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest). The recommended download is `ZeroSense-<version>-Starter-Bundle.zip`; it contains the portable app, a short `START_HERE.txt`, and both clearly separated board images. Verify the bundle against `SHA256SUMS.txt`, extract it, then flash exactly one matching firmware image.
+
+The same files are also available separately:
 
 1. `ZeroSense-<version>-Windows-x64.zip` — verify it against `SHA256SUMS.txt`, extract it, and run `zerosense.exe`.
    A signed `ZeroSense-Setup-<version>-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.

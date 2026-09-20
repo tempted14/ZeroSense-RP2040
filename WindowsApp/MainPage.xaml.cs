@@ -318,12 +318,15 @@ public sealed partial class MainPage : UserControl, IDisposable
             var installerStatus = result.HasInstaller
                 ? "an installer is available"
                 : "use the portable ZIP";
+            var bundleStatus = result.HasStarterBundle
+                ? "the one-download starter bundle is available"
+                : "download the app and board firmware separately";
             var checksumStatus = result.HasChecksumManifest
                 ? "a checksum manifest is included"
                 : "no checksum manifest was found";
             UpdateStatusText.Text =
                 $"ZeroSense {result.AvailableVersion.ToString(3)} is available; " +
-                $"{installerStatus} and {checksumStatus}.";
+                $"{bundleStatus}, {installerStatus}, and {checksumStatus}.";
             var dialog = new ContentDialog
             {
                 XamlRoot = XamlRoot,

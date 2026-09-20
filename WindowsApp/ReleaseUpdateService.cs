@@ -65,6 +65,9 @@ internal sealed class ReleaseUpdateService
         var hasInstaller = assetNames.Any(name =>
             name.StartsWith("ZeroSense-Setup-", StringComparison.OrdinalIgnoreCase) &&
             name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        var hasStarterBundle = assetNames.Any(name =>
+            name.StartsWith("ZeroSense-", StringComparison.OrdinalIgnoreCase) &&
+            name.EndsWith("-Starter-Bundle.zip", StringComparison.OrdinalIgnoreCase));
         var hasChecksumManifest = assetNames.Any(name =>
             name.Equals("SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase));
         return new ReleaseUpdateResult(
@@ -73,6 +76,7 @@ internal sealed class ReleaseUpdateService
             availableVersion,
             page,
             hasInstaller,
+            hasStarterBundle,
             hasChecksumManifest);
     }
 }
@@ -83,8 +87,9 @@ internal sealed record ReleaseUpdateResult(
     Version AvailableVersion,
     Uri? ReleasePage,
     bool HasInstaller,
+    bool HasStarterBundle,
     bool HasChecksumManifest)
 {
     public static ReleaseUpdateResult Current(Version version) =>
-        new(false, version, version, null, false, false);
+        new(false, version, version, null, false, false, false);
 }
