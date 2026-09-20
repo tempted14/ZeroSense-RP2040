@@ -1,4 +1,4 @@
-name: Signed release
+name: Release
 
 on:
   push:
@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  windows-installer:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,9 +36,36 @@ jobs:
           dotnet restore WindowsApp/RainbowRecoil.csproj --runtime win-x64 --configfile NuGet.Config
           dotnet run --project Tests/RainbowRecoil.CoreTests.csproj --configuration Release --no-restore
           python -m unittest discover -s Tests -p "test_*.py" -v
-      - name: Install Inno Setup
+      - name: Publish portable Windows package
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $appOutput = Join-Path $PWD "dist/app"
+          dotnet publish WindowsApp/RainbowRecoil.csproj `
+            --configuration Release --runtime win-x64 --self-contained true `
+            --no-restore --output $appOutput -p:WindowsAppSDKSelfContained=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -Path "$appOutput/*" `
+            -DestinationPath "dist/ZeroSense-$version-Windows-x64.zip" -Force
+      - name: Detect signing configuration
+        id: signing
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
+        run: |
+          $hasCertificate = -not [string]::IsNullOrWhiteSpace($env:PFX_BASE64)
+          $hasPassword = -not [string]::IsNullOrWhiteSpace($env:PFX_PASSWORD)
+          if ($hasCertificate -ne $hasPassword) {
+            throw "Both Windows signing secrets must be configured together."
+          }
+          "available=$($hasCertificate.ToString().ToLowerInvariant())" | Out-File `
+            -FilePath $env:GITHUB_OUTPUT -Append
+      - name: Install Inno Setup for signed installer
+        if: steps.signing.outputs.available == 'true'
         run: choco install innosetup --no-progress -y
       - name: Materialize signing certificate
+        if: steps.signing.outputs.available == 'true'
         shell: pwsh
         env:
           PFX_BASE64: ${{ secrets.WINDOWS_SIGNING_PFX_BASE64 }}
@@ -48,6 +75,7 @@ jobs:
           [IO.File]::WriteAllBytes($path, [Convert]::FromBase64String($env:PFX_BASE64))
           "ZEROSENSE_SIGNING_CERTIFICATE=$path" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Build and sign installer
+        if: steps.signing.outputs.available == 'true'
         shell: pwsh
         env:
           ZEROSENSE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_PFX_PASSWORD }}
@@ -56,10 +84,11 @@ jobs:
           ./tools/build_release.ps1 -Version $version -SkipFirmware
       - uses: actions/upload-artifact@v4
         with:
-          name: signed-windows-installer
+          name: windows-assets
           path: |
+            dist/ZeroSense-*-Windows-x64.zip
             dist/ZeroSense-Setup-*.exe
-            dist/SHA256SUMS.txt
+          if-no-files-found: error
 
   firmware:
     runs-on: ubuntu-latest
@@ -89,16 +118,17 @@ jobs:
           path: ZeroSense-*.uf2
 
   publish:
-    needs: [windows-installer, firmware]
+    needs: [windows, firmware]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: release-assets
           merge-multiple: true
       - name: Refresh combined checksums
         working-directory: release-assets
-        run: sha256sum ZeroSense-Setup-*.exe ZeroSense-*.uf2 > SHA256SUMS.txt
+        run: sha256sum ZeroSense-* > SHA256SUMS.txt
       - name: Publish immutable tag assets
         env:
           GH_TOKEN: ${{ github.token }}
@@ -107,4 +137,5 @@ jobs:
           release-assets/*
           --repo "${{ github.repository }}"
           --verify-tag
-          --generate-notes
+          --title "ZeroSense ${{ github.ref_name }}"
+          --notes-file docs/RELEASE_NOTES_1.3.0.md

@@ -25,6 +25,8 @@
 - General mode retains independent-axis velocity smoothing, 40-count maximum
   velocity, 0.85 friction, ±8% cadence jitter, and adaptive 250/500 Hz plus a
   1 kHz high-activity target (typically about 900 Hz after USB/host overhead).
+- RP2350 now follows that same adaptive policy while immediately promoting any
+  queued physical mouse input to the 1 ms path, preserving pass-through latency.
 
 ## Profiles, testing, and distribution
 
@@ -38,13 +40,15 @@
 - CI builds both UF2 targets, replays HID fixtures, and runs desktop/Python tests.
   `tools/hil_rp2350.py` adds non-destructive parser recovery and optional raw
   M1+M2 hardware-in-the-loop checks.
-- The app includes an official-release update check. The release workflow is
-  fail-closed without an Authenticode certificate, signs the app and installer,
-  verifies the installer, and publishes SHA-256 checksums.
+- The app includes an official-release update check. Every release includes a
+  portable Windows ZIP. When an Authenticode certificate is configured, the
+  workflow signs and verifies the optional installer; it never publishes an
+  unsigned installer. SHA-256 checksums cover every downloadable binary.
 
 ## Assets
 
-- `ZeroSense-Setup-1.3.0-win-x64.exe`
+- `ZeroSense-1.3.0-Windows-x64.zip`
+- `ZeroSense-Setup-1.3.0-win-x64.exe` when an Authenticode certificate is configured
 - `ZeroSense-RP2040-Zero-1.3.0.uf2`
 - `ZeroSense-RP2350-USB-C-1.3.0.uf2`
 - `SHA256SUMS.txt`

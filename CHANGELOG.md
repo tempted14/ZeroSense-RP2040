@@ -12,12 +12,14 @@
 - Smooth Q16 pattern output across full 1 ms intervals, carry fractional RPM
   timing without systematic drift, preserve the final queued correction, and
   prevent rapid fire from running alongside pattern mode.
+- Apply the same 250/500/1000 Hz adaptive pacing on RP2350, with queued physical
+  mouse reports promoted immediately to the 1 ms path.
 - Cross-check current balance changes against Ubisoft notes, apply Reaper's
   published 0/3/10/25 stage boundaries, and add executable recoil invariants,
   HID replay fixtures, UF2 validation, and optional RP2350 HIL checks.
 - Add exact-loadout measured profile packs, a configuration-sync service,
-  official-release update checks, a per-user installer, and a fail-closed
-  Authenticode release workflow.
+  official-release update checks, a portable Windows package, and an optional
+  Authenticode-signed per-user installer that is never emitted unsigned.
 
 ## 1.2.0 - 2026-09-18
 

@@ -145,7 +145,7 @@ Supported semi-automatic profiles pulse the left-button report at their configur
 rate and emit one recoil step per pulse. While output is active, the desktop app
 sends a keepalive every 250 ms; missing keepalives stop all output after 750 ms.
 
-On RP2350, physical reports use a 1 ms upstream service interval even while
+On RP2350, active physical reports use a 1 ms upstream service interval even while
 generated output is idle. Up to four HID interfaces are decoded from the
 attached mouse's report descriptors, including split report IDs and common
 8/16/32-bit field sizes. Movement-only reports do not clear buttons latched by

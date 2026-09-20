@@ -93,3 +93,17 @@ signal integrity, or a specific mouse's descriptor. Final acceptance therefore
 requires the short physical checklist above on the actual board and mouse.
 
 Official board documentation: <https://docs.waveshare.com/RP2350-USB-C>
+
+## Output parity and pacing
+
+The RP2350 and RP2040 builds share the same compensation generator, exact
+sensitivity scaling, 40-count velocity ceiling, 0.85 friction, General-mode
+±8% cadence jitter, exact-RPM pattern scheduler, and 250/500/1000 Hz adaptive
+HID pacing. The practical high-activity rate is commonly about 900 Hz after USB
+and host overhead. RP2350 physical movement, wheel, pan, or button transitions
+select the 1 ms path immediately; the slower idle interval is used only when no
+physical report is waiting, so mouse pass-through responsiveness is preserved.
+
+The intentional differences are activation and transport: RP2350 reads raw
+M1+M2 locally and merges the hosted mouse report, whereas RP2040 receives the
+foreground-gated trigger from the app and acts as a standalone HID device.
