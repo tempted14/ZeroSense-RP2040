@@ -14,6 +14,8 @@
 
 - General-mode velocity smoothing, friction, and displacement are normalized to
   elapsed update time, so ±8% interval jitter no longer changes average output.
+- Semi-automatic rapid-fire correction is distributed over each exact RPM
+  interval instead of arriving as one movement impulse.
 - Measured patterns are selected only after the complete weapon, grip, barrel,
   optic, and optional operator context is known.
 - A newer measurement for a different optic can no longer shadow an older exact

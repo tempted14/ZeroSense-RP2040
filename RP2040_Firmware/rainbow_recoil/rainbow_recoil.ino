@@ -1743,13 +1743,10 @@ static void generate_movement(uint32_t shotIntervalUs) {
         horizontal *= std::max(0.5f, reduction);
     }
 
-    if (activeMode == MODE_WEAPON_PATTERN) {
+    if (activeMode == MODE_WEAPON_PATTERN || rapidFireActive) {
         schedule_pattern_correction(horizontal, vertical, shotIntervalUs);
     } else {
-        const uint32_t smoothingIntervalUs = rapidFireActive
-            ? static_cast<uint32_t>(ZeroSenseMotion::ReferenceIntervalUs)
-            : shotIntervalUs;
-        queue_mouse_movement(horizontal, vertical, true, smoothingIntervalUs);
+        queue_mouse_movement(horizontal, vertical, true, shotIntervalUs);
     }
 
     ++shotsInBurst;

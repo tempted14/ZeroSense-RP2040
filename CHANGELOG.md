@@ -4,6 +4,8 @@
 
 - Normalize General-mode smoothing and displacement to elapsed time so cadence
   jitter does not change average correction strength.
+- Spread semi-automatic per-shot correction across the exact RPM interval with
+  the same fixed-point 1 ms scheduler used by automatic patterns.
 - Resolve measured patterns against the complete attachment, optic, and optional
   operator context instead of allowing a newer unrelated optic to shadow a match.
 - Replace developer-oriented in-app setup instructions with the prebuilt release

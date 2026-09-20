@@ -120,8 +120,24 @@ class FirmwareContractTests(unittest.TestCase):
             "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
             body,
         )
-        self.assertIn("queue_mouse_movement(horizontal, vertical, true, smoothingIntervalUs)", body)
+        self.assertIn("activeMode == MODE_WEAPON_PATTERN || rapidFireActive", body)
+        self.assertIn("queue_mouse_movement(horizontal, vertical, true, shotIntervalUs)", body)
         self.assertIn("service_scheduled_correction();", FIRMWARE)
+
+    def test_rapid_fire_recoil_uses_smooth_per_shot_scheduler(self) -> None:
+        movement = re.search(
+            r"static void generate_movement\(uint32_t shotIntervalUs\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(movement)
+        body = movement.group("body")
+        self.assertIn("activeMode == MODE_WEAPON_PATTERN || rapidFireActive", body)
+        self.assertIn(
+            "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
+            body,
+        )
+        self.assertIn("(shotIntervalUs + 999U) / 1000U", FIRMWARE)
 
     def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:
         self.assertIn(
