@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include "pico/bootrom.h"
+#include "motion_math.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
@@ -53,9 +54,10 @@ static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
 // 1 kHz; normal host/controller overhead yields roughly 900 Hz in practice.
 static constexpr uint32_t POLL_HIGH_US   = 1000;
 
-// General-mode cadence variation. Pattern and rapid-fire timing use exact RPM
-// intervals so their configured shot sequence does not drift.
-static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% variance on intervals
+// General-mode cadence variation is opt-in. Pattern and rapid-fire timing use
+// exact RPM intervals so their configured shot sequence does not drift.
+static constexpr bool GENERAL_TIMING_JITTER_ENABLED = false;
+static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% when explicitly enabled
 
 enum CompensationMode : uint8_t {
     MODE_GENERAL = 0,
@@ -100,6 +102,7 @@ static VelocitySimulator sim = {
 
 static int shotsInBurst = 0;
 static uint32_t nextMovementAtUs = 0;
+static uint32_t lastMovementIntegrationAtUs = 0;
 static uint32_t movementIntervalRemainder = 0;
 static int32_t pendingMouseX = 0;
 static int32_t pendingMouseY = 0;
@@ -149,6 +152,12 @@ static uint32_t configurationTransactionTouchedAtMs = 0;
 
 // Mitigation: additional global variables for adaptive polling and watchdog
 static uint32_t lastHidReportAtUs = 0;
+static uint32_t lastHighActivityReportAtUs = 0;
+static uint32_t hidReportsSent = 0;
+static uint32_t hidBusyDeferrals = 0;
+static uint32_t maximumQueuedDelta = 0;
+static uint32_t maximumActiveReportGapUs = 0;
+static uint32_t upstreamDisconnectStops = 0;
 static const uint32_t hostWatchdogTimeoutMs = 750; // ms - matches original constant value
 static uint32_t rapidButtonReleaseAtUs = 0;
 
@@ -252,6 +261,9 @@ static std::atomic<uint16_t> hostMouseVid{0};
 static std::atomic<uint16_t> hostMousePid{0};
 static std::atomic<MouseProxyEvent> mouseProxyEvent{MouseProxyEvent::None};
 static std::atomic<bool> hostMouseFaultPending{false};
+static std::atomic<uint32_t> hostReportsReceived{0};
+static std::atomic<uint32_t> hostDecodeErrors{0};
+static std::atomic<uint32_t> hostAccumulatorSaturations{0};
 
 // Parse the standard HID short-item format so report-ID, 16-bit movement, and
 // ordinary gaming-mouse descriptors work without assuming a fixed byte layout.
@@ -274,8 +286,9 @@ static void configure_boot_mouse_layout(HostMouseInterface& mouseInterface) {
 static void add_host_accumulator(std::atomic<int32_t>& accumulator, int32_t value) {
     int32_t current = accumulator.load(std::memory_order_relaxed);
     while (true) {
+        const int64_t unbounded = static_cast<int64_t>(current) + value;
         const int32_t next = static_cast<int32_t>(std::clamp<int64_t>(
-            static_cast<int64_t>(current) + value,
+            unbounded,
             -maxHostAccumulator,
             maxHostAccumulator));
         if (accumulator.compare_exchange_weak(
@@ -283,6 +296,9 @@ static void add_host_accumulator(std::atomic<int32_t>& accumulator, int32_t valu
                 next,
                 std::memory_order_release,
                 std::memory_order_relaxed)) {
+            if (unbounded != next) {
+                hostAccumulatorSaturations.fetch_add(1, std::memory_order_relaxed);
+            }
             return;
         }
     }
@@ -485,7 +501,10 @@ void tuh_hid_report_received_cb(
         deviceAddress,
         instance);
     if (mouseInterface != nullptr && mouseInterface->connected) {
-        decode_host_mouse_report(*mouseInterface, report, length);
+        hostReportsReceived.fetch_add(1, std::memory_order_relaxed);
+        if (!decode_host_mouse_report(*mouseInterface, report, length)) {
+            hostDecodeErrors.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!tuh_hid_receive_report(deviceAddress, instance)) {
             clear_host_mouse_interface(*mouseInterface);
             mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
@@ -564,6 +583,9 @@ static int16_t readInt16LittleEndian(const uint8_t* source) {
 // General mode may vary its fixed 8 ms update cadence slightly. This is not
 // used for configured weapon patterns or rapid-fire shot scheduling.
 static uint32_t get_jittered_interval(uint32_t base_us) {
+    if (!GENERAL_TIMING_JITTER_ENABLED) {
+        return base_us;
+    }
     const float jitter_scale = 1.0f +
         rng_next() * 2.0f * (TIMING_JITTER_PCT / 100.0f);
     const uint32_t interval = static_cast<uint32_t>(
@@ -604,6 +626,7 @@ static void reset_movement_state() {
     correctionFractionYQ16 = 0;
     scheduledCorrectionFrames = 0;
     nextCorrectionFrameAtUs = 0;
+    lastMovementIntegrationAtUs = 0;
     sim.velocityX = 0.0f;
     sim.velocityY = 0.0f;
     sim.accelerating = false;
@@ -769,6 +792,9 @@ static bool start_output() {
     set_rapid_button(false);
     reset_movement_state();
     nextMovementAtUs = micros();
+    // The first General-mode update represents one complete reference frame.
+    // Subsequent updates integrate the actual elapsed time between executions.
+    lastMovementIntegrationAtUs = nextMovementAtUs - 8000UL;
     nextRapidShotAtUs = nextMovementAtUs;
     Serial.printf("START:%s\n", activeProfileName);
     return true;
@@ -1206,6 +1232,27 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(current_configuration_hash()),
                     configurationTransactionActive ? "ACTIVE" : "IDLE",
                     fireActive ? "ON" : "OFF");
+                uint32_t hostReports = 0;
+                uint32_t hostErrors = 0;
+                uint32_t hostSaturations = 0;
+#ifdef ZEROSENSE_RP2350_USB_C
+                hostReports = hostReportsReceived.load(std::memory_order_relaxed);
+                hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
+                hostSaturations =
+                    hostAccumulatorSaturations.load(std::memory_order_relaxed);
+#endif
+                Serial.printf(
+                    "METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:"
+                    "MAX_ACTIVE_GAP_US=%lu:HOST_REPORTS=%lu:"
+                    "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu\n",
+                    static_cast<unsigned long>(hidReportsSent),
+                    static_cast<unsigned long>(hidBusyDeferrals),
+                    static_cast<unsigned long>(maximumQueuedDelta),
+                    static_cast<unsigned long>(maximumActiveReportGapUs),
+                    static_cast<unsigned long>(hostReports),
+                    static_cast<unsigned long>(hostErrors),
+                    static_cast<unsigned long>(hostSaturations),
+                    static_cast<unsigned long>(upstreamDisconnectStops));
             }
             break;
 
@@ -1340,11 +1387,11 @@ static void service_serial() {
     }
 }
 
-static int8_t report_delta(int32_t value) {
+static int8_t report_delta(int64_t value) {
 #ifdef ZEROSENSE_RP2350_USB_C
-    return static_cast<int8_t>(std::clamp<int32_t>(value, -127, 127));
+    return static_cast<int8_t>(std::clamp<int64_t>(value, -127, 127));
 #else
-    return static_cast<int8_t>(std::clamp<int32_t>(value, -100, 100));
+    return static_cast<int8_t>(std::clamp<int64_t>(value, -100, 100));
 #endif
 }
 
@@ -1481,35 +1528,31 @@ static uint8_t current_output_buttons() {
 }
 #endif
 
-// Inputs are HID counts for this movement step. Sensitivity is applied exactly
-// once here; pattern points bypass smoothing so the transmitted curve retains
-// its calibrated per-shot displacement.
+// Inputs are HID counts per reference 8 ms movement step. General-mode
+// acceleration, friction, and displacement are normalized to the actual
+// elapsed integration interval. Sensitivity is applied exactly once here.
 static void queue_mouse_movement(
     float requested_dx,
     float requested_dy,
-    bool apply_smoothing) {
+    bool apply_smoothing,
+    uint32_t intervalUs) {
     const float scaledX = requested_dx * horizontalSensitivityFactor;
     const float scaledY = requested_dy * verticalSensitivityFactor;
-
-    const auto approach = [](float current, float target, float maximumStep) {
-        if (current < target) {
-            return std::min(current + maximumStep, target);
-        }
-        if (current > target) {
-            return std::max(current - maximumStep, target);
-        }
-        return current;
-    };
+    const float timeScale = ZeroSenseMotion::intervalScale(intervalUs);
 
     if (apply_smoothing) {
         const float targetX = std::clamp(scaledX, -sim.maxVelocity, sim.maxVelocity);
         const float targetY = std::clamp(scaledY, -sim.maxVelocity, sim.maxVelocity);
+        const float maximumStep = sim.acceleration * timeScale;
+        const float friction = ZeroSenseMotion::frictionForInterval(
+            sim.friction,
+            timeScale);
         sim.velocityX = targetX == 0.0f
-            ? sim.velocityX * sim.friction
-            : approach(sim.velocityX, targetX, sim.acceleration);
+            ? sim.velocityX * friction
+            : ZeroSenseMotion::approach(sim.velocityX, targetX, maximumStep);
         sim.velocityY = targetY == 0.0f
-            ? sim.velocityY * sim.friction
-            : approach(sim.velocityY, targetY, sim.acceleration);
+            ? sim.velocityY * friction
+            : ZeroSenseMotion::approach(sim.velocityY, targetY, maximumStep);
     } else {
         sim.velocityX = scaledX;
         sim.velocityY = scaledY;
@@ -1517,8 +1560,8 @@ static void queue_mouse_movement(
     sim.accelerating = std::abs(sim.velocityX) >= 0.01f ||
         std::abs(sim.velocityY) >= 0.01f;
 
-    fractionalMouseX += sim.velocityX;
-    fractionalMouseY += sim.velocityY;
+    fractionalMouseX += sim.velocityX * timeScale;
+    fractionalMouseY += sim.velocityY * timeScale;
 
     const int32_t queuedX = static_cast<int32_t>(fractionalMouseX);
     const int32_t queuedY = static_cast<int32_t>(fractionalMouseY);
@@ -1603,6 +1646,9 @@ static void service_hid() {
         pendingPhysicalMouseX == 0 && pendingPhysicalMouseY == 0 &&
         pendingPhysicalWheel == 0 && pendingPhysicalPan == 0 &&
         buttons == lastSentButtons && !hidStateDirty) {
+        if (!fireActive && !rapidFireActive) {
+            lastHighActivityReportAtUs = 0;
+        }
         return;
     }
 
@@ -1632,12 +1678,24 @@ static void service_hid() {
 
     const uint32_t now = micros();
     if (static_cast<uint32_t>(now - lastHidReportAtUs) < poll_interval_us ||
-        !TinyUSBDevice.mounted() || !usbHid.ready()) {
+        !TinyUSBDevice.mounted()) {
         return;
     }
 
-    const int8_t dx = report_delta(pendingMouseX + pendingPhysicalMouseX);
-    const int8_t dy = report_delta(pendingMouseY + pendingPhysicalMouseY);
+    if (!usbHid.ready()) {
+        ++hidBusyDeferrals;
+        return;
+    }
+
+    const int64_t combinedX = static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
+    const int64_t combinedY = static_cast<int64_t>(pendingMouseY) + pendingPhysicalMouseY;
+    const uint32_t queuedMagnitude = static_cast<uint32_t>(std::min<int64_t>(
+        std::max(std::abs(combinedX), std::abs(combinedY)),
+        UINT32_MAX));
+    maximumQueuedDelta = std::max(maximumQueuedDelta, queuedMagnitude);
+
+    const int8_t dx = report_delta(combinedX);
+    const int8_t dy = report_delta(combinedY);
     const int8_t wheel = report_delta(pendingPhysicalWheel);
     const int8_t pan = report_delta(pendingPhysicalPan);
 
@@ -1653,6 +1711,17 @@ static void service_hid() {
         pendingPhysicalPan -= pan;
         lastSentButtons = buttons;
         hidStateDirty = false;
+        ++hidReportsSent;
+        if (is_high_activity) {
+            if (lastHighActivityReportAtUs != 0) {
+                maximumActiveReportGapUs = std::max(
+                    maximumActiveReportGapUs,
+                    static_cast<uint32_t>(now - lastHighActivityReportAtUs));
+            }
+            lastHighActivityReportAtUs = now;
+        } else {
+            lastHighActivityReportAtUs = 0;
+        }
         lastHidReportAtUs = now;
     }
 }
@@ -1684,16 +1753,17 @@ static void generate_movement(uint32_t shotIntervalUs) {
         horizontal *= std::max(0.5f, reduction);
     }
 
-    if (activeMode == MODE_WEAPON_PATTERN) {
+    if (activeMode == MODE_WEAPON_PATTERN || rapidFireActive) {
         schedule_pattern_correction(horizontal, vertical, shotIntervalUs);
     } else {
-        queue_mouse_movement(horizontal, vertical, true);
+        queue_mouse_movement(horizontal, vertical, true, shotIntervalUs);
     }
 
     ++shotsInBurst;
 }
 
-// Service recoil movement using phase-locked timing for weapon patterns.
+// Service recoil movement using actual elapsed time in General mode and
+// phase-locked timing for weapon patterns.
 static void service_movement() {
     if (!fireActive || rapidFireActive) {
         return;
@@ -1701,17 +1771,23 @@ static void service_movement() {
 
     const uint32_t now = micros();
     if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
-        const uint32_t interval = activeMode == MODE_WEAPON_PATTERN
+        const uint32_t scheduledInterval = activeMode == MODE_WEAPON_PATTERN
             ? next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)
             : get_jittered_interval(8000UL);
-        generate_movement(interval);
+        const uint32_t integrationInterval = activeMode == MODE_WEAPON_PATTERN
+            ? scheduledInterval
+            : std::max<uint32_t>(
+                static_cast<uint32_t>(now - lastMovementIntegrationAtUs),
+                1U);
+        generate_movement(integrationInterval);
+        lastMovementIntegrationAtUs = now;
         if (!fireActive) {
             return;
         }
 
-        nextMovementAtUs += interval;
+        nextMovementAtUs += scheduledInterval;
         if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
-            nextMovementAtUs = now + interval;
+            nextMovementAtUs = now + scheduledInterval;
         }
     }
 }
@@ -1756,6 +1832,25 @@ static void service_host_watchdog() {
     if (fireActive && millis() - lastHostKeepAliveAtMs > hostWatchdogTimeoutMs) {
         stop_output();
         Serial.println("STOP:WATCHDOG");
+    }
+}
+
+// Never retain generated movement across loss of the upstream PC connection.
+// RP2350 also revokes the host arm lease and requires a fresh physical button
+// transition, while leaving downstream physical input state untouched.
+static void service_upstream_usb_fail_safe() {
+    if (TinyUSBDevice.mounted()) {
+        return;
+    }
+#ifdef ZEROSENSE_RP2350_USB_C
+    if (rp2350ArmLeaseEnabled || fireActive) {
+        rp2350TriggerLatched = true;
+    }
+    rp2350ArmLeaseEnabled = false;
+#endif
+    if (fireActive) {
+        ++upstreamDisconnectStops;
+        stop_output();
     }
 }
 
@@ -1806,6 +1901,7 @@ void loop() {
 #endif
     service_serial();
     service_configuration_transaction();
+    service_upstream_usb_fail_safe();
 #ifdef ZEROSENSE_RP2350_USB_C
     service_mouse_proxy_status();
     service_rp2350_local_activation();

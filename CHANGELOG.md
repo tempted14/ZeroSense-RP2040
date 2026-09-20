@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.4.0 - 2026-09-20
+
+- Normalize General-mode smoothing and displacement to actual elapsed time and
+  disable optional cadence jitter in official builds for deterministic output.
+- Spread semi-automatic per-shot correction across the exact RPM interval with
+  the same fixed-point 1 ms scheduler used by automatic patterns.
+- Resolve measured patterns against the complete attachment, optic, and optional
+  operator context instead of allowing a newer unrelated optic to shadow a match;
+  ambiguous game-build matches now fail closed.
+- Replace developer-oriented in-app setup instructions with the prebuilt release
+  path, add a one-download app-and-firmware starter bundle, and make updater
+  asset/signature wording accurate.
+- Debounce settings persistence and device synchronization during rapid edits,
+  and add keyboard/accessibility metadata to the primary UI controls.
+- Report HID backpressure, queue high-water marks, active report gaps, downstream
+  report/decode counts, accumulator saturation, and upstream safety stops on the
+  Device page.
+- Stop immediately and discard generated movement if the PC-side USB link is
+  lost; RP2350 also revokes its local arm lease without clearing physical input.
+- Centralize v1.4 version metadata, reduce release-job permissions, add release
+  contract checks, pin GitHub Actions to immutable commits, generate SPDX release
+  SBOMs and provenance attestations, and update CI firmware builds to PlatformIO
+  6.2.0.
+- Clearly label Estimated, Experimental, and Measured profile data in the UI and
+  document the RP2350's supported 1000 Hz downstream mouse configuration.
+
 ## 1.3.0 - 2026-09-19
 
 - Gate RP2350 compensation from raw downstream M1+M2 plus a short host arm

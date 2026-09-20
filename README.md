@@ -51,12 +51,14 @@ mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 ## Easiest install
 
-Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the Windows package plus exactly one firmware image:
+Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest). The recommended download is `ZeroSense-<version>-Starter-Bundle.zip`; it contains the portable app, a short `START_HERE.txt`, and both clearly separated board images. Verify the bundle against `SHA256SUMS.txt`, extract it, then flash exactly one matching firmware image.
 
-1. `ZeroSense-1.3.0-Windows-x64.zip` — verify it against `SHA256SUMS.txt`, extract it, and run `zerosense.exe`.
-   A signed `ZeroSense-Setup-1.3.0-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.
-2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-1.3.0.uf2`.
-3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-1.3.0.uf2`.
+The same files are also available separately:
+
+1. `ZeroSense-<version>-Windows-x64.zip` — verify it against `SHA256SUMS.txt`, extract it, and run `zerosense.exe`.
+   A signed `ZeroSense-Setup-<version>-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.
+2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-<version>.uf2`.
+3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-<version>.uf2`.
 
 Never flash the RP2350 UF2 to an RP2040 or the RP2040 UF2 to an RP2350. For the
 RP2350 cabling and CC selector check, follow
@@ -67,9 +69,11 @@ Microsoft Visual C++ 2015–2022 x64 Redistributable is still required. Detailed
 setup, flashing, and troubleshooting steps are in
 [docs/INSTALLATION.md](docs/INSTALLATION.md).
 
-## Fresh Windows setup
+## Building from source
 
-Use [docs/INSTALLATION.md](docs/INSTALLATION.md) for a complete clean-machine walkthrough. The required software is:
+Release users do not need the .NET SDK, Arduino IDE, PlatformIO, or Git. Use
+[docs/INSTALLATION.md](docs/INSTALLATION.md) for the no-build release path.
+Developers building the project from source need:
 
 - Windows 10 or Windows 11 x64
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0) for the desktop app
@@ -265,7 +269,7 @@ The app sends the selected profile as a v4 transaction: begin plus expected hash
 
 **Arm output** does not continuously move the pointer. RP2040 activation uses the desktop's foreground-gated M1+M2 monitor plus a 750 ms keepalive. RP2350 activation is different by design: the app grants a short foreground/armed lease, while the board reads raw M1+M2 from the downstream mouse itself. A raw release or mouse/interface disconnect stops output immediately; synthesized rapid-fire reports cannot feed back into this trigger. Physical movement, buttons, wheel, and pan remain additive and live.
 
-Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. On both boards, General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), ±8% cadence variation, and adaptive 250/500 Hz idle/normal HID servicing. High activity uses the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). RP2350 physical movement, wheel, pan, and button transitions are always promoted immediately to that 1 ms path, so adaptive idle pacing does not reduce pass-through responsiveness. Pattern mode instead uses exact RPM deadlines and distributes each shot's correction across 1 ms frames with fixed-point remainder preservation.
+Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. On both boards, General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), integrates actual elapsed time, and uses a deterministic 8 ms cadence by default. The retained ±8% timing-jitter path is a source-build option and is disabled in official UF2s. Adaptive HID servicing uses 250/500 Hz idle/normal pacing; high activity uses the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). RP2350 physical movement, wheel, pan, and button transitions are always promoted immediately to that 1 ms path, so adaptive idle pacing does not reduce pass-through responsiveness. Pattern mode instead uses exact RPM deadlines and distributes each shot's correction across 1 ms frames with fixed-point remainder preservation.
 
 The Device page includes an explicit **Use simulator** option. It exercises the
 same configuration calculation and binary protocol encoders as real firmware,
@@ -279,7 +283,9 @@ Measured patterns can be added as versioned JSON packs under the app data
 [`docs/measured-profile-pack.example.json`](docs/measured-profile-pack.example.json).
 Each entry requires capture provenance, game build, timestamp, RPM, and exact
 weapon/grip/barrel/optic metadata. A pack applies only to that loadout; mismatched
-loadouts fall back to the clearly labeled deterministic estimate.
+loadouts fall back to the clearly labeled deterministic estimate. If two packs
+contain the same loadout for different game builds, selection fails closed to
+the estimate unless the caller explicitly requests one exact game build.
 
 Automatic optic selection uses `2.5x` for attackers and `1.0x` for defenders. Defender DMR exceptions use `2.5x`: TCSG12, Tubarão's AR-15.50, and Aruni's Mk 14 EBR. Turn off **Automatic** beside the optic selector to unlock a persistent manual override.
 
@@ -299,6 +305,13 @@ is hosted by PIO-USB and its standard inputs are forwarded through the RP2350
 HID. Vendor-specific configuration interfaces, onboard profile utilities, RGB
 control, and more than eight buttons are not USB-pass-through features. Configure
 those directly before moving the mouse behind the proxy.
+
+The proxy's upstream endpoint is USB full-speed and therefore emits at most one
+report per 1 ms frame. A downstream mouse configured for 4 kHz or 8 kHz may
+produce reports faster than the proxy can forward them; deltas are accumulated
+rather than silently discarded, but that rate is not equivalent to native
+4/8 kHz latency and has not been hardware-qualified. Set the mouse to 1000 Hz
+for the supported configuration until a board-and-mouse HIL run proves otherwise.
 
 Do not hard-code one runtime PID or COM number. Use the present device's hardware ID, composite interfaces, and assigned `PortName`. Windows may assign a new COM number after changing the USB port, rebuilding with different USB descriptors, or clearing device history.
 

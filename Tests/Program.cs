@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using RainbowRecoil;
@@ -36,7 +38,8 @@ var tests = new (string Name, Action Run)[]
     ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
     ("configuration validator rejects unsafe output", ConfigurationValidationFailsClosed),
     ("firmware status identifies both boards and proxy mouse state", FirmwareStatusIsParsed),
-    ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath)
+    ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath),
+    ("release updates report assets without assuming a signature", ReleaseUpdatesAreReportedTruthfully)
 };
 
 var failures = new List<string>();
@@ -863,18 +866,39 @@ static void MeasuredProfilePacksAreExact()
           "schemaVersion": 1,
           "gameBuild": "test-build",
           "source": "controlled range capture",
-          "profiles": [{
-            "weapon": "F2",
-            "grip": "Vertical grip",
-            "barrel": "Flash hider",
-            "optic": "1.0x",
-            "roundsPerMinute": 980,
-            "measuredAtUtc": "2026-09-19T00:00:00Z",
-            "points": [
-              { "horizontal": 0.25, "vertical": 1.5 },
-              { "horizontal": -0.5, "vertical": 1.75 }
-            ]
-          }]
+          "profiles": [
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "1.0x",
+              "roundsPerMinute": 980,
+              "measuredAtUtc": "2026-09-18T00:00:00Z",
+              "points": [
+                { "horizontal": 0.25, "vertical": 1.5 },
+                { "horizontal": -0.5, "vertical": 1.75 }
+              ]
+            },
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "2.5x",
+              "roundsPerMinute": 981,
+              "measuredAtUtc": "2026-09-19T00:00:00Z",
+              "points": [{ "horizontal": 2.5, "vertical": 3.5 }]
+            },
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "1.0x",
+              "operator": "Twitch",
+              "roundsPerMinute": 979,
+              "measuredAtUtc": "2026-09-17T00:00:00Z",
+              "points": [{ "horizontal": 0.75, "vertical": 2.25 }]
+            }
+          ]
         }
         """);
         var profiles = new List<WeaponProfile>
@@ -883,17 +907,74 @@ static void MeasuredProfilePacksAreExact()
                 "Vertical grip", "Flash hider", roundsPerMinute: 980, magazineSize: 30)
         };
         MeasuredProfileStore.Apply(profiles, directory);
-        Equal(PatternDataQuality.Measured, profiles[0].PatternDataQuality,
-            "matching loadout quality");
-        Equal(2, profiles[0].Pattern.Length, "measured point count");
-        Equal("1.0x", profiles[0].PatternOptic, "measured optic metadata");
-        True(profiles[0].PatternSource.Contains("controlled range capture", StringComparison.Ordinal),
+        Equal(PatternDataQuality.None, profiles[0].PatternDataQuality,
+            "measurement must wait for complete loadout selection");
+
+        var onePower = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x");
+        Equal(PatternDataQuality.Measured, onePower.PatternDataQuality,
+            "exact optic loadout quality");
+        Equal(2, onePower.Pattern.Length, "older exact optic must beat newer other optic");
+        Equal(980, onePower.RoundsPerMinute, "exact optic RPM");
+        Equal("1.0x", onePower.PatternOptic, "measured optic metadata");
+        True(onePower.PatternSource.Contains("controlled range capture", StringComparison.Ordinal),
             "measured provenance");
 
-        var mismatchedOptic = profiles[0].WithOpticSetup("2.5x");
+        var twoPointFive = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("2.5x");
+        Equal(1, twoPointFive.Pattern.Length, "newer exact 2.5x pattern");
+        Equal(981, twoPointFive.RoundsPerMinute, "2.5x RPM remains isolated");
+
+        var twitch = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x", "Twitch");
+        Equal(1, twitch.Pattern.Length, "operator-specific exact pattern takes priority");
+        Near(2.25, twitch.Pattern[0].Vertical, 0.0001, "operator-specific pattern point");
+
+        var mismatchedOptic = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("3.0x");
         Equal(PatternDataQuality.VideoDerivedEstimate, mismatchedOptic.PatternDataQuality,
-            "optic mismatch must not reuse measurement");
+            "missing optic must use estimate");
         True(mismatchedOptic.Pattern.Length > 2, "mismatch falls back to full estimate");
+
+        File.WriteAllText(Path.Combine(directory, "f2-new-build.json"), """
+        {
+          "schemaVersion": 1,
+          "gameBuild": "test-build-2",
+          "source": "second controlled range capture",
+          "profiles": [
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "1.0x",
+              "operator": "Twitch",
+              "roundsPerMinute": 982,
+              "measuredAtUtc": "2026-09-20T00:00:00Z",
+              "points": [{ "horizontal": 1.0, "vertical": 4.0 }]
+            }
+          ]
+        }
+        """);
+        MeasuredProfileStore.Apply(profiles, directory);
+
+        var ambiguousBuild = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x", "Twitch");
+        Equal(PatternDataQuality.VideoDerivedEstimate, ambiguousBuild.PatternDataQuality,
+            "multiple game builds must fail closed without an exact build selection");
+
+        var exactBuild = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x", "Twitch", "test-build");
+        Equal(PatternDataQuality.Measured, exactBuild.PatternDataQuality,
+            "explicit game build selects the matching measurement");
+        Equal("test-build", exactBuild.PatternGameBuild, "measured game build metadata");
+        Near(2.25, exactBuild.Pattern[0].Vertical, 0.0001,
+            "explicit game build keeps its exact trace");
     }
     finally
     {
@@ -1008,6 +1089,36 @@ static void FirmwareStatusIsParsed()
     True(
         !FirmwareStatusParser.TryParse("MOUSE:CONNECTED:VID=NOPE:PID=0001", out _),
         "invalid hexadecimal identity should fail closed");
+    True(
+        FirmwareStatusParser.TryParse(
+            "METRICS:HID_SENT=120:HID_BUSY=3:MAX_QUEUE=18:" +
+            "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
+            "HOST_SATURATIONS=1:USB_STOPS=4",
+            out var metrics),
+        "transport metrics should parse");
+    Equal(FirmwareStatusKind.TransportMetrics, metrics.Kind, "metrics kind");
+    Equal(120u, metrics.HidReportsSent, "sent reports");
+    Equal(3u, metrics.HidBusyDeferrals, "busy deferrals");
+    Equal(18u, metrics.MaximumQueuedDelta, "maximum queue");
+    Equal(1320u, metrics.MaximumActiveReportGapUs, "maximum active gap");
+    Equal(875u, metrics.HostReportsReceived, "host reports");
+    Equal(2u, metrics.HostDecodeErrors, "host decode errors");
+    Equal(1u, metrics.HostAccumulatorSaturations, "host saturations");
+    Equal(4u, metrics.UpstreamDisconnectStops, "upstream safety stops");
+    True(
+        FirmwareStatusParser.TryParse(
+            "METRICS:HID_SENT=1:HID_BUSY=0:MAX_QUEUE=0:" +
+            "MAX_ACTIVE_GAP_US=0:HOST_REPORTS=0:HOST_DECODE_ERRORS=0:" +
+            "HOST_SATURATIONS=0",
+            out var legacyMetrics) && legacyMetrics.UpstreamDisconnectStops == 0,
+        "pre-USB-stop telemetry should remain parseable");
+    True(
+        !FirmwareStatusParser.TryParse(
+            "METRICS:HID_SENT=120:HID_BUSY=bad:MAX_QUEUE=18:" +
+            "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
+            "HOST_SATURATIONS=1:USB_STOPS=4",
+            out _),
+        "malformed metrics must fail closed");
 }
 
 static void SimulatorExercisesConfigurationPath()
@@ -1042,6 +1153,55 @@ static void SimulatorExercisesConfigurationPath()
         "diagnostic command metrics");
     True(report.Contains("Simulator report event", StringComparison.Ordinal),
         "diagnostic recent event");
+}
+
+static void ReleaseUpdatesAreReportedTruthfully()
+{
+    const string json = """
+        {
+          "tag_name": "v1.5.0",
+          "html_url": "https://github.com/tempted14/ZeroSense-RP2040/releases/tag/v1.5.0",
+          "draft": false,
+          "prerelease": false,
+          "assets": [
+            { "name": "ZeroSense-Setup-1.5.0-win-x64.exe" },
+            { "name": "ZeroSense-1.5.0-Starter-Bundle.zip" },
+            { "name": "SHA256SUMS.txt" }
+          ]
+        }
+        """;
+    using var client = new HttpClient(new StaticJsonHandler(json));
+    var service = new ReleaseUpdateService(
+        client,
+        new Uri("https://updates.invalid/releases/latest"));
+    var result = service.CheckAsync(new Version(1, 4, 0), CancellationToken.None)
+        .GetAwaiter().GetResult();
+
+    True(result.IsUpdateAvailable, "newer version should be reported");
+    True(result.HasInstaller, "installer filename should be detected");
+    True(result.HasStarterBundle, "starter bundle filename should be detected");
+    True(result.HasChecksumManifest, "checksum manifest should be detected");
+    Equal(new Version(1, 5, 0), result.AvailableVersion, "available version");
+
+    const string portableOnlyJson = """
+        {
+          "tag_name": "v1.4.0",
+          "html_url": "https://github.com/tempted14/ZeroSense-RP2040/releases/tag/v1.4.0",
+          "draft": false,
+          "prerelease": false,
+          "assets": [{ "name": "ZeroSense-1.4.0-Windows-x64.zip" }]
+        }
+        """;
+    using var portableClient = new HttpClient(new StaticJsonHandler(portableOnlyJson));
+    var portableResult = new ReleaseUpdateService(
+            portableClient,
+            new Uri("https://updates.invalid/releases/latest"))
+        .CheckAsync(new Version(1, 4, 0), CancellationToken.None)
+        .GetAwaiter().GetResult();
+    True(!portableResult.IsUpdateAvailable, "equal version should remain current");
+    True(!portableResult.HasInstaller, "portable archive is not an installer");
+    True(!portableResult.HasStarterBundle, "ordinary portable archive is not the starter bundle");
+    True(!portableResult.HasChecksumManifest, "missing checksum must be explicit");
 }
 
 static void True(bool condition, string message)
@@ -1081,4 +1241,19 @@ static void Throws<TException>(Action action) where TException : Exception
     }
 
     throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+}
+
+file sealed class StaticJsonHandler(string json) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            RequestMessage = request
+        };
+        return Task.FromResult(response);
+    }
 }

@@ -9,8 +9,8 @@ namespace RainbowRecoil;
 
 /// <summary>
 /// Loads versioned, provenance-bearing measurements without ever labeling the
-/// built-in estimates as measured data. A pack applies only to the exact weapon,
-/// grip and barrel it names; optic compatibility is checked at selection time.
+/// built-in estimates as measured data. All valid candidates are retained so
+/// the exact loadout can be resolved only after attachments and optic are known.
 /// </summary>
 internal static class MeasuredProfileStore
 {
@@ -59,36 +59,29 @@ internal static class MeasuredProfileStore
 
         foreach (var profile in profiles)
         {
-            var candidate = candidates
+            profile.MeasuredPatterns = candidates
                 .Where(value => value.Profile.Weapon.Equals(
                     profile.Name,
                     StringComparison.OrdinalIgnoreCase))
-                .Where(value => value.Profile.Grip.Equals(
-                    profile.Grip,
-                    StringComparison.OrdinalIgnoreCase))
-                .Where(value => value.Profile.Barrel.Equals(
-                    profile.Barrel,
-                    StringComparison.OrdinalIgnoreCase))
-                .OrderByDescending(value => value.Profile.MeasuredAtUtc)
-                .FirstOrDefault();
-            if (candidate is null)
-            {
-                continue;
-            }
-
-            profile.Pattern = candidate.Profile.Points
-                .Select(point => new RecoilPatternPoint(point.Horizontal, point.Vertical))
+                .Select(value => new MeasuredPatternVariant(
+                    value.Profile.Grip.Trim(),
+                    value.Profile.Barrel.Trim(),
+                    value.Profile.Optic.Trim(),
+                    value.Profile.Operator?.Trim() ?? string.Empty,
+                    value.GameBuild,
+                    value.Profile.RoundsPerMinute,
+                    value.Profile.MeasuredAtUtc,
+                    value.Profile.Points
+                        .Select(point => new RecoilPatternPoint(
+                            point.Horizontal,
+                            point.Vertical))
+                        .ToArray(),
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"Measured · {value.GameBuild} · " +
+                        $"{value.Profile.MeasuredAtUtc:yyyy-MM-dd} · " +
+                        $"{value.PackSource} · {Path.GetFileName(value.Path)}")))
                 .ToArray();
-            profile.PatternDataQuality = PatternDataQuality.Measured;
-            profile.PatternOptic = candidate.Profile.Optic.Trim();
-            if (candidate.Profile.RoundsPerMinute > 0)
-            {
-                profile.RoundsPerMinute = candidate.Profile.RoundsPerMinute;
-            }
-            profile.PatternSource = string.Create(
-                CultureInfo.InvariantCulture,
-                $"Measured · {candidate.GameBuild} · {candidate.Profile.MeasuredAtUtc:yyyy-MM-dd} · " +
-                $"{candidate.PackSource} · {Path.GetFileName(candidate.Path)}");
         }
 
         if (errors.Count > 0)
@@ -116,6 +109,8 @@ internal static class MeasuredProfileStore
                 string.IsNullOrWhiteSpace(profile.Barrel) ||
                 string.IsNullOrWhiteSpace(profile.Optic))
                 throw new InvalidDataException("Weapon, grip, barrel and optic are required.");
+            if (profile.Operator is not null && string.IsNullOrWhiteSpace(profile.Operator))
+                throw new InvalidDataException($"{profile.Weapon}: operator cannot be blank.");
             if (profile.MeasuredAtUtc == default)
                 throw new InvalidDataException($"{profile.Weapon}: measuredAtUtc is required.");
             if (profile.RoundsPerMinute is < 1 or > 2000)
@@ -136,6 +131,17 @@ internal static class MeasuredProfileStore
         string Path);
 }
 
+internal sealed record MeasuredPatternVariant(
+    string Grip,
+    string Barrel,
+    string Optic,
+    string Operator,
+    string GameBuild,
+    int RoundsPerMinute,
+    DateTimeOffset MeasuredAtUtc,
+    RecoilPatternPoint[] Points,
+    string Source);
+
 internal sealed class MeasuredProfilePack
 {
     public int SchemaVersion { get; set; }
@@ -150,6 +156,7 @@ internal sealed class MeasuredWeaponProfile
     public string Grip { get; set; } = string.Empty;
     public string Barrel { get; set; } = string.Empty;
     public string Optic { get; set; } = string.Empty;
+    public string? Operator { get; set; }
     public int RoundsPerMinute { get; set; }
     public DateTimeOffset MeasuredAtUtc { get; set; }
     public List<MeasuredPatternPoint> Points { get; set; } = [];

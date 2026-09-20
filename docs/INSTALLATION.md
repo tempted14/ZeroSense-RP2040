@@ -4,6 +4,33 @@ This guide starts with an unconfigured Windows 10 or Windows 11 x64 machine and
 either a TENSTAR/Waveshare RP2040-Zero or the two-female-port Waveshare
 RP2350-USB-C (SKU 34641). Paths are relative to the `RainbowRecoil` directory.
 
+## Recommended release install (no developer tools)
+
+1. Open the [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest).
+2. Download `SHA256SUMS.txt` and the recommended
+   `ZeroSense-<version>-Starter-Bundle.zip`. It contains the portable app,
+   `START_HERE.txt`, and both board images. The same app and firmware files are
+   also published separately for users who prefer individual downloads:
+   - RP2040-Zero: `ZeroSense-RP2040-Zero-<version>.uf2`
+   - Waveshare RP2350-USB-C: `ZeroSense-RP2350-USB-C-<version>.uf2`
+3. Run `Get-FileHash -Algorithm SHA256 <downloaded-file>` in PowerShell for each
+   downloaded release asset and compare the result with `SHA256SUMS.txt`. Do
+   not continue if a hash differs.
+4. Extract the entire starter bundle or Windows ZIP to a normal local folder.
+   Do not launch the executable from inside the ZIP and do not separate
+   `zerosense.exe` from the files beside it.
+5. Put the board into UF2 boot mode: hold `BOOT`, tap `RESET`, release `BOOT`
+   when `RPI-RP2` appears, and copy the matching UF2 to that drive. The board
+   restarts automatically.
+6. Run `zerosense.exe`, select **Scan for device**, and confirm the Device page
+   reports the expected RP2040 or RP2350 identity before arming output.
+
+The portable release includes .NET and the Windows App SDK. It does not require
+the .NET SDK, Git, Arduino IDE, or PlatformIO. If the app fails before showing a
+window, install the Microsoft Visual C++ 2015–2022 x64 Redistributable linked in
+the troubleshooting guide. The rest of this document is the source-build and
+hardware-diagnostics path.
+
 ## 1. Check the hardware
 
 You need:

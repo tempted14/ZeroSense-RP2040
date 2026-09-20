@@ -3,6 +3,7 @@
 #include <iostream>
 
 #include "../../RP2040_Firmware/rainbow_recoil/hid_report_decoder.h"
+#include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
 
 namespace {
 int failures = 0;
@@ -17,6 +18,21 @@ void expect(bool condition, const char* name) {
 
 int main() {
     using namespace ZeroSenseHid;
+
+    expect(std::abs(ZeroSenseMotion::intervalScale(7360) - 0.92f) < 0.0001f,
+        "negative timing jitter scale");
+    expect(std::abs(ZeroSenseMotion::intervalScale(8640) - 1.08f) < 0.0001f,
+        "positive timing jitter scale");
+    const float halfDecay = ZeroSenseMotion::frictionForInterval(0.85f, 0.5f);
+    expect(std::abs((halfDecay * halfDecay) - 0.85f) < 0.0001f,
+        "friction is time normalized");
+    expect(std::abs(ZeroSenseMotion::approach(0.0f, 5.0f, 1.2f) - 1.2f) < 0.0001f,
+        "acceleration remains bounded");
+    const float jitteredDistance =
+        10.0f * ZeroSenseMotion::intervalScale(7360) +
+        10.0f * ZeroSenseMotion::intervalScale(8640);
+    expect(std::abs(jitteredDistance - 20.0f) < 0.0001f,
+        "paired jitter preserves integrated displacement");
 
     const uint8_t bootDescriptor[] = {
         0x05,0x01,0x09,0x02,0xA1,0x01,0x09,0x01,0xA1,0x00,

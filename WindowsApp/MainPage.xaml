@@ -72,7 +72,8 @@
                                        FontWeight="SemiBold" Foreground="#5F5F5F" CharacterSpacing="100" />
 
                             <Button x:Name="OverviewNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Overview">
+                                    Click="NavigationButton_Click" Tag="Overview" AccessKey="O"
+                                    AutomationProperties.Name="Overview navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="OverviewNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" />
@@ -83,7 +84,8 @@
                             </Button>
 
                             <Button x:Name="DetectionNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Detection">
+                                    Click="NavigationButton_Click" Tag="Detection" AccessKey="D"
+                                    AutomationProperties.Name="Detection navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="DetectionNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -94,7 +96,8 @@
                             </Button>
 
                             <Button x:Name="CalibrationNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Calibration">
+                                    Click="NavigationButton_Click" Tag="Calibration" AccessKey="C"
+                                    AutomationProperties.Name="Calibration navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="CalibrationNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -105,7 +108,8 @@
                             </Button>
 
                             <Button x:Name="DeviceNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Device">
+                                    Click="NavigationButton_Click" Tag="Device" AccessKey="V"
+                                    AutomationProperties.Name="Device navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="DeviceNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -116,7 +120,8 @@
                             </Button>
 
                             <Button x:Name="InstallationNavButton" Style="{StaticResource NavigationButtonStyle}"
-                                    Click="NavigationButton_Click" Tag="Installation">
+                                    Click="NavigationButton_Click" Tag="Installation" AccessKey="I"
+                                    AutomationProperties.Name="Installation navigation">
                                 <Grid ColumnDefinitions="3,24,*" ColumnSpacing="9">
                                     <Border x:Name="InstallationNavIndicator" Background="{StaticResource AccentBrush}"
                                             CornerRadius="2" Opacity="0" />
@@ -166,7 +171,8 @@
                                 </StackPanel>
                                 <Button x:Name="ConnectButton" Grid.Column="1" Content="Scan for device"
                                         Style="{StaticResource AccentButtonStyle}"
-                                        VerticalAlignment="Center" Click="ConnectButton_Click" />
+                                        VerticalAlignment="Center" Click="ConnectButton_Click"
+                                        AccessKey="S" AutomationProperties.Name="Scan for ZeroSense device" />
                             </Grid>
 
                             <Border Grid.Row="1" Margin="0,20,0,0" Style="{StaticResource CardStyle}">
@@ -187,7 +193,8 @@
                                                    Style="{StaticResource MutedTextStyle}" />
                                     </StackPanel>
                                     <ToggleSwitch x:Name="ArmToggle" Grid.Column="2" Header="ARM OUTPUT"
-                                                  IsEnabled="False" Toggled="ArmToggle_Toggled" />
+                                                  IsEnabled="False" Toggled="ArmToggle_Toggled"
+                                                  AutomationProperties.Name="Arm output" />
                                 </Grid>
                             </Border>
 
@@ -213,6 +220,7 @@
                                                 <ComboBox x:Name="OperatorSelector" HorizontalAlignment="Stretch"
                                                           DisplayMemberPath="OperatorName"
                                                           IsEditable="True" IsTextSearchEnabled="True"
+                                                          AutomationProperties.Name="Active operator"
                                                           SelectionChanged="OperatorSelector_SelectionChanged" />
                                             </StackPanel>
                                             <StackPanel Grid.Column="1" Spacing="6">
@@ -220,6 +228,7 @@
                                                 <ComboBox x:Name="WeaponSelector" HorizontalAlignment="Stretch"
                                                           DisplayMemberPath="Name"
                                                           IsEditable="True" IsTextSearchEnabled="True"
+                                                          AutomationProperties.Name="Active weapon"
                                                           SelectionChanged="WeaponSelector_SelectionChanged" />
                                             </StackPanel>
                                         </Grid>
@@ -231,6 +240,10 @@
                                                            Style="{StaticResource LabelStyle}" />
                                                 <TextBlock x:Name="ProfileDescriptionText"
                                                            Style="{StaticResource MutedTextStyle}" />
+                                                <TextBlock x:Name="ProfileQualityText"
+                                                           Foreground="#9BD3AE" FontSize="11"
+                                                           TextWrapping="Wrap"
+                                                           AutomationProperties.Name="Profile data quality" />
                                                 <TextBlock x:Name="AttachmentNoteText" Foreground="#D8B45A"
                                                            FontSize="11" TextWrapping="Wrap"
                                                            Visibility="Collapsed" />
@@ -245,6 +258,7 @@
                                             <TextBlock Text="Output model" Style="{StaticResource SectionTitleStyle}" />
                                             <ComboBox x:Name="CompensationModeSelector" HorizontalAlignment="Stretch"
                                                       DisplayMemberPath="DisplayName"
+                                                      AutomationProperties.Name="Output model"
                                                       SelectionChanged="CompensationModeSelector_SelectionChanged" />
                                             <TextBlock x:Name="ModeDescriptionText"
                                                        Style="{StaticResource MutedTextStyle}" />
@@ -322,6 +336,7 @@
                                             <ToggleSwitch x:Name="RapidFireToggle"
                                                           Header="Rapid fire for semi-automatic weapons"
                                                           IsOn="True"
+                                                          AutomationProperties.Name="Rapid fire"
                                                           Toggled="RapidFireToggle_Toggled" />
                                             <TextBlock x:Name="RapidFireStatusText"
                                                        Text="Select a semi-automatic profile to see its rate."
@@ -751,9 +766,11 @@
                                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
                                     <Button x:Name="ConnectSimulatorButton" Content="Use simulator"
                                             Click="ConnectSimulatorButton_Click"
+                                            AutomationProperties.Name="Use software device simulator"
                                             ToolTipService.ToolTip="Tests the full app configuration path without producing mouse input." />
                                     <Button x:Name="DeviceConnectButton" Content="Scan for device"
-                                            Style="{StaticResource AccentButtonStyle}" Click="ConnectButton_Click" />
+                                            Style="{StaticResource AccentButtonStyle}" Click="ConnectButton_Click"
+                                            AutomationProperties.Name="Scan for ZeroSense device" />
                                 </StackPanel>
                             </Grid>
 
@@ -775,7 +792,8 @@
                                                    Style="{StaticResource MutedTextStyle}" />
                                     </StackPanel>
                                     <ToggleSwitch x:Name="DevicePageArmToggle" Grid.Column="2" Header="ARM OUTPUT"
-                                                  IsEnabled="False" Toggled="DevicePageArmToggle_Toggled" />
+                                                  IsEnabled="False" Toggled="DevicePageArmToggle_Toggled"
+                                                  AutomationProperties.Name="Arm output" />
                                 </Grid>
                             </Border>
 
@@ -798,6 +816,10 @@
                                         <TextBlock x:Name="PhysicalMouseStatusText"
                                                    Text="Physical mouse: status will appear after the firmware handshake"
                                                    FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap" />
+                                        <TextBlock x:Name="FirmwareTelemetryText"
+                                                   Text="Transport: metrics appear after configuration sync"
+                                                   FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap"
+                                                   AutomationProperties.LiveSetting="Polite" />
                                     </StackPanel>
                                 </Border>
                             </Grid>
@@ -870,10 +892,10 @@
                                             <TextBlock Text="SETUP PATH" FontSize="9" FontWeight="SemiBold"
                                                        Foreground="#C0B5FF" CharacterSpacing="110" />
                                         </Border>
-                                        <TextBlock Text="Three components. One clean setup."
+                                        <TextBlock Text="One download. One board-specific flash."
                                                    FontFamily="Segoe UI Variable Display"
                                                    FontSize="22" FontWeight="SemiBold" />
-                                        <TextBlock Text="Flash the UF2 for your RP2040 or RP2350, publish the Windows client, then let ZeroSense verify the firmware handshake before arming output."
+                                        <TextBlock Text="Get the starter bundle, verify its checksum, flash only the UF2 matching your board, then let ZeroSense verify the firmware handshake before arming output."
                                                    Style="{StaticResource MutedTextStyle}" MaxWidth="520"
                                                    HorizontalAlignment="Left" />
                                     </StackPanel>
@@ -888,8 +910,8 @@
                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
-                                            <TextBlock Text="Flash firmware" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Choose the UF2 matching RP2040-Zero or RP2350-USB-C and copy it to RPI-RP2."
+                                            <TextBlock Text="Download and verify" Style="{StaticResource SectionTitleStyle}" />
+                                            <TextBlock Text="Get the Starter Bundle and SHA256SUMS.txt, then verify the ZIP before extracting it."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -901,8 +923,8 @@
                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
-                                            <TextBlock Text="Build ZeroSense" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Run WindowsApp\build.ps1, then keep every published file together."
+                                            <TextBlock Text="Flash firmware" Style="{StaticResource SectionTitleStyle}" />
+                                            <TextBlock Text="Choose only the UF2 matching RP2040-Zero or RP2350-USB-C and copy it to RPI-RP2."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -915,7 +937,7 @@
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
                                             <TextBlock Text="Connect and verify" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Open zerosense.exe, scan for the board, select a loadout, then arm deliberately."
+                                            <TextBlock Text="Open the bundled app, scan for the board, confirm its identity, select a loadout, then arm deliberately."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -926,27 +948,38 @@
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
                                     <StackPanel Spacing="5">
                                         <TextBlock Text="Requirements" Style="{StaticResource SectionTitleStyle}" />
-                                        <TextBlock Text="Windows 10/11 x64 · .NET 8 SDK for builds · Visual C++ 2015–2022 x64 runtime · PlatformIO · RP2040-Zero or RP2350-USB-C"
+                                        <TextBlock Text="Windows 10/11 x64 · USB data cable · RP2040-Zero or Waveshare RP2350-USB-C · no developer tools required"
                                                    Style="{StaticResource MutedTextStyle}" />
                                         <TextBlock x:Name="InstallationStatusText"
                                                    Text="The full Markdown guide is included beside the published app."
                                                    FontSize="11" Foreground="#666666" />
                                     </StackPanel>
-                                    <Button Grid.Column="1" Content="Read installation guide"
-                                            Click="OpenInstallationGuide_Click" VerticalAlignment="Center" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                                                VerticalAlignment="Center">
+                                        <Button Content="Open latest release"
+                                                AutomationProperties.Name="Open latest ZeroSense release"
+                                                Click="OpenLatestRelease_Click" />
+                                        <Button Content="Installation guide"
+                                                AutomationProperties.Name="Open installation guide"
+                                                Click="OpenInstallationGuide_Click" />
+                                        <Button Content="Troubleshooting"
+                                                AutomationProperties.Name="Open troubleshooting guide"
+                                                Click="OpenTroubleshootingGuide_Click" />
+                                    </StackPanel>
                                 </Grid>
                             </Border>
                             <Border Grid.Row="4" Margin="0,14,0,0" Style="{StaticResource CardStyle}">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
                                     <StackPanel Spacing="5">
                                         <TextBlock Text="Application updates" Style="{StaticResource SectionTitleStyle}" />
-                                        <TextBlock Text="Checks the official GitHub release feed. Installation remains explicit and release builds are required to be code-signed."
+                                        <TextBlock Text="Checks the official GitHub release feed. Review the publisher and SHA-256 checksum before installing."
                                                    Style="{StaticResource MutedTextStyle}" />
-                                        <TextBlock x:Name="UpdateStatusText" Text="ZeroSense 1.3.0"
+                                        <TextBlock x:Name="UpdateStatusText" Text="Ready to check for updates."
                                                    FontSize="11" Foreground="#666666" />
                                     </StackPanel>
                                     <Button x:Name="CheckForUpdatesButton" Grid.Column="1"
                                             Content="Check for updates" VerticalAlignment="Center"
+                                            AutomationProperties.Name="Check GitHub for ZeroSense updates"
                                             Click="CheckForUpdatesButton_Click" />
                                 </Grid>
                             </Border>
@@ -978,6 +1011,7 @@
                 </StackPanel>
                 <Button x:Name="ExitOverlayButton" Grid.Column="2" Content="&#xE711;"
                         FontFamily="Segoe Fluent Icons" Width="32" Height="32" Padding="0"
+                        AutomationProperties.Name="Close overlay and open full client"
                         Click="ExitOverlayButton_Click" />
             </Grid>
 
@@ -992,7 +1026,8 @@
                                    Foreground="{StaticResource TextMutedBrush}" TextTrimming="CharacterEllipsis" />
                     </StackPanel>
                     <ToggleSwitch x:Name="OverlayArmToggle" Grid.Column="2" Header="ARM"
-                                  IsEnabled="False" Toggled="OverlayArmToggle_Toggled" />
+                                  IsEnabled="False" Toggled="OverlayArmToggle_Toggled"
+                                  AutomationProperties.Name="Arm output" />
                 </Grid>
             </Border>
 

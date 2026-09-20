@@ -48,7 +48,7 @@ cannot change a soldered CC resistor selection in software.
 
 ## Flash the board
 
-1. Download `ZeroSense-RP2350-USB-C-1.3.0.uf2` from the latest release.
+1. Download `ZeroSense-RP2350-USB-C-<version>.uf2` from the latest release.
 2. Disconnect the mouse during the first flash.
 3. Hold `BOOT`, connect the native PC-side port, and release `BOOT` when the
    `RPI-RP2` drive appears. With the board already connected, hold `BOOT`, tap
@@ -97,12 +97,20 @@ Official board documentation: <https://docs.waveshare.com/RP2350-USB-C>
 ## Output parity and pacing
 
 The RP2350 and RP2040 builds share the same compensation generator, exact
-sensitivity scaling, 40-count velocity ceiling, 0.85 friction, General-mode
-±8% cadence jitter, exact-RPM pattern scheduler, and 250/500/1000 Hz adaptive
-HID pacing. The practical high-activity rate is commonly about 900 Hz after USB
+sensitivity scaling, 40-count velocity ceiling, 0.85 friction, actual elapsed
+time integration, exact-RPM pattern scheduler, and 250/500/1000 Hz adaptive
+HID pacing. Official UF2s use a deterministic 8 ms General-mode cadence; the
+retained ±8% timing-jitter path is disabled by default. The practical
+high-activity rate is commonly about 900 Hz after USB
 and host overhead. RP2350 physical movement, wheel, pan, or button transitions
 select the 1 ms path immediately; the slower idle interval is used only when no
 physical report is waiting, so mouse pass-through responsiveness is preserved.
+
+USB full-speed limits the upstream endpoint to one report per 1 ms frame. The
+decoder accumulates relative deltas from faster downstream reports rather than
+silently dropping them, but a 4 kHz or 8 kHz mouse cannot retain native 4/8 kHz
+latency through this proxy and those rates have not been hardware-qualified.
+Configure the mouse to 1000 Hz for the supported setup.
 
 The intentional differences are activation and transport: RP2350 reads raw
 M1+M2 locally and merges the hosted mouse report, whereas RP2040 receives the

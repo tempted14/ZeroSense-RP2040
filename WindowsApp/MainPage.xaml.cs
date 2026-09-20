@@ -38,6 +38,10 @@ public sealed partial class MainPage : UserControl, IDisposable
     {
         Interval = TimeSpan.FromMilliseconds(200)
     };
+    private readonly DispatcherTimer _settingsSaveTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(250)
+    };
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SemaphoreSlim _configurationSyncLock = new(1, 1);
     private readonly DetectionDebouncer _operatorDetectionDebouncer = new();
@@ -69,6 +73,8 @@ public sealed partial class MainPage : UserControl, IDisposable
     private bool _rp2350ArmLeaseSent;
     private bool _isLoaded;
     private bool _isDisposed;
+    private bool _settingsSavePending;
+    private bool _configurationSyncPending;
     private int _configurationRevision;
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
@@ -101,6 +107,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         _hotkeyMonitor.SecondaryWeaponPressed += HotkeyMonitor_SecondaryWeaponPressed;
         _continuousDetectionTimer.Tick += ContinuousDetectionTimer_Tick;
         _rp2350ArmLeaseTimer.Tick += Rp2350ArmLeaseTimer_Tick;
+        _settingsSaveTimer.Tick += SettingsSaveTimer_Tick;
     }
 
     private void InitializeSelectors()
@@ -241,29 +248,53 @@ public sealed partial class MainPage : UserControl, IDisposable
     }
 
     private void OpenInstallationGuide_Click(object sender, RoutedEventArgs e)
+        => OpenBundledGuide("INSTALLATION.md", "installation", InstallationStatusText);
+
+    private void OpenTroubleshootingGuide_Click(object sender, RoutedEventArgs e)
+        => OpenBundledGuide("TROUBLESHOOTING.md", "troubleshooting", InstallationStatusText);
+
+    private void OpenLatestRelease_Click(object sender, RoutedEventArgs e)
     {
-        var guidePath = Path.Combine(AppContext.BaseDirectory, "Docs", "INSTALLATION.md");
         try
         {
-            if (!File.Exists(guidePath))
+            Process.Start(new ProcessStartInfo(
+                "https://github.com/tempted14/ZeroSense-RP2040/releases/latest")
             {
-                InstallationStatusText.Text = "The installation guide is missing from this build.";
-                InstallationStatusText.Foreground = ErrorBrush;
-                return;
-            }
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = guidePath,
                 UseShellExecute = true
             });
-            InstallationStatusText.Text = "Opened the complete installation guide.";
+            InstallationStatusText.Text = "Opened the official ZeroSense release page.";
             InstallationStatusText.Foreground = ConnectedBrush;
         }
         catch (Exception exception)
         {
-            InstallationStatusText.Text = $"Could not open the guide: {exception.Message}";
+            InstallationStatusText.Text = $"Could not open the release page: {exception.Message}";
             InstallationStatusText.Foreground = ErrorBrush;
+        }
+    }
+
+    private static void OpenBundledGuide(
+        string fileName,
+        string guideName,
+        TextBlock statusText)
+    {
+        var guidePath = Path.Combine(AppContext.BaseDirectory, "Docs", fileName);
+        try
+        {
+            if (!File.Exists(guidePath))
+            {
+                statusText.Text = $"The {guideName} guide is missing from this build.";
+                statusText.Foreground = ErrorBrush;
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(guidePath) { UseShellExecute = true });
+            statusText.Text = $"Opened the {guideName} guide.";
+            statusText.Foreground = ConnectedBrush;
+        }
+        catch (Exception exception)
+        {
+            statusText.Text = $"Could not open the {guideName} guide: {exception.Message}";
+            statusText.Foreground = ErrorBrush;
         }
     }
 
@@ -274,7 +305,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         try
         {
             var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ??
-                new Version(1, 3, 0);
+                new Version(1, 4, 0);
             var result = await new ReleaseUpdateService().CheckAsync(
                 currentVersion,
                 _lifetimeCancellation.Token);
@@ -284,15 +315,24 @@ public sealed partial class MainPage : UserControl, IDisposable
                 return;
             }
 
-            UpdateStatusText.Text = result.HasSignedInstaller
-                ? $"ZeroSense {result.AvailableVersion.ToString(3)} is available with an installer."
-                : $"ZeroSense {result.AvailableVersion.ToString(3)} is available; installer asset not found.";
+            var installerStatus = result.HasInstaller
+                ? "an installer is available"
+                : "use the portable ZIP";
+            var bundleStatus = result.HasStarterBundle
+                ? "the one-download starter bundle is available"
+                : "download the app and board firmware separately";
+            var checksumStatus = result.HasChecksumManifest
+                ? "a checksum manifest is included"
+                : "no checksum manifest was found";
+            UpdateStatusText.Text =
+                $"ZeroSense {result.AvailableVersion.ToString(3)} is available; " +
+                $"{bundleStatus}, {installerStatus}, and {checksumStatus}.";
             var dialog = new ContentDialog
             {
                 XamlRoot = XamlRoot,
                 Title = "ZeroSense update available",
                 Content = UpdateStatusText.Text +
-                    " Open the signed release page to review and install it?",
+                    " Open the official release page to review it?",
                 PrimaryButtonText = "Open release",
                 CloseButtonText = "Later",
                 DefaultButton = ContentDialogButton.Primary
@@ -594,6 +634,17 @@ public sealed partial class MainPage : UserControl, IDisposable
                 _physicalMouseVendorId = 0;
                 _physicalMouseProductId = 0;
                 break;
+            case FirmwareStatusKind.TransportMetrics:
+                FirmwareTelemetryText.Text =
+                    $"Transport: {update.HidReportsSent} HID reports · " +
+                    $"{update.HidBusyDeferrals} busy deferrals · " +
+                    $"max queue {update.MaximumQueuedDelta} · " +
+                    $"max active gap {update.MaximumActiveReportGapUs} µs · " +
+                    $"downstream {update.HostReportsReceived} reports / " +
+                    $"{update.HostDecodeErrors} decode errors / " +
+                    $"{update.HostAccumulatorSaturations} saturations · " +
+                    $"{update.UpstreamDisconnectStops} upstream safety stops";
+                return;
         }
 
         if (_connection?.IsConnected == true && !_connection.IsSimulator)
@@ -641,6 +692,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         _physicalMouseStatus = null;
         _physicalMouseVendorId = 0;
         _physicalMouseProductId = 0;
+        FirmwareTelemetryText.Text = "Transport: metrics appear after configuration sync";
         UpdateHardwareStatusPresentation();
     }
 
@@ -1248,7 +1300,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         SettingsManager.LoadSettings().OperatorDetectionMode = selected.Value;
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
         UpdateDetectionUi();
     }
 
@@ -1260,7 +1312,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         SettingsManager.LoadSettings().AutoApplyDetectedOperator = AutoApplyDetectionToggle.IsOn;
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
     }
 
     private void ConfidenceSlider_ValueChanged(object sender, RangeBaseValueChangedEventArgs e)
@@ -1272,7 +1324,7 @@ public sealed partial class MainPage : UserControl, IDisposable
 
         SettingsManager.LoadSettings().OperatorDetectionConfidence = e.NewValue / 100.0;
         ConfidenceValueText.Text = $"{e.NewValue:0}% minimum";
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
     }
 
     private void DetectionRegion_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -1294,7 +1346,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         DetectionRegionWidthBox.Value = settings.DetectionRegionWidth;
         DetectionRegionHeightBox.Value = settings.DetectionRegionHeight;
         _isInitializing = false;
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
     }
 
     private void WeaponDetectionSetting_Changed(object sender, RoutedEventArgs e)
@@ -1308,7 +1360,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.WeaponDetectionEnabled = WeaponDetectionToggle.IsOn;
         settings.AutoApplyDetectedWeapon = AutoApplyWeaponDetectionToggle.IsOn;
         settings.WeaponSlotHotkeysEnabled = WeaponSlotHotkeysToggle.IsOn;
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
         UpdateDetectionUi();
     }
 
@@ -1321,7 +1373,7 @@ public sealed partial class MainPage : UserControl, IDisposable
 
         SettingsManager.LoadSettings().WeaponDetectionConfidence = e.NewValue / 100.0;
         WeaponConfidenceValueText.Text = $"{e.NewValue:0}% minimum";
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
     }
 
     private void WeaponDetectionRegion_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -1351,7 +1403,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         WeaponDetectionRegionWidthBox.Value = settings.WeaponDetectionRegionWidth;
         WeaponDetectionRegionHeightBox.Value = settings.WeaponDetectionRegionHeight;
         _isInitializing = false;
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
     }
 
     private void DetectionHotkey_Changed(object sender, SelectionChangedEventArgs e)
@@ -1364,7 +1416,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var settings = SettingsManager.LoadSettings();
         settings.DetectionHotkeyModifier = DetectionModifierSelector.SelectedItem as string ?? "Shift";
         settings.DetectionHotkeyKey = DetectionKeySelector.SelectedItem as string ?? "M1";
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
         UpdateHotkeyPreviews();
     }
 
@@ -1376,7 +1428,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         SettingsManager.LoadSettings().OverlayEnabled = OverlayEnabledToggle.IsOn;
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
         UpdateHotkeyPreviews();
     }
 
@@ -1390,7 +1442,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var settings = SettingsManager.LoadSettings();
         settings.OverlayHotkeyModifier = OverlayModifierSelector.SelectedItem as string ?? "None";
         settings.OverlayHotkeyKey = OverlayKeySelector.SelectedItem as string ?? "F8";
-        SaveSettingsWithFeedback();
+        ScheduleSettingsSave();
         UpdateHotkeyPreviews();
     }
 
@@ -1750,8 +1802,25 @@ public sealed partial class MainPage : UserControl, IDisposable
 
     private void SaveAndSynchronize()
     {
+        ScheduleSettingsSave(true);
+    }
+
+    private void ScheduleSettingsSave(bool synchronizeConfiguration = false)
+    {
+        _settingsSavePending = true;
+        _configurationSyncPending |= synchronizeConfiguration;
+        _settingsSaveTimer.Stop();
+        _settingsSaveTimer.Start();
+    }
+
+    private void SettingsSaveTimer_Tick(object? sender, object e)
+    {
+        _settingsSaveTimer.Stop();
+        _settingsSavePending = false;
+        var synchronizeConfiguration = _configurationSyncPending;
+        _configurationSyncPending = false;
         SaveSettingsWithFeedback();
-        if (_connection?.IsConnected == true)
+        if (synchronizeConfiguration && _connection?.IsConnected == true)
         {
             var revision = Interlocked.Increment(ref _configurationRevision);
             _ = SynchronizeLatestConfigurationAsync(revision);
@@ -1804,7 +1873,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
         var effectiveProfile = selected.Profile
             .WithAttachmentSetup(setup)
-            .WithOpticSetup(settings.ActiveMagnification)
+            .WithOpticSetup(settings.ActiveMagnification, operatorName)
             .WithOutputStrength(settings.GetWeaponOutputStrength(selected.Name));
         if (settings.CompensationMode == CompensationMode.Experimental &&
             effectiveProfile.HasWeaponPattern)
@@ -1914,6 +1983,10 @@ public sealed partial class MainPage : UserControl, IDisposable
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
                     effectiveProfile.RapidFireRoundsPerMinute),
                 cancellationToken);
+            if (!connection.IsSimulator)
+            {
+                connection.SendCommand("STATUS");
+            }
             synchronized = true;
             DiagnosticLog.Record(
                 "configuration",
@@ -1974,6 +2047,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         if (WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
         {
             ProfileDescriptionText.Text = "No weapon is available for this operator.";
+            ProfileQualityText.Text = "QUALITY · Unavailable";
             WeaponSlotText.Text = "NO ACTIVE SLOT";
             RapidFireStatusText.Text = "Rapid fire unavailable";
             RapidFireToggle.IsEnabled = false;
@@ -1984,12 +2058,34 @@ public sealed partial class MainPage : UserControl, IDisposable
 
         var operatorName = (OperatorSelector.SelectedItem as OperatorViewModel)?.OperatorName;
         var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
+        var settings = SettingsManager.LoadSettings();
+        var effectiveProfile = BuildEffectiveSelectedProfile(settings);
         WeaponSlotText.Text = $"{WeaponSlotCatalog.GetSlot(selected.Profile).ToString().ToUpperInvariant()} SLOT";
         ProfileDescriptionText.Text = selected.Description;
+        if (settings.CompensationMode == CompensationMode.General)
+        {
+            ProfileQualityText.Text =
+                "QUALITY · Not used in General mode · steady correction is active";
+        }
+        else
+        {
+            var quality = settings.CompensationMode == CompensationMode.Experimental &&
+                effectiveProfile?.HasWeaponPattern == true
+                    ? "Experimental"
+                    : effectiveProfile?.PatternDataQuality switch
+                    {
+                        PatternDataQuality.Measured => "Measured",
+                        PatternDataQuality.VideoDerivedEstimate => "Estimated",
+                        _ => "Unavailable"
+                    };
+            ProfileQualityText.Text = effectiveProfile is null
+                ? $"QUALITY · {quality}"
+                : $"QUALITY · {quality} · {effectiveProfile.PatternSource}";
+        }
         var rapidAvailable = selected.Profile.SupportsRapidFire;
         RapidFireToggle.IsEnabled = rapidAvailable;
         RapidFireStatusText.Text = rapidAvailable
-            ? SettingsManager.LoadSettings().RapidFireEnabled
+            ? settings.RapidFireEnabled
                 ? $"ON · {selected.Profile.RapidFireRoundsPerMinute} RPM · recoil applied per shot"
                 : "OFF · manual clicks still receive one recoil correction per shot"
             : "Automatic weapon · rapid fire not applicable";
@@ -2255,6 +2351,14 @@ public sealed partial class MainPage : UserControl, IDisposable
         _continuousDetectionTimer.Tick -= ContinuousDetectionTimer_Tick;
         _rp2350ArmLeaseTimer.Stop();
         _rp2350ArmLeaseTimer.Tick -= Rp2350ArmLeaseTimer_Tick;
+        _settingsSaveTimer.Stop();
+        _settingsSaveTimer.Tick -= SettingsSaveTimer_Tick;
+        if (_settingsSavePending)
+        {
+            _settingsSavePending = false;
+            _configurationSyncPending = false;
+            SaveSettingsWithFeedback();
+        }
         _hotkeyMonitor.OverlayPressed -= HotkeyMonitor_OverlayPressed;
         _hotkeyMonitor.DetectionPressed -= HotkeyMonitor_DetectionPressed;
         _hotkeyMonitor.PrimaryWeaponPressed -= HotkeyMonitor_PrimaryWeaponPressed;

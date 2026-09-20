@@ -5,25 +5,25 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Verify tag and application versions
         shell: pwsh
         run: |
           $tagVersion = "${{ github.ref_name }}".TrimStart('v')
-          [xml]$project = Get-Content WindowsApp/RainbowRecoil.csproj
-          $projectVersion = [string]$project.Project.PropertyGroup.Version
+          [xml]$buildProperties = Get-Content Directory.Build.props
+          $projectVersion = [string]$buildProperties.Project.PropertyGroup.Version
           [xml]$manifest = Get-Content WindowsApp/app.manifest
           $manifestVersion = ([string]$manifest.assembly.assemblyIdentity.version) -replace '\.0$', ''
           if ($tagVersion -ne $projectVersion -or $tagVersion -ne $manifestVersion) {
@@ -82,7 +82,7 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           ./tools/build_release.ps1 -Version $version -SkipFirmware
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-assets
           path: |
@@ -93,11 +93,11 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
-      - run: python -m pip install platformio==6.1.18
+      - run: python -m pip install platformio==6.2.0
       - name: Run native HID replay fixtures
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror
@@ -112,7 +112,7 @@ jobs:
           python tools/verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2
           cp RP2040_Firmware/.pio/build/waveshare_rp2040_zero/firmware.uf2 "ZeroSense-RP2040-Zero-$version.uf2"
           cp RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2 "ZeroSense-RP2350-USB-C-$version.uf2"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: firmware-uf2
           path: ZeroSense-*.uf2
@@ -120,16 +120,41 @@ jobs:
   publish:
     needs: [windows, firmware]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-assets
           merge-multiple: true
+      - name: Build one-download starter bundle
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python tools/build_starter_bundle.py \
+            --assets release-assets \
+            --version "$version" \
+            --quick-start docs/START_HERE.txt
+      - name: Generate SPDX release SBOM
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python tools/generate_release_sbom.py \
+            --assets release-assets \
+            --version "$version"
       - name: Refresh combined checksums
         working-directory: release-assets
         run: sha256sum ZeroSense-* > SHA256SUMS.txt
-      - name: Publish immutable tag assets
+      - name: Attest release provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-path: release-assets/*
+      - name: Publish tag assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
@@ -138,4 +163,4 @@ jobs:
           --repo "${{ github.repository }}"
           --verify-tag
           --title "ZeroSense ${{ github.ref_name }}"
-          --notes-file docs/RELEASE_NOTES_1.3.0.md
+          --notes-file "docs/RELEASE_NOTES_${GITHUB_REF_NAME#v}.md"
