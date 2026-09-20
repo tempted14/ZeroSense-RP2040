@@ -241,29 +241,53 @@ public sealed partial class MainPage : UserControl, IDisposable
     }
 
     private void OpenInstallationGuide_Click(object sender, RoutedEventArgs e)
+        => OpenBundledGuide("INSTALLATION.md", "installation", InstallationStatusText);
+
+    private void OpenTroubleshootingGuide_Click(object sender, RoutedEventArgs e)
+        => OpenBundledGuide("TROUBLESHOOTING.md", "troubleshooting", InstallationStatusText);
+
+    private void OpenLatestRelease_Click(object sender, RoutedEventArgs e)
     {
-        var guidePath = Path.Combine(AppContext.BaseDirectory, "Docs", "INSTALLATION.md");
         try
         {
-            if (!File.Exists(guidePath))
+            Process.Start(new ProcessStartInfo(
+                "https://github.com/tempted14/ZeroSense-RP2040/releases/latest")
             {
-                InstallationStatusText.Text = "The installation guide is missing from this build.";
-                InstallationStatusText.Foreground = ErrorBrush;
-                return;
-            }
-
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = guidePath,
                 UseShellExecute = true
             });
-            InstallationStatusText.Text = "Opened the complete installation guide.";
+            InstallationStatusText.Text = "Opened the official ZeroSense release page.";
             InstallationStatusText.Foreground = ConnectedBrush;
         }
         catch (Exception exception)
         {
-            InstallationStatusText.Text = $"Could not open the guide: {exception.Message}";
+            InstallationStatusText.Text = $"Could not open the release page: {exception.Message}";
             InstallationStatusText.Foreground = ErrorBrush;
+        }
+    }
+
+    private static void OpenBundledGuide(
+        string fileName,
+        string guideName,
+        TextBlock statusText)
+    {
+        var guidePath = Path.Combine(AppContext.BaseDirectory, "Docs", fileName);
+        try
+        {
+            if (!File.Exists(guidePath))
+            {
+                statusText.Text = $"The {guideName} guide is missing from this build.";
+                statusText.Foreground = ErrorBrush;
+                return;
+            }
+
+            Process.Start(new ProcessStartInfo(guidePath) { UseShellExecute = true });
+            statusText.Text = $"Opened the {guideName} guide.";
+            statusText.Foreground = ConnectedBrush;
+        }
+        catch (Exception exception)
+        {
+            statusText.Text = $"Could not open the {guideName} guide: {exception.Message}";
+            statusText.Foreground = ErrorBrush;
         }
     }
 
@@ -274,7 +298,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         try
         {
             var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ??
-                new Version(1, 3, 0);
+                new Version(1, 4, 0);
             var result = await new ReleaseUpdateService().CheckAsync(
                 currentVersion,
                 _lifetimeCancellation.Token);
@@ -284,15 +308,21 @@ public sealed partial class MainPage : UserControl, IDisposable
                 return;
             }
 
-            UpdateStatusText.Text = result.HasSignedInstaller
-                ? $"ZeroSense {result.AvailableVersion.ToString(3)} is available with an installer."
-                : $"ZeroSense {result.AvailableVersion.ToString(3)} is available; installer asset not found.";
+            var installerStatus = result.HasInstaller
+                ? "an installer is available"
+                : "use the portable ZIP";
+            var checksumStatus = result.HasChecksumManifest
+                ? "a checksum manifest is included"
+                : "no checksum manifest was found";
+            UpdateStatusText.Text =
+                $"ZeroSense {result.AvailableVersion.ToString(3)} is available; " +
+                $"{installerStatus} and {checksumStatus}.";
             var dialog = new ContentDialog
             {
                 XamlRoot = XamlRoot,
                 Title = "ZeroSense update available",
                 Content = UpdateStatusText.Text +
-                    " Open the signed release page to review and install it?",
+                    " Open the official release page to review it?",
                 PrimaryButtonText = "Open release",
                 CloseButtonText = "Later",
                 DefaultButton = ContentDialogButton.Primary

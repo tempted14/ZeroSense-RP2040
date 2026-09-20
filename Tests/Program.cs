@@ -1,4 +1,6 @@
 using System.Buffers.Binary;
+using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using RainbowRecoil;
@@ -36,7 +38,8 @@ var tests = new (string Name, Action Run)[]
     ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
     ("configuration validator rejects unsafe output", ConfigurationValidationFailsClosed),
     ("firmware status identifies both boards and proxy mouse state", FirmwareStatusIsParsed),
-    ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath)
+    ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath),
+    ("release updates report assets without assuming a signature", ReleaseUpdatesAreReportedTruthfully)
 };
 
 var failures = new List<string>();
@@ -1044,6 +1047,52 @@ static void SimulatorExercisesConfigurationPath()
         "diagnostic recent event");
 }
 
+static void ReleaseUpdatesAreReportedTruthfully()
+{
+    const string json = """
+        {
+          "tag_name": "v1.5.0",
+          "html_url": "https://github.com/tempted14/ZeroSense-RP2040/releases/tag/v1.5.0",
+          "draft": false,
+          "prerelease": false,
+          "assets": [
+            { "name": "ZeroSense-Setup-1.5.0-win-x64.exe" },
+            { "name": "SHA256SUMS.txt" }
+          ]
+        }
+        """;
+    using var client = new HttpClient(new StaticJsonHandler(json));
+    var service = new ReleaseUpdateService(
+        client,
+        new Uri("https://updates.invalid/releases/latest"));
+    var result = service.CheckAsync(new Version(1, 4, 0), CancellationToken.None)
+        .GetAwaiter().GetResult();
+
+    True(result.IsUpdateAvailable, "newer version should be reported");
+    True(result.HasInstaller, "installer filename should be detected");
+    True(result.HasChecksumManifest, "checksum manifest should be detected");
+    Equal(new Version(1, 5, 0), result.AvailableVersion, "available version");
+
+    const string portableOnlyJson = """
+        {
+          "tag_name": "v1.4.0",
+          "html_url": "https://github.com/tempted14/ZeroSense-RP2040/releases/tag/v1.4.0",
+          "draft": false,
+          "prerelease": false,
+          "assets": [{ "name": "ZeroSense-1.4.0-Windows-x64.zip" }]
+        }
+        """;
+    using var portableClient = new HttpClient(new StaticJsonHandler(portableOnlyJson));
+    var portableResult = new ReleaseUpdateService(
+            portableClient,
+            new Uri("https://updates.invalid/releases/latest"))
+        .CheckAsync(new Version(1, 4, 0), CancellationToken.None)
+        .GetAwaiter().GetResult();
+    True(!portableResult.IsUpdateAvailable, "equal version should remain current");
+    True(!portableResult.HasInstaller, "portable archive is not an installer");
+    True(!portableResult.HasChecksumManifest, "missing checksum must be explicit");
+}
+
 static void True(bool condition, string message)
 {
     if (!condition)
@@ -1081,4 +1130,19 @@ static void Throws<TException>(Action action) where TException : Exception
     }
 
     throw new InvalidOperationException($"Expected {typeof(TException).Name}.");
+}
+
+file sealed class StaticJsonHandler(string json) : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+            RequestMessage = request
+        };
+        return Task.FromResult(response);
+    }
 }

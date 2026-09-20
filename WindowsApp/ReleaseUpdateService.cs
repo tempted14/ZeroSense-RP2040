@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Net.Http;
+using System.Reflection;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,15 +14,21 @@ internal sealed class ReleaseUpdateService
         "https://api.github.com/repos/tempted14/ZeroSense-RP2040/releases/latest");
     private static readonly HttpClient SharedClient = new();
     private readonly HttpClient _client;
+    private readonly Uri _latestReleaseApi;
 
-    public ReleaseUpdateService(HttpClient? client = null)
+    public ReleaseUpdateService(HttpClient? client = null, Uri? latestReleaseApi = null)
     {
         _client = client ?? SharedClient;
+        _latestReleaseApi = latestReleaseApi ?? LatestReleaseApi;
         if (!_client.DefaultRequestHeaders.UserAgent.Any())
         {
-            _client.DefaultRequestHeaders.UserAgent.ParseAdd("ZeroSense-Updater/1.3");
+            var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString(3) ?? "unknown";
+            _client.DefaultRequestHeaders.UserAgent.ParseAdd($"ZeroSense-Updater/{version}");
         }
-        _client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        if (!_client.DefaultRequestHeaders.Accept.Any())
+        {
+            _client.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        }
     }
 
     public async Task<ReleaseUpdateResult> CheckAsync(
@@ -29,7 +36,7 @@ internal sealed class ReleaseUpdateService
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(currentVersion);
-        using var response = await _client.GetAsync(LatestReleaseApi, cancellationToken)
+        using var response = await _client.GetAsync(_latestReleaseApi, cancellationToken)
             .ConfigureAwait(false);
         response.EnsureSuccessStatusCode();
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken)
@@ -51,20 +58,22 @@ internal sealed class ReleaseUpdateService
         }
         var page = new Uri(root.GetProperty("html_url").GetString()
             ?? throw new InvalidOperationException("Release URL is missing."));
-        var hasSignedInstaller = root.GetProperty("assets")
+        var assetNames = root.GetProperty("assets")
             .EnumerateArray()
-            .Any(asset =>
-            {
-                var name = asset.GetProperty("name").GetString() ?? string.Empty;
-                return name.StartsWith("ZeroSense-Setup-", StringComparison.OrdinalIgnoreCase) &&
-                    name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
-            });
+            .Select(asset => asset.GetProperty("name").GetString() ?? string.Empty)
+            .ToArray();
+        var hasInstaller = assetNames.Any(name =>
+            name.StartsWith("ZeroSense-Setup-", StringComparison.OrdinalIgnoreCase) &&
+            name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase));
+        var hasChecksumManifest = assetNames.Any(name =>
+            name.Equals("SHA256SUMS.txt", StringComparison.OrdinalIgnoreCase));
         return new ReleaseUpdateResult(
             availableVersion > currentVersion,
             currentVersion,
             availableVersion,
             page,
-            hasSignedInstaller);
+            hasInstaller,
+            hasChecksumManifest);
     }
 }
 
@@ -73,8 +82,9 @@ internal sealed record ReleaseUpdateResult(
     Version CurrentVersion,
     Version AvailableVersion,
     Uri? ReleasePage,
-    bool HasSignedInstaller)
+    bool HasInstaller,
+    bool HasChecksumManifest)
 {
     public static ReleaseUpdateResult Current(Version version) =>
-        new(false, version, version, null, false);
+        new(false, version, version, null, false, false);
 }

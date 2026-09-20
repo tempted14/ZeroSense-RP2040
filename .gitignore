@@ -40,6 +40,13 @@ desktop.ini
 # Local configuration (use environment variables instead)
 RainbowRecoil.json
 local_settings.json
+.env
+.env.*
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
 
 # Temporary files
 temp_build/

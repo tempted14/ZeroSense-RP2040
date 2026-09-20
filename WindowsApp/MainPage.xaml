@@ -873,7 +873,7 @@
                                         <TextBlock Text="Three components. One clean setup."
                                                    FontFamily="Segoe UI Variable Display"
                                                    FontSize="22" FontWeight="SemiBold" />
-                                        <TextBlock Text="Flash the UF2 for your RP2040 or RP2350, publish the Windows client, then let ZeroSense verify the firmware handshake before arming output."
+                                        <TextBlock Text="Download the release, flash the UF2 matching your board, then let ZeroSense verify the firmware handshake before arming output."
                                                    Style="{StaticResource MutedTextStyle}" MaxWidth="520"
                                                    HorizontalAlignment="Left" />
                                     </StackPanel>
@@ -901,8 +901,8 @@
                                                        HorizontalAlignment="Center" VerticalAlignment="Center" />
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
-                                            <TextBlock Text="Build ZeroSense" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Run WindowsApp\build.ps1, then keep every published file together."
+                                            <TextBlock Text="Install ZeroSense" Style="{StaticResource SectionTitleStyle}" />
+                                            <TextBlock Text="Download the Windows ZIP, verify SHA256SUMS.txt, extract every file, then run zerosense.exe."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -926,23 +926,30 @@
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
                                     <StackPanel Spacing="5">
                                         <TextBlock Text="Requirements" Style="{StaticResource SectionTitleStyle}" />
-                                        <TextBlock Text="Windows 10/11 x64 · .NET 8 SDK for builds · Visual C++ 2015–2022 x64 runtime · PlatformIO · RP2040-Zero or RP2350-USB-C"
+                                        <TextBlock Text="Windows 10/11 x64 · USB data cable · RP2040-Zero or Waveshare RP2350-USB-C · no developer tools required"
                                                    Style="{StaticResource MutedTextStyle}" />
                                         <TextBlock x:Name="InstallationStatusText"
                                                    Text="The full Markdown guide is included beside the published app."
                                                    FontSize="11" Foreground="#666666" />
                                     </StackPanel>
-                                    <Button Grid.Column="1" Content="Read installation guide"
-                                            Click="OpenInstallationGuide_Click" VerticalAlignment="Center" />
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8"
+                                                VerticalAlignment="Center">
+                                        <Button Content="Open latest release"
+                                                Click="OpenLatestRelease_Click" />
+                                        <Button Content="Installation guide"
+                                                Click="OpenInstallationGuide_Click" />
+                                        <Button Content="Troubleshooting"
+                                                Click="OpenTroubleshootingGuide_Click" />
+                                    </StackPanel>
                                 </Grid>
                             </Border>
                             <Border Grid.Row="4" Margin="0,14,0,0" Style="{StaticResource CardStyle}">
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
                                     <StackPanel Spacing="5">
                                         <TextBlock Text="Application updates" Style="{StaticResource SectionTitleStyle}" />
-                                        <TextBlock Text="Checks the official GitHub release feed. Installation remains explicit and release builds are required to be code-signed."
+                                        <TextBlock Text="Checks the official GitHub release feed. Review the publisher and SHA-256 checksum before installing."
                                                    Style="{StaticResource MutedTextStyle}" />
-                                        <TextBlock x:Name="UpdateStatusText" Text="ZeroSense 1.3.0"
+                                        <TextBlock x:Name="UpdateStatusText" Text="Ready to check for updates."
                                                    FontSize="11" Foreground="#666666" />
                                     </StackPanel>
                                     <Button x:Name="CheckForUpdatesButton" Grid.Column="1"

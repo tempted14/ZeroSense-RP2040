@@ -5,7 +5,7 @@ on:
     tags: ["v*"]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   windows:
@@ -22,8 +22,8 @@ jobs:
         shell: pwsh
         run: |
           $tagVersion = "${{ github.ref_name }}".TrimStart('v')
-          [xml]$project = Get-Content WindowsApp/RainbowRecoil.csproj
-          $projectVersion = [string]$project.Project.PropertyGroup.Version
+          [xml]$buildProperties = Get-Content Directory.Build.props
+          $projectVersion = [string]$buildProperties.Project.PropertyGroup.Version
           [xml]$manifest = Get-Content WindowsApp/app.manifest
           $manifestVersion = ([string]$manifest.assembly.assemblyIdentity.version) -replace '\.0$', ''
           if ($tagVersion -ne $projectVersion -or $tagVersion -ne $manifestVersion) {
@@ -120,6 +120,8 @@ jobs:
   publish:
     needs: [windows, firmware]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -129,7 +131,7 @@ jobs:
       - name: Refresh combined checksums
         working-directory: release-assets
         run: sha256sum ZeroSense-* > SHA256SUMS.txt
-      - name: Publish immutable tag assets
+      - name: Publish tag assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-
@@ -138,4 +140,4 @@ jobs:
           --repo "${{ github.repository }}"
           --verify-tag
           --title "ZeroSense ${{ github.ref_name }}"
-          --notes-file docs/RELEASE_NOTES_1.3.0.md
+          --notes-file "docs/RELEASE_NOTES_${GITHUB_REF_NAME#v}.md"
