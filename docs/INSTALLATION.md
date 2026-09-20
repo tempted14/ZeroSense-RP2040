@@ -219,7 +219,7 @@ the pointer. Complete the desktop checklist in
 Every automatic profile applies the Vertical Grip modifier. Automatic profiles also use Flash Hider wherever they previously selected Compensator. Ela's SCORPION EVO 3 A1 keeps Compensator as its barrel exception while using the same Vertical Grip modifier. Older saved profiles are migrated to these preferences when loaded. The F2 entry uses vertical grip and flash hider. Shared weapons can resolve different attachments by operator: Y11S3 removes the muzzle brake from Aruni's Mk 14 EBR and Tubarão's AR-15.50 while retaining it for Dokkaebi and Maverick. Semi-automatic profiles show rapid-fire rate and per-shot correction in the UI. Attachment recommendations can change with Siege balance patches, so check the research date in the project README before relying on them.
 
 The app discovers currently present ports associated with Raspberry Pi VID
-`2E8A`, then requires a `PONG:RAINBOW-RECOIL:3` reply before accepting one. It
+`2E8A`, then requires a `PONG:RAINBOW-RECOIL:4` reply before accepting one. It
 also consumes the subsequent board identity and RP2350 mouse-health messages.
 It does not rely on a bridge-chip name, fixed runtime PID, or hard-coded COM
 number. If it does not connect, follow

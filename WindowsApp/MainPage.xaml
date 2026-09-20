@@ -838,6 +838,7 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
                             <Grid ColumnDefinitions="*,Auto" ColumnSpacing="24">
@@ -933,6 +934,20 @@
                                     </StackPanel>
                                     <Button Grid.Column="1" Content="Read installation guide"
                                             Click="OpenInstallationGuide_Click" VerticalAlignment="Center" />
+                                </Grid>
+                            </Border>
+                            <Border Grid.Row="4" Margin="0,14,0,0" Style="{StaticResource CardStyle}">
+                                <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
+                                    <StackPanel Spacing="5">
+                                        <TextBlock Text="Application updates" Style="{StaticResource SectionTitleStyle}" />
+                                        <TextBlock Text="Checks the official GitHub release feed. Installation remains explicit and release builds are required to be code-signed."
+                                                   Style="{StaticResource MutedTextStyle}" />
+                                        <TextBlock x:Name="UpdateStatusText" Text="ZeroSense 1.3.0"
+                                                   FontSize="11" Foreground="#666666" />
+                                    </StackPanel>
+                                    <Button x:Name="CheckForUpdatesButton" Grid.Column="1"
+                                            Content="Check for updates" VerticalAlignment="Center"
+                                            Click="CheckForUpdatesButton_Click" />
                                 </Grid>
                             </Border>
                         </Grid>

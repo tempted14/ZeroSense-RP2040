@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -33,6 +34,10 @@ public sealed partial class MainPage : UserControl, IDisposable
     {
         Interval = TimeSpan.FromSeconds(2)
     };
+    private readonly DispatcherTimer _rp2350ArmLeaseTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(200)
+    };
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly SemaphoreSlim _configurationSyncLock = new(1, 1);
     private readonly DetectionDebouncer _operatorDetectionDebouncer = new();
@@ -61,11 +66,13 @@ public sealed partial class MainPage : UserControl, IDisposable
     private bool _isRefreshingWeapons;
     private bool _isSynchronizingConfiguration;
     private bool _outputActive;
+    private bool _rp2350ArmLeaseSent;
     private bool _isLoaded;
     private bool _isDisposed;
     private int _configurationRevision;
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
+    private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
     private FirmwareStatusKind? _physicalMouseStatus;
     private ushort _physicalMouseVendorId;
     private ushort _physicalMouseProductId;
@@ -93,6 +100,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         _hotkeyMonitor.PrimaryWeaponPressed += HotkeyMonitor_PrimaryWeaponPressed;
         _hotkeyMonitor.SecondaryWeaponPressed += HotkeyMonitor_SecondaryWeaponPressed;
         _continuousDetectionTimer.Tick += ContinuousDetectionTimer_Tick;
+        _rp2350ArmLeaseTimer.Tick += Rp2350ArmLeaseTimer_Tick;
     }
 
     private void InitializeSelectors()
@@ -199,6 +207,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         _mouseButtonTrigger.Start();
         _hotkeyMonitor.Start();
         _continuousDetectionTimer.Start();
+        _rp2350ArmLeaseTimer.Start();
         await ConnectToDeviceAsync(_lifetimeCancellation.Token);
     }
 
@@ -255,6 +264,59 @@ public sealed partial class MainPage : UserControl, IDisposable
         {
             InstallationStatusText.Text = $"Could not open the guide: {exception.Message}";
             InstallationStatusText.Foreground = ErrorBrush;
+        }
+    }
+
+    private async void CheckForUpdatesButton_Click(object sender, RoutedEventArgs e)
+    {
+        CheckForUpdatesButton.IsEnabled = false;
+        UpdateStatusText.Text = "Checking the official release feed…";
+        try
+        {
+            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ??
+                new Version(1, 3, 0);
+            var result = await new ReleaseUpdateService().CheckAsync(
+                currentVersion,
+                _lifetimeCancellation.Token);
+            if (!result.IsUpdateAvailable)
+            {
+                UpdateStatusText.Text = $"ZeroSense {currentVersion.ToString(3)} is current.";
+                return;
+            }
+
+            UpdateStatusText.Text = result.HasSignedInstaller
+                ? $"ZeroSense {result.AvailableVersion.ToString(3)} is available with an installer."
+                : $"ZeroSense {result.AvailableVersion.ToString(3)} is available; installer asset not found.";
+            var dialog = new ContentDialog
+            {
+                XamlRoot = XamlRoot,
+                Title = "ZeroSense update available",
+                Content = UpdateStatusText.Text +
+                    " Open the signed release page to review and install it?",
+                PrimaryButtonText = "Open release",
+                CloseButtonText = "Later",
+                DefaultButton = ContentDialogButton.Primary
+            };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary &&
+                result.ReleasePage is not null)
+            {
+                Process.Start(new ProcessStartInfo(result.ReleasePage.AbsoluteUri)
+                {
+                    UseShellExecute = true
+                });
+            }
+        }
+        catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            UpdateStatusText.Text = $"Update check failed: {exception.Message}";
+            DiagnosticLog.Record("update-error", exception.Message);
+        }
+        finally
+        {
+            CheckForUpdatesButton.IsEnabled = true;
         }
     }
 
@@ -1048,8 +1110,17 @@ public sealed partial class MainPage : UserControl, IDisposable
         SaveSettingsWithFeedback();
         if (!_isArmed)
         {
+            if (_rp2350ArmLeaseSent)
+            {
+                TrySendArmLease(false);
+                _rp2350ArmLeaseSent = false;
+            }
             TrySendCommand("STOP");
             _outputActive = false;
+        }
+        else
+        {
+            RefreshRp2350ArmLease();
         }
     }
 
@@ -1082,6 +1153,14 @@ public sealed partial class MainPage : UserControl, IDisposable
             return;
         }
 
+        // RP2350 activation is derived from the raw downstream mouse state on
+        // the device. The upstream state includes synthesized rapid-fire pulses
+        // and must never be fed back into its own activation decision.
+        if (_firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy)
+        {
+            return;
+        }
+
         var safeForeground = connection.IsSimulator || ScreenCaptureService.IsRainbowSixForeground();
         if (isPressed && _isArmed && safeForeground)
         {
@@ -1106,6 +1185,11 @@ public sealed partial class MainPage : UserControl, IDisposable
             return;
         }
 
+        if (_firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy)
+        {
+            return;
+        }
+
         if (connection.IsSimulator || ScreenCaptureService.IsRainbowSixForeground())
         {
             TrySendCommand("KEEPALIVE");
@@ -1116,6 +1200,43 @@ public sealed partial class MainPage : UserControl, IDisposable
             TrySendCommand("STOP");
             _outputActive = false;
             DiagnosticLog.Record("safety", "Output stopped because Rainbow Six lost focus.");
+        }
+    }
+
+    private void Rp2350ArmLeaseTimer_Tick(object? sender, object e) =>
+        RefreshRp2350ArmLease();
+
+    private void RefreshRp2350ArmLease()
+    {
+        var connection = _connection;
+        var shouldLease = !_isDisposed && !_isSynchronizingConfiguration &&
+            _isArmed && connection?.IsConnected == true && !connection.IsSimulator &&
+            _firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy &&
+            _physicalMouseStatus == FirmwareStatusKind.MouseConnected &&
+            ScreenCaptureService.IsRainbowSixForeground();
+
+        if (shouldLease)
+        {
+            _rp2350ArmLeaseSent = TrySendArmLease(true);
+        }
+        else if (_rp2350ArmLeaseSent)
+        {
+            TrySendArmLease(false);
+            _rp2350ArmLeaseSent = false;
+        }
+    }
+
+    private bool TrySendArmLease(bool enabled)
+    {
+        try
+        {
+            _connection?.SendArmLease(enabled);
+            return _connection?.IsConnected == true;
+        }
+        catch (Exception ex)
+        {
+            HandleConnectionLost(ex.Message);
+            return false;
         }
     }
 
@@ -1683,6 +1804,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
         var effectiveProfile = selected.Profile
             .WithAttachmentSetup(setup)
+            .WithOpticSetup(settings.ActiveMagnification)
             .WithOutputStrength(settings.GetWeaponOutputStrength(selected.Name));
         if (settings.CompensationMode == CompensationMode.Experimental &&
             effectiveProfile.HasWeaponPattern)
@@ -1761,7 +1883,6 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         var synchronized = false;
-        var started = Stopwatch.GetTimestamp();
         try
         {
             if (preserveFireState)
@@ -1784,19 +1905,22 @@ public sealed partial class MainPage : UserControl, IDisposable
                 DiagnosticLog.Record("validation-error", validation.Summary);
                 return false;
             }
-            await connection.SynchronizeConfigurationAsync(
-                effectiveProfile,
-                settings.CompensationMode,
-                settings.CalculateSensitivityScale(),
-                settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
-                effectiveProfile.RapidFireRoundsPerMinute,
+            var syncResult = await _configurationSynchronizer.SynchronizeAsync(
+                connection,
+                new DeviceConfigurationRequest(
+                    effectiveProfile,
+                    settings.CompensationMode,
+                    settings.CalculateSensitivityScale(),
+                    settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
+                    effectiveProfile.RapidFireRoundsPerMinute),
                 cancellationToken);
             synchronized = true;
             DiagnosticLog.Record(
                 "configuration",
                 $"Synchronized {effectiveProfile.Name} in " +
-                $"{Stopwatch.GetElapsedTime(started).TotalMilliseconds:F1} ms " +
-                $"using {(connection.IsSimulator ? "simulator" : connection.PortName)}.");
+                $"{syncResult.Elapsed.TotalMilliseconds:F1} ms with hash " +
+                $"{syncResult.Hash:X8} using " +
+                $"{(connection.IsSimulator ? "simulator" : connection.PortName)}.");
             return true;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -1818,6 +1942,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             {
                 _isSynchronizingConfiguration = false;
                 if (synchronized && ReferenceEquals(_connection, connection) &&
+                    _firmwareDeviceKind != FirmwareStatusKind.Rp2350MouseProxy &&
                     _isArmed && _mouseButtonTrigger.IsPressed)
                 {
                     var safeForeground = connection.IsSimulator ||
@@ -2068,6 +2193,18 @@ public sealed partial class MainPage : UserControl, IDisposable
     private void DisconnectCurrentDevice()
     {
         var connection = _connection;
+        if (_rp2350ArmLeaseSent && connection?.IsConnected == true)
+        {
+            try
+            {
+                connection.SendArmLease(false);
+            }
+            catch
+            {
+                // Closing the transport still lets the short device lease expire.
+            }
+        }
+        _rp2350ArmLeaseSent = false;
         _connection = null;
         ResetFirmwareHardwareStatus();
         if (connection is null)
@@ -2116,6 +2253,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         _lifetimeCancellation.Cancel();
         _continuousDetectionTimer.Stop();
         _continuousDetectionTimer.Tick -= ContinuousDetectionTimer_Tick;
+        _rp2350ArmLeaseTimer.Stop();
+        _rp2350ArmLeaseTimer.Tick -= Rp2350ArmLeaseTimer_Tick;
         _hotkeyMonitor.OverlayPressed -= HotkeyMonitor_OverlayPressed;
         _hotkeyMonitor.DetectionPressed -= HotkeyMonitor_DetectionPressed;
         _hotkeyMonitor.PrimaryWeaponPressed -= HotkeyMonitor_PrimaryWeaponPressed;

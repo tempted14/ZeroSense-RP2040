@@ -526,8 +526,8 @@ public sealed class Settings
         var adsScale = referenceAds / ads;
 
         return new SensitivityScale(
-            Math.Clamp(referenceHipGain / horizontalGain * adsScale, 0.05f, 8.0f),
-            Math.Clamp(referenceHipGain / verticalGain * adsScale, 0.05f, 8.0f));
+            referenceHipGain / horizontalGain * adsScale,
+            referenceHipGain / verticalGain * adsScale);
     }
 
     [JsonIgnore]

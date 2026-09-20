@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.IO.Ports;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -74,7 +76,8 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             WriteTimeout = 500,
             DtrEnable = true,
             RtsEnable = false,
-            NewLine = "\n"
+            NewLine = "\n",
+            Encoding = new UTF8Encoding(false, true)
         };
 
         try
@@ -122,7 +125,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             try
             {
                 var line = port.ReadLine().TrimEnd('\r');
-                if (line.Equals("PONG:RAINBOW-RECOIL:3", StringComparison.Ordinal))
+                if (line.Equals("PONG:RAINBOW-RECOIL:4", StringComparison.Ordinal))
                 {
                     return;
                 }
@@ -238,12 +241,40 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     {
         ArgumentNullException.ThrowIfNull(profile);
         await _configurationLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var transactionId = unchecked((uint)RandomNumberGenerator.GetInt32(1, int.MaxValue));
+        var configurationHash = SerialProtocol.ComputeConfigurationHash(
+            profile,
+            mode,
+            scale,
+            rapidFireEnabled,
+            rapidFireRoundsPerMinute);
+        var transactionStarted = false;
         try
         {
             await SendAndAwaitAsync(
+                () => Write(SerialProtocol.BuildConfigurationBeginCommand(
+                    transactionId,
+                    configurationHash)),
+                line => FirmwareContract.ConfigurationBeginAcknowledgementMatches(
+                    line,
+                    transactionId,
+                    configurationHash),
+                line => line.StartsWith("ERROR:CONFIG", StringComparison.Ordinal) ||
+                    (line.StartsWith("CONFIG:BEGIN:", StringComparison.Ordinal) &&
+                     !FirmwareContract.ConfigurationBeginAcknowledgementMatches(
+                         line,
+                         transactionId,
+                         configurationHash)),
+                "configuration transaction begin",
+                cancellationToken).ConfigureAwait(false);
+            transactionStarted = true;
+
+            await SendAndAwaitAsync(
                 () => Write(SerialProtocol.BuildProfileCommand(profile, mode)),
-                line => line.StartsWith("PROFILE:", StringComparison.Ordinal),
-                line => line.StartsWith("ERROR:PROFILE", StringComparison.Ordinal),
+                line => FirmwareContract.ProfileAcknowledgementMatches(line, profile, mode),
+                line => line.StartsWith("ERROR:PROFILE", StringComparison.Ordinal) ||
+                    (line.StartsWith("PROFILE:", StringComparison.Ordinal) &&
+                     !FirmwareContract.ProfileAcknowledgementMatches(line, profile, mode)),
                 "profile",
                 cancellationToken).ConfigureAwait(false);
 
@@ -257,16 +288,20 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                             Write(command);
                         }
                     },
-                    line => line.StartsWith("PATTERN:READY:", StringComparison.Ordinal),
-                    line => line.StartsWith("ERROR:PATTERN", StringComparison.Ordinal),
+                    line => FirmwareContract.PatternAcknowledgementMatches(line, profile),
+                    line => line.StartsWith("ERROR:PATTERN", StringComparison.Ordinal) ||
+                        (line.StartsWith("PATTERN:READY:", StringComparison.Ordinal) &&
+                         !FirmwareContract.PatternAcknowledgementMatches(line, profile)),
                     "pattern",
                     cancellationToken).ConfigureAwait(false);
             }
 
             await SendAndAwaitAsync(
                 () => Write(SerialProtocol.BuildSensitivityCommand(scale)),
-                line => line.StartsWith("SENSITIVITY:", StringComparison.Ordinal),
-                line => line.StartsWith("ERROR:SENSITIVITY", StringComparison.Ordinal),
+                line => FirmwareContract.SensitivityAcknowledgementMatches(line, scale),
+                line => line.StartsWith("ERROR:SENSITIVITY", StringComparison.Ordinal) ||
+                    (line.StartsWith("SENSITIVITY:", StringComparison.Ordinal) &&
+                     !FirmwareContract.SensitivityAcknowledgementMatches(line, scale)),
                 "sensitivity",
                 cancellationToken).ConfigureAwait(false);
 
@@ -274,10 +309,78 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                 () => Write(SerialProtocol.BuildRapidFireCommand(
                     rapidFireEnabled,
                     rapidFireRoundsPerMinute)),
-                line => line.StartsWith("RAPID_FIRE:", StringComparison.Ordinal),
-                line => line.StartsWith("ERROR:RAPID_FIRE", StringComparison.Ordinal),
+                line => FirmwareContract.RapidFireAcknowledgementMatches(
+                    line,
+                    rapidFireEnabled,
+                    rapidFireRoundsPerMinute),
+                line => line.StartsWith("ERROR:RAPID_FIRE", StringComparison.Ordinal) ||
+                    (line.StartsWith("RAPID_FIRE:", StringComparison.Ordinal) &&
+                     !FirmwareContract.RapidFireAcknowledgementMatches(
+                         line,
+                         rapidFireEnabled,
+                         rapidFireRoundsPerMinute)),
                 "rapid-fire",
                 cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                await SendAndAwaitAsync(
+                    () => Write(SerialProtocol.BuildConfigurationCommitCommand(
+                        transactionId,
+                        configurationHash)),
+                    line => FirmwareContract.ConfigurationCommitAcknowledgementMatches(
+                        line,
+                        transactionId,
+                        configurationHash),
+                    line => line.StartsWith("ERROR:CONFIG", StringComparison.Ordinal) ||
+                        (line.StartsWith("CONFIG:COMMIT:", StringComparison.Ordinal) &&
+                         !FirmwareContract.ConfigurationCommitAcknowledgementMatches(
+                             line,
+                             transactionId,
+                             configurationHash)),
+                    "configuration transaction commit",
+                    cancellationToken).ConfigureAwait(false);
+                transactionStarted = false;
+            }
+            catch (FirmwareResponseTimeoutException commitTimeout)
+            {
+                // The device may have committed successfully while its acknowledgement
+                // was lost. Query the canonical hash before attempting a rollback.
+                try
+                {
+                    await SendAndAwaitAsync(
+                        () => Write(SerialProtocol.BuildStatusCommand()),
+                        line => FirmwareContract.CommittedStatusMatches(line, configurationHash),
+                        line => line.StartsWith("ERROR:STATUS", StringComparison.Ordinal) ||
+                            (line.StartsWith("STATUS:", StringComparison.Ordinal) &&
+                             !FirmwareContract.CommittedStatusMatches(line, configurationHash)),
+                        "configuration commit recovery",
+                        cancellationToken).ConfigureAwait(false);
+                    transactionStarted = false;
+                }
+                catch (Exception recoveryException)
+                {
+                    throw new InvalidOperationException(
+                        "The commit acknowledgement was lost and firmware status could not " +
+                        "prove that the exact configuration was committed.",
+                        new AggregateException(commitTimeout, recoveryException));
+                }
+            }
+        }
+        catch
+        {
+            if (transactionStarted)
+            {
+                try
+                {
+                    Write(SerialProtocol.BuildConfigurationAbortCommand(transactionId));
+                }
+                catch
+                {
+                    // The firmware also rolls the transaction back on timeout/disconnect.
+                }
+            }
+            throw;
         }
         finally
         {
@@ -287,6 +390,9 @@ public sealed class SerialConnection : IRecoilDeviceConnection
 
     public void SendCommand(string commandType) =>
         Write(SerialProtocol.BuildCommand(commandType));
+
+    public void SendArmLease(bool enabled) =>
+        Write(SerialProtocol.BuildArmLeaseCommand(enabled));
 
     public void Write(byte[] data)
     {
@@ -396,7 +502,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             catch (TimeoutException ex)
             {
                 Interlocked.Increment(ref _failedCommands);
-                throw new InvalidOperationException(
+                throw new FirmwareResponseTimeoutException(
                     $"The firmware did not acknowledge the {stage} configuration.", ex);
             }
 
@@ -528,4 +634,12 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         Func<string, bool> IsSuccess,
         Func<string, bool> IsFailure,
         TaskCompletionSource<string> Completion);
+
+    private sealed class FirmwareResponseTimeoutException : InvalidOperationException
+    {
+        public FirmwareResponseTimeoutException(string message, Exception innerException)
+            : base(message, innerException)
+        {
+        }
+    }
 }

@@ -42,15 +42,25 @@ internal static class ConfigurationValidator
         {
             errors.Add("The selected profile has no name.");
         }
-        if (!double.IsFinite(profile.VerticalCompensation) ||
-            profile.VerticalCompensation is < 0 or > 127)
+        else if (profile.Name.Any(char.IsControl) ||
+                 System.Text.Encoding.UTF8.GetByteCount(profile.Name) >
+                    SerialProtocol.MaximumProfileNameLength)
         {
-            errors.Add("Vertical compensation must be finite and between 0 and 127.");
+            errors.Add(
+                $"Profile names must contain no control characters and fit within " +
+                $"{SerialProtocol.MaximumProfileNameLength} UTF-8 bytes.");
+        }
+        if (!double.IsFinite(profile.VerticalCompensation) ||
+            profile.VerticalCompensation is < FirmwareContract.MinimumVerticalCompensation or
+                > FirmwareContract.MaximumVerticalCompensation)
+        {
+            errors.Add("Vertical compensation must be finite and between 0 and 20.");
         }
         if (!double.IsFinite(profile.HorizontalCompensation) ||
-            profile.HorizontalCompensation is < -127 or > 127)
+            profile.HorizontalCompensation is < FirmwareContract.MinimumHorizontalCompensation or
+                > FirmwareContract.MaximumHorizontalCompensation)
         {
-            errors.Add("Horizontal compensation must be finite and between -127 and 127.");
+            errors.Add("Horizontal compensation must be finite and between -20 and 20.");
         }
         if (profile.BurstProgression is < 0 or > 100)
         {
@@ -58,9 +68,14 @@ internal static class ConfigurationValidator
         }
         if (profile.SupportsContinuousCompensation)
         {
-            if (profile.RoundsPerMinute is < 1 or > ushort.MaxValue)
+            if (profile.RoundsPerMinute is
+                < FirmwareContract.MinimumPatternRoundsPerMinute or
+                > FirmwareContract.MaximumPatternRoundsPerMinute)
             {
-                errors.Add("Automatic weapon RPM must be between 1 and 65535.");
+                errors.Add(
+                    $"Automatic weapon RPM must be between " +
+                    $"{FirmwareContract.MinimumPatternRoundsPerMinute} and " +
+                    $"{FirmwareContract.MaximumPatternRoundsPerMinute}.");
             }
             if (profile.MagazineSize is < 1 or > 160)
             {
@@ -71,7 +86,7 @@ internal static class ConfigurationValidator
                 warnings.Add("No usable weapon pattern is available; General mode will be used.");
             }
         }
-        if (profile.Pattern.Length > 160)
+        if (profile.Pattern.Length > FirmwareContract.MaximumPatternPoints)
         {
             errors.Add("The recoil pattern exceeds the firmware limit of 160 points.");
         }
@@ -84,9 +99,16 @@ internal static class ConfigurationValidator
 
         var scale = settings.CalculateSensitivityScale();
         if (!float.IsFinite(scale.Horizontal) || !float.IsFinite(scale.Vertical) ||
-            scale.Horizontal is < 0.05f or > 8.0f || scale.Vertical is < 0.05f or > 8.0f)
+            scale.Horizontal is < FirmwareContract.MinimumSensitivityFactor or
+                > FirmwareContract.MaximumSensitivityFactor ||
+            scale.Vertical is < FirmwareContract.MinimumSensitivityFactor or
+                > FirmwareContract.MaximumSensitivityFactor)
         {
-            errors.Add("Sensitivity calibration produces an unsupported scale.");
+            errors.Add(
+                $"Sensitivity calibration produced H={scale.Horizontal:0.###}, " +
+                $"V={scale.Vertical:0.###}; each exact scale must be between " +
+                $"{FirmwareContract.MinimumSensitivityFactor:0.##} and " +
+                $"{FirmwareContract.MaximumSensitivityFactor:0.##}.");
         }
         if (rapidFireRequested && !profile.SupportsRapidFire)
         {

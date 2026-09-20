@@ -51,11 +51,11 @@ mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 ## Easiest install
 
-Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the Windows archive plus exactly one firmware image:
+Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the signed installer plus exactly one firmware image:
 
-1. `ZeroSense-1.2.0-Windows-x64.zip` — extract it, then run `zerosense.exe`.
-2. For TENSTAR/RP2040-Zero: `rainbow-recoil-rp2040-zero-1.2.0.uf2`.
-3. For the two-female-port Waveshare board: `rainbow-recoil-rp2350-usb-c-1.2.0.uf2`.
+1. `ZeroSense-Setup-1.3.0-win-x64.exe` — verify its publisher/signature, then run it.
+2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-1.3.0.uf2`.
+3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-1.3.0.uf2`.
 
 Never flash the RP2350 UF2 to an RP2040 or the RP2040 UF2 to an RP2350. For the
 RP2350 cabling and CC selector check, follow
@@ -226,7 +226,7 @@ Three modes are available:
 - **Weapon pattern (video-derived estimate)** sends a staged per-shot trace at the selected weapon's RPM and stops at its magazine length.
 - **Experimental (per-weapon calibrated)** makes a separate copy of the standard pattern and applies saved first-shot, early, middle, late, and horizontal gains. It never edits the General or standard Pattern data and safely falls back to General on weapons without an automatic pattern.
 
-The pattern points are useful starting estimates, not extracted game constants. Ubisoft describes a staged recoil system but does not publish numeric per-shot vectors, and normal YouTube recoil footage contains the presenter's mouse input. The app labels the mode accordingly instead of presenting inferred points as exact measurements.
+The pattern points are useful starting estimates, not extracted game constants. Ubisoft describes a staged recoil system but does not publish numeric per-shot vectors, and normal YouTube recoil footage contains the presenter's mouse input. The app labels the mode accordingly instead of presenting inferred points as exact measurements. Reaper uses Ubisoft's current stage starts at bullets 0/3/10/25, but its stage magnitudes remain estimates.
 
 Experimental tuning starts at `1.00`, which is exactly the standard estimated pattern. Calibrate one weapon in the shooting range, change one gain by `0.05` at a time, and use **Reset weapon** to return only that weapon to `1.00`. **First** affects shot one, **Early** the remainder of the first 25% of the magazine, **Mid** 25–70%, **Late** the final 30%, and **Horizontal** the entire trace. These controls provide a safe path toward measured curves; they do not make an unmeasured estimate “perfect.”
 
@@ -260,7 +260,11 @@ Tubarão AR-15.50:                 Muzzle brake unavailable on defense
 Maverick AR-15.50:                Muzzle brake retained on attack
 ```
 
-The app sends the selected weapon's numeric profile, pattern chunks, rapid-fire state, and separate horizontal/vertical sensitivity scales over CDC, and waits for the firmware to acknowledge each stage before reporting synchronization. Every configuration is validated before transmission; an invalid configuration sends `STOP`, disarms output, and explains the rejected field. Live profile changes issue `STOP`, apply the full acknowledged configuration, and resume only if aim and fire are still held. **Arm output** does not continuously move the pointer: the app sends `START` only while Rainbow Six is foreground and the physical right mouse (aim) and left mouse (fire) buttons are both held, and sends `STOP` when either is released or the game loses focus. While active, a 250 ms keepalive feeds a 750 ms firmware fail-safe so output stops if the app exits or communication is lost. A new press resets pattern mode to shot one. The RP2040 HID remains a separate device alongside the physical mouse; the RP2350 HID is the additive proxy for the mouse connected to its PIO-USB port.
+The app sends the selected profile as a v4 transaction: begin plus expected hash, exact profile/pattern/sensitivity/rapid-fire acknowledgements, then a matching commit hash. Rejection, timeout, disconnect, or a mismatched hash restores the firmware's last-good configuration. Frames carry sync bytes, a sequence, length, and CRC-16 so a truncated/noisy CDC write cannot permanently desynchronize the parser. Invalid configuration sends `STOP`, disarms output, and explains the rejected field.
+
+**Arm output** does not continuously move the pointer. RP2040 activation uses the desktop's foreground-gated M1+M2 monitor plus a 750 ms keepalive. RP2350 activation is different by design: the app grants a short foreground/armed lease, while the board reads raw M1+M2 from the downstream mouse itself. A raw release or mouse/interface disconnect stops output immediately; synthesized rapid-fire reports cannot feed back into this trigger. Physical movement, buttons, wheel, and pan remain additive and live.
+
+Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), ±8% cadence variation, and adaptive 250/500 Hz idle/normal HID servicing. High activity uses the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). Pattern mode instead uses exact RPM deadlines and distributes each shot's correction across 1 ms frames with fixed-point remainder preservation.
 
 The Device page includes an explicit **Use simulator** option. It exercises the
 same configuration calculation and binary protocol encoders as real firmware,
@@ -269,11 +273,18 @@ now** checks the active settings on demand, while **Copy diagnostic report**
 copies a bounded in-memory report containing connection latency, command counts,
 working-set memory, OCR timing events, and recent errors without screenshots.
 
+Measured patterns can be added as versioned JSON packs under the app data
+`measured-profile-packs` directory; see
+[`docs/measured-profile-pack.example.json`](docs/measured-profile-pack.example.json).
+Each entry requires capture provenance, game build, timestamp, RPM, and exact
+weapon/grip/barrel/optic metadata. A pack applies only to that loadout; mismatched
+loadouts fall back to the clearly labeled deterministic estimate.
+
 Automatic optic selection uses `2.5x` for attackers and `1.0x` for defenders. Defender DMR exceptions use `2.5x`: TCSG12, Tubarão's AR-15.50, and Aruni's Mk 14 EBR. Turn off **Automatic** beside the optic selector to unlock a persistent manual override.
 
 Mouse DPI is recorded for reference but is not used to scale generated HID reports. Display resolution and aspect ratio were removed from calibration because relative HID counts are not resolution-scaled. Siege FOV affects visual/ADS feel but is not an input to this implementation: the app uses the selected per-optic ADS value directly. At the default Siege multiplier of `0.02`, `55` with `0.001` is mathematically equivalent to `2.75`, not `5.5`; the UI displays this so the literal configuration is never silently reinterpreted.
 
-Research references for the estimates are the current [all-weapons attachment guide](https://www.youtube.com/watch?v=4YhYKtgUrDY), a recent [F2 vertical-versus-angled-grip comparison](https://www.youtube.com/watch?v=ViHd3gEKbEY), Ubisoft's [multi-stage recoil description](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/1k3EGuOGxKxe6mhOlFBhbj/weapon-recoil-overhaul), [input sensitivity formula](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/6kY6b5JByBY3P6vQWWinla/fov-and-input-sensitivity), [Y9S1 grip modifiers](https://www.ubisoft.com/es-es/game/rainbow-six/siege/news-updates/3jBlCdtRBQx2sCjmY2umNu/y9s1-designers-notes), [Y11S3 Split Fire attachment restrictions](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/seasons/splitfire), the supplied 2025 recoil/attachment tables, and the maintained [weapon-statistics dataset](https://github.com/hanslhansl/Rainbow-Six-Siege-Weapon-Statistics). Research was checked on 2026-09-17; re-check after game balance updates.
+Research references for the estimates are the current [all-weapons attachment guide](https://www.youtube.com/watch?v=4YhYKtgUrDY), a recent [F2 vertical-versus-angled-grip comparison](https://www.youtube.com/watch?v=ViHd3gEKbEY), Ubisoft's [multi-stage recoil description](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/1k3EGuOGxKxe6mhOlFBhbj/weapon-recoil-overhaul), [input sensitivity formula](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/6kY6b5JByBY3P6vQWWinla/fov-and-input-sensitivity), [Y9S1 grip modifiers](https://www.ubisoft.com/es-es/game/rainbow-six/siege/news-updates/3jBlCdtRBQx2sCjmY2umNu/y9s1-designers-notes), [Y11S3 Split Fire attachment restrictions](https://www.ubisoft.com/en-us/game/rainbow-six/siege/news-updates/seasons/splitfire), the supplied 2025 recoil/attachment tables, and the maintained [weapon-statistics dataset](https://github.com/hanslhansl/Rainbow-Six-Siege-Weapon-Statistics). The source hierarchy, current balance overrides, and calculation invariants are recorded in [`docs/RECOIL_DATA_SOURCES.md`](docs/RECOIL_DATA_SOURCES.md). Research was checked on 2026-09-19; re-check after game balance updates.
 
 ## Expected Windows enumeration
 

@@ -27,7 +27,7 @@ This has three practical benefits:
 5. Start the desktop app and select **Scan for device**.
 
 The app still recognizes the legacy VID families during migration, but it accepts
-a serial port only after receiving `PONG:RAINBOW-RECOIL:3`. If registry discovery
+a serial port only after receiving `PONG:RAINBOW-RECOIL:4`. If registry discovery
 is unavailable, it tries present COM ports in numeric order and applies the same
 handshake.
 

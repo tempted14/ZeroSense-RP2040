@@ -7,7 +7,10 @@ var tests = new (string Name, Action Run)[]
 {
     ("catalog is complete and unique", CatalogIsCompleteAndUnique),
     ("automatic profiles have bounded patterns", AutomaticProfilesHaveBoundedPatterns),
+    ("current recoil source facts remain pinned", CurrentRecoilSourceFactsArePinned),
     ("custom timing controls generated pattern timing and length", CustomPatternTimingIsConsistent),
+    ("pattern rate and attachment math are consistent", PatternMathIsConsistent),
+    ("integer shot scheduling has no systematic RPM drift", RpmSchedulingHasNoSystematicDrift),
     ("generated pattern stages transition smoothly", GeneratedPatternStagesAreContinuous),
     ("per-weapon output strength is isolated and bounded", WeaponOutputStrengthIsSafe),
     ("experimental tuning is isolated and stage-specific", ExperimentalTuningIsIsolated),
@@ -29,6 +32,8 @@ var tests = new (string Name, Action Run)[]
     ("attachment math is applied once", AttachmentMathIsConsistent),
     ("serial packets preserve framing and UTF-8", SerialPacketsAreValid),
     ("all commands and pattern chunks encode exactly", SerialProtocolCoverageIsComplete),
+    ("configuration hashes and transactions are deterministic", ConfigurationTransactionsAreDeterministic),
+    ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
     ("configuration validator rejects unsafe output", ConfigurationValidationFailsClosed),
     ("firmware status identifies both boards and proxy mouse state", FirmwareStatusIsParsed),
     ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath)
@@ -83,6 +88,27 @@ static void AutomaticProfilesHaveBoundedPatterns()
         "all pattern points should be finite and representable");
 }
 
+static void CurrentRecoilSourceFactsArePinned()
+{
+    var f2 = WeaponPatternCatalog.Find("F2")!;
+    Equal(978, f2.RoundsPerMinute, "measured F2 RPM");
+    Equal(25, f2.MagazineSize, "F2 magazine");
+    Equal("Vertical grip", f2.Grip, "F2 Y11S1 restored grip");
+
+    var mk17 = WeaponPatternCatalog.Find("MK17 CQB")!;
+    Equal(584, mk17.RoundsPerMinute, "measured MK17 RPM");
+    Equal(20, mk17.MagazineSize, "Y10S3 MK17 magazine");
+
+    var smg12 = WeaponPatternCatalog.Find("SMG-12")!;
+    Equal(1273, smg12.RoundsPerMinute, "measured SMG-12 RPM");
+    Equal(22, smg12.MagazineSize, "Y11S3 SMG-12 magazine");
+
+    var reaper = WeaponPatternCatalog.Find("REAPER-MK2")!;
+    Equal(764, reaper.RoundsPerMinute, "measured Reaper RPM");
+    Equal(33, reaper.MagazineSize, "Reaper magazine");
+    Equal(PatternShape.ReaperStages, reaper.Shape, "Y11S2.3 Reaper stage model");
+}
+
 static void CustomPatternTimingIsConsistent()
 {
     var fast = WeaponPatternCatalog.CreateEstimatedPattern(
@@ -116,6 +142,69 @@ static void CustomPatternTimingIsConsistent()
     Equal(600, hydrated.RoundsPerMinute, "attachment hydration preserves custom RPM");
 }
 
+static void PatternMathIsConsistent()
+{
+    var fast = WeaponPatternCatalog.CreateEstimatedPattern(
+        "F2", 1.0, 0.0, "No recoil-control barrel", 1000, 20);
+    var slow = WeaponPatternCatalog.CreateEstimatedPattern(
+        "F2", 1.0, 0.0, "No recoil-control barrel", 500, 20);
+    var fastRate = fast.Average(point => point.Vertical) * 1000.0;
+    var slowRate = slow.Average(point => point.Vertical) * 500.0;
+    Near(fastRate, slowRate, 0.01, "RPM conversion preserves displacement per minute");
+
+    var noMuzzle = WeaponPatternCatalog.CreateEstimatedPattern(
+        "Custom automatic", 1.0, 0.0, "No recoil-control barrel", 600, 8);
+    var muzzle = WeaponPatternCatalog.CreateEstimatedPattern(
+        "Custom automatic", 1.0, 0.0, "Muzzle brake", 600, 8);
+    Near(
+        noMuzzle[0].Vertical * RecoilAttachmentModel.MuzzleBrakeFirstShotMultiplier,
+        muzzle[0].Vertical,
+        0.0001,
+        "muzzle brake applies once to the first point");
+    for (var index = 1; index < noMuzzle.Length; ++index)
+    {
+        Near(noMuzzle[index].Vertical, muzzle[index].Vertical, 0.0001,
+            $"muzzle brake leaves point {index} unchanged");
+    }
+
+    var noCompensator = WeaponPatternCatalog.CreateEstimatedPattern(
+        "R4-C", 1.0, 0.0, "No recoil-control barrel", 859, 25);
+    var compensator = WeaponPatternCatalog.CreateEstimatedPattern(
+        "R4-C", 1.0, 0.0, "Compensator", 859, 25);
+    for (var index = 0; index < noCompensator.Length; ++index)
+    {
+        Near(
+            Math.Abs(noCompensator[index].Horizontal) *
+                RecoilAttachmentModel.CompensatorHorizontalMultiplier,
+            Math.Abs(compensator[index].Horizontal),
+            0.0001,
+            $"compensator horizontal factor at point {index}");
+    }
+}
+
+static void RpmSchedulingHasNoSystematicDrift()
+{
+    foreach (var rpm in new[] { 584, 978, 1273, 2000 })
+    {
+        uint remainder = 0;
+        long elapsedMicroseconds = 0;
+        for (var shot = 0; shot < rpm; ++shot)
+        {
+            var interval = 60_000_000U / (uint)rpm;
+            remainder += 60_000_000U % (uint)rpm;
+            if (remainder >= rpm)
+            {
+                remainder -= (uint)rpm;
+                ++interval;
+            }
+            elapsedMicroseconds += interval;
+        }
+
+        Equal(60_000_000L, elapsedMicroseconds, $"{rpm} RPM one-minute phase sum");
+        Equal(0U, remainder, $"{rpm} RPM remainder closes after one cycle");
+    }
+}
+
 static void GeneratedPatternStagesAreContinuous()
 {
     var largeMagazine = WeaponPatternCatalog.CreateEstimatedPattern(
@@ -124,6 +213,8 @@ static void GeneratedPatternStagesAreContinuous()
         "BEARING 9", 1.0, 0.0, "Flash hider", 1098, 25);
     var repeat = WeaponPatternCatalog.CreateEstimatedPattern(
         "M249", 1.0, 0.0, "Flash hider", 650, 100);
+    var reaper = WeaponPatternCatalog.CreateEstimatedPattern(
+        "REAPER-MK2", 1.0, 0.0, "Flash hider", 764, 33);
 
     True(largeMagazine.SequenceEqual(repeat),
         "pattern generation must remain deterministic");
@@ -133,6 +224,12 @@ static void GeneratedPatternStagesAreContinuous()
         "two-stage transitions should be blended across adjacent shots");
     True(MaxHorizontalStepRelativeToVertical(twoStage) < 0.15,
         "two-stage horizontal transitions should not introduce a boundary jump");
+    True(MaxRelativeVerticalStep(reaper) < 0.08,
+        "published Reaper stage boundaries should remain smoothly blended");
+    True(reaper[2].Vertical < reaper[3].Vertical &&
+         reaper[9].Vertical < reaper[10].Vertical &&
+         reaper[24].Vertical < reaper[25].Vertical,
+        "Reaper stages should begin at published bullet indices 3, 10, and 25");
 }
 
 static double MaxRelativeVerticalStep(IReadOnlyList<RecoilPatternPoint> pattern)
@@ -586,23 +683,48 @@ static void CustomProfilesRemainVisible()
 static void SerialPacketsAreValid()
 {
     var stop = SerialProtocol.BuildCommand("STOP");
-    Equal(3, stop.Length, "empty command packet length");
-    Equal((byte)0xF2, stop[2], "STOP command id");
+    Equal(9, stop.Length, "empty command packet length");
+    Equal(SerialProtocol.FrameMagicFirst, stop[0], "first sync byte");
+    Equal(SerialProtocol.FrameMagicSecond, stop[1], "second sync byte");
+    Equal(SerialProtocol.FrameVersion, stop[2], "frame version");
+    Equal((byte)0xF2, stop[5], "STOP command id");
+    Equal((byte)0, stop[6], "STOP payload length");
+    Equal(
+        SerialProtocol.ComputeCrc16(stop.AsSpan(2, stop.Length - 4)),
+        BinaryPrimitives.ReadUInt16LittleEndian(stop.AsSpan(stop.Length - 2)),
+        "STOP CRC");
 
     var profile = new WeaponProfile
     {
-        Name = string.Concat(Enumerable.Repeat("武器🎯", 30)),
+        Name = "武器🎯 profile",
         WeaponType = "SMG",
         VerticalCompensation = 1.25,
         RoundsPerMinute = 900,
         Pattern = [new RecoilPatternPoint(0.5f, 1.0f)]
     };
     var packet = SerialProtocol.BuildProfileCommand(profile, CompensationMode.WeaponPattern);
-    var payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(packet.AsSpan(0, 2));
-    Equal(packet.Length - 3, payloadLength, "declared payload length");
+    var payloadLength = packet[6];
+    Equal(packet.Length - 9, payloadLength, "declared payload length");
     True(payloadLength <= SerialProtocol.MaximumPayloadLength, "payload bound");
-    var decodedName = new UTF8Encoding(false, true).GetString(packet.AsSpan(17));
-    True(decodedName.Length > 0, "truncated name remains valid UTF-8");
+    var decodedName = new UTF8Encoding(false, true).GetString(packet.AsSpan(21, payloadLength - 14));
+    Equal(profile.Name, decodedName, "profile name remains exact valid UTF-8");
+    True(FirmwareContract.ProfileAcknowledgementMatches(
+        "PROFILE:武器🎯 profile:MODE=PATTERN:V=1.250:H=0.000:RPM=900:POINTS=1",
+        profile,
+        CompensationMode.WeaponPattern),
+        "UTF-8 profile acknowledgement matches the complete exact line");
+    True(!FirmwareContract.ProfileAcknowledgementMatches(
+        "PROFILE:other:MODE=PATTERN:V=1.250:H=0.000:RPM=900:POINTS=1",
+        profile,
+        CompensationMode.WeaponPattern),
+        "a different profile name cannot satisfy exact readback");
+
+    profile.Name = string.Concat(Enumerable.Repeat("武器🎯", 30));
+    Throws<ArgumentOutOfRangeException>(() =>
+        SerialProtocol.BuildProfileCommand(profile, CompensationMode.WeaponPattern));
+    profile.Name = "unsafe\nname";
+    Throws<ArgumentException>(() =>
+        SerialProtocol.BuildProfileCommand(profile, CompensationMode.WeaponPattern));
 
     Throws<ArgumentOutOfRangeException>(() =>
         SerialProtocol.BuildCommand("PROFILE", new string('x', 64)));
@@ -620,27 +742,32 @@ static void SerialProtocolCoverageIsComplete()
         ["PATTERN"] = 0xF5,
         ["RAPID_FIRE"] = 0xF6,
         ["KEEPALIVE"] = 0xF7,
+        ["ARM_LEASE"] = 0xF8,
+        ["CONFIG_BEGIN"] = 0xF9,
+        ["CONFIG_COMMIT"] = 0xFA,
+        ["CONFIG_ABORT"] = 0xFB,
+        ["STATUS"] = 0xFC,
         ["RESET"] = 0xFF
     };
     foreach (var (name, identifier) in commands)
     {
         var packet = SerialProtocol.BuildCommand(name);
-        Equal(3, packet.Length, $"{name} packet length");
-        Equal((ushort)0, BinaryPrimitives.ReadUInt16LittleEndian(packet), $"{name} payload length");
-        Equal(identifier, packet[2], $"{name} identifier");
+        Equal(9, packet.Length, $"{name} packet length");
+        Equal((byte)0, packet[6], $"{name} payload length");
+        Equal(identifier, packet[5], $"{name} identifier");
     }
     Throws<ArgumentException>(() => SerialProtocol.BuildCommand("UNKNOWN"));
     Throws<ArgumentOutOfRangeException>(() =>
         SerialProtocol.BuildSensitivityCommand(new SensitivityScale(float.NaN, 1.0f)));
     var rapid = SerialProtocol.BuildRapidFireCommand(true, 480);
-    Equal((byte)0xF6, rapid[2], "rapid-fire command identifier");
-    Equal((byte)1, rapid[3], "rapid-fire enabled flag");
-    Equal((ushort)480, BinaryPrimitives.ReadUInt16LittleEndian(rapid.AsSpan(4, 2)),
+    Equal((byte)0xF6, rapid[5], "rapid-fire command identifier");
+    Equal((byte)1, rapid[7], "rapid-fire enabled flag");
+    Equal((ushort)480, BinaryPrimitives.ReadUInt16LittleEndian(rapid.AsSpan(8, 2)),
         "rapid-fire RPM");
     Throws<ArgumentOutOfRangeException>(() => SerialProtocol.BuildRapidFireCommand(true, 2000));
 
     var points = Enumerable.Range(0, 31)
-        .Select(index => new RecoilPatternPoint(index == 0 ? 200.0f : index / 10.0f, index / 5.0f))
+        .Select(index => new RecoilPatternPoint(index == 0 ? 127.0f : index / 10.0f, index / 5.0f))
         .ToArray();
     var profile = new WeaponProfile
     {
@@ -651,12 +778,12 @@ static void SerialProtocolCoverageIsComplete()
         Pattern = points
     };
     var profilePacket = SerialProtocol.BuildProfileCommand(profile, CompensationMode.WeaponPattern);
-    Equal((byte)CompensationMode.WeaponPattern, profilePacket[4], "profile mode");
-    Equal((byte)31, profilePacket[16], "declared pattern count");
+    Equal((byte)CompensationMode.WeaponPattern, profilePacket[8], "profile mode");
+    Equal((byte)31, profilePacket[20], "declared pattern count");
     var experimentalPacket = SerialProtocol.BuildProfileCommand(profile, CompensationMode.Experimental);
-    Equal((byte)CompensationMode.WeaponPattern, experimentalPacket[4],
+    Equal((byte)CompensationMode.WeaponPattern, experimentalPacket[8],
         "experimental mode uses firmware-compatible pattern mode");
-    Equal((byte)31, experimentalPacket[16], "experimental declared pattern count");
+    Equal((byte)31, experimentalPacket[20], "experimental declared pattern count");
 
     var chunks = SerialProtocol.BuildPatternCommands(profile);
     Equal(3, chunks.Count, "pattern chunk count");
@@ -665,16 +792,113 @@ static void SerialProtocolCoverageIsComplete()
     for (var index = 0; index < chunks.Count; index++)
     {
         var packet = chunks[index];
-        var payloadLength = BinaryPrimitives.ReadUInt16LittleEndian(packet);
-        Equal(packet.Length - 3, (int)payloadLength, $"chunk {index} payload framing");
+        var payloadLength = packet[6];
+        Equal(packet.Length - 9, (int)payloadLength, $"chunk {index} payload framing");
         True(payloadLength <= SerialProtocol.MaximumPayloadLength, $"chunk {index} payload bound");
-        Equal((byte)0xF5, packet[2], $"chunk {index} identifier");
-        Equal((byte)1, packet[3], $"chunk {index} version");
-        Equal(expectedOffsets[index], packet[4], $"chunk {index} offset");
-        Equal(expectedCounts[index], packet[5], $"chunk {index} count");
+        Equal((byte)0xF5, packet[5], $"chunk {index} identifier");
+        Equal((byte)1, packet[7], $"chunk {index} version");
+        Equal(expectedOffsets[index], packet[8], $"chunk {index} offset");
+        Equal(expectedCounts[index], packet[9], $"chunk {index} count");
     }
-    Equal(short.MaxValue - 255, BinaryPrimitives.ReadInt16LittleEndian(chunks[0].AsSpan(6, 2)),
-        "positive Q8.8 values clamp below Int16 overflow");
+    Equal(short.MaxValue - 255, BinaryPrimitives.ReadInt16LittleEndian(chunks[0].AsSpan(10, 2)),
+        "positive Q8.8 boundary is transferred exactly");
+
+    profile.Pattern[0] = new RecoilPatternPoint(200.0f, 1.0f);
+    Throws<ArgumentOutOfRangeException>(() => SerialProtocol.BuildPatternCommands(profile));
+    profile.Pattern[0] = new RecoilPatternPoint(1.0f, 1.0f);
+    profile.RoundsPerMinute = FirmwareContract.MaximumPatternRoundsPerMinute + 1;
+    Throws<ArgumentOutOfRangeException>(() =>
+        SerialProtocol.BuildProfileCommand(profile, CompensationMode.WeaponPattern));
+}
+
+static void ConfigurationTransactionsAreDeterministic()
+{
+    var profile = new WeaponProfile
+    {
+        Name = "A",
+        VerticalCompensation = 1.25,
+        HorizontalCompensation = -0.5,
+        BurstProgression = 7
+    };
+    var scale = new SensitivityScale(0.5f, 2.0f);
+    var hash = SerialProtocol.ComputeConfigurationHash(
+        profile,
+        CompensationMode.General,
+        scale,
+        true,
+        600);
+    Equal(0x2C0171E1u, hash, "independent FNV-1a vector");
+    Equal(hash, SerialProtocol.ComputeConfigurationHash(
+        profile, CompensationMode.General, scale, true, 600), "stable hash");
+
+    var begin = SerialProtocol.BuildConfigurationBeginCommand(0x12345678, hash);
+    Equal((byte)0xF9, begin[5], "begin command");
+    Equal((byte)9, begin[6], "begin payload length");
+    Equal(SerialProtocol.ConfigurationSchemaVersion, begin[7], "configuration schema");
+    Equal(0x12345678u, BinaryPrimitives.ReadUInt32LittleEndian(begin.AsSpan(8, 4)),
+        "begin transaction ID");
+    Equal(hash, BinaryPrimitives.ReadUInt32LittleEndian(begin.AsSpan(12, 4)),
+        "begin expected hash");
+    True(FirmwareContract.CommittedStatusMatches(
+        $"STATUS:HASH={hash:X8}:TX=IDLE:FIRE=OFF", hash),
+        "status recovers a lost commit acknowledgement only for the exact idle hash");
+    True(!FirmwareContract.CommittedStatusMatches(
+        $"STATUS:HASH={hash:X8}:TX=ACTIVE:FIRE=OFF", hash),
+        "active transaction cannot be mistaken for a recovered commit");
+
+    profile.HorizontalCompensation = -0.25;
+    True(hash != SerialProtocol.ComputeConfigurationHash(
+        profile, CompensationMode.General, scale, true, 600),
+        "material configuration change must alter hash");
+}
+
+static void MeasuredProfilePacksAreExact()
+{
+    var directory = Path.Combine(Path.GetTempPath(), $"zerosense-measured-{Guid.NewGuid():N}");
+    Directory.CreateDirectory(directory);
+    try
+    {
+        File.WriteAllText(Path.Combine(directory, "f2.json"), """
+        {
+          "schemaVersion": 1,
+          "gameBuild": "test-build",
+          "source": "controlled range capture",
+          "profiles": [{
+            "weapon": "F2",
+            "grip": "Vertical grip",
+            "barrel": "Flash hider",
+            "optic": "1.0x",
+            "roundsPerMinute": 980,
+            "measuredAtUtc": "2026-09-19T00:00:00Z",
+            "points": [
+              { "horizontal": 0.25, "vertical": 1.5 },
+              { "horizontal": -0.5, "vertical": 1.75 }
+            ]
+          }]
+        }
+        """);
+        var profiles = new List<WeaponProfile>
+        {
+            new("F2", "Assault Rifle", ["Twitch"], 1.0, 0, 0,
+                "Vertical grip", "Flash hider", roundsPerMinute: 980, magazineSize: 30)
+        };
+        MeasuredProfileStore.Apply(profiles, directory);
+        Equal(PatternDataQuality.Measured, profiles[0].PatternDataQuality,
+            "matching loadout quality");
+        Equal(2, profiles[0].Pattern.Length, "measured point count");
+        Equal("1.0x", profiles[0].PatternOptic, "measured optic metadata");
+        True(profiles[0].PatternSource.Contains("controlled range capture", StringComparison.Ordinal),
+            "measured provenance");
+
+        var mismatchedOptic = profiles[0].WithOpticSetup("2.5x");
+        Equal(PatternDataQuality.VideoDerivedEstimate, mismatchedOptic.PatternDataQuality,
+            "optic mismatch must not reuse measurement");
+        True(mismatchedOptic.Pattern.Length > 2, "mismatch falls back to full estimate");
+    }
+    finally
+    {
+        Directory.Delete(directory, true);
+    }
 }
 
 static void DetectionDebounceIsSafe()
@@ -833,6 +1057,15 @@ static void Equal<T>(T expected, T actual, string message)
     if (!EqualityComparer<T>.Default.Equals(expected, actual))
     {
         throw new InvalidOperationException($"{message}: expected {expected}, got {actual}");
+    }
+}
+
+static void Near(double expected, double actual, double tolerance, string message)
+{
+    if (!double.IsFinite(actual) || Math.Abs(expected - actual) > tolerance)
+    {
+        throw new InvalidOperationException(
+            $"{message}: expected {expected} +/- {tolerance}, got {actual}");
     }
 }
 

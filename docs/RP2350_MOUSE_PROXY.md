@@ -22,8 +22,9 @@ movement, eight standard buttons, vertical wheel, and horizontal pan. Rapid fire
 only substitutes the left-button bit while it is actively pulsing; other
 buttons and all movement continue to pass through.
 
-The firmware parses normal HID report descriptors, including report IDs and
-8/16/32-bit relative fields. If a boot-capable mouse has an unparseable or
+The firmware parses up to four mouse HID interfaces and their report layouts,
+including split button/movement report IDs and 8/16/32-bit relative fields.
+Movement-only IDs preserve button state from button-only IDs. If a boot-capable mouse has an unparseable or
 oversized descriptor, it falls back to boot mouse mode. Vendor-only interfaces,
 RGB/profile programming, wireless-dongle management, and buttons above eight
 are not mirrored to Windows.
@@ -47,7 +48,7 @@ cannot change a soldered CC resistor selection in software.
 
 ## Flash the board
 
-1. Download `rainbow-recoil-rp2350-usb-c-1.2.0.uf2` from the latest release.
+1. Download `ZeroSense-RP2350-USB-C-1.3.0.uf2` from the latest release.
 2. Disconnect the mouse during the first flash.
 3. Hold `BOOT`, connect the native PC-side port, and release `BOOT` when the
    `RPI-RP2` drive appears. With the board already connected, hold `BOOT`, tap
@@ -75,15 +76,18 @@ Do this on the Windows desktop, with ZeroSense disarmed:
 3. Hold a button while moving, then unplug the mouse. Windows must receive a
    clean button release and the app must show `Physical mouse: disconnected`.
 4. Reconnect the mouse and confirm forwarding resumes.
-5. Use the app's simulator for protocol checks. The simulator intentionally
+5. Run `python tools/hil_rp2350.py COMx` for CRC/timeout recovery and identity checks;
+   add `--interactive` to validate raw device-local M1+M2 start/release. Use the
+   app's simulator for board-free protocol checks. The simulator intentionally
    produces no HID input and does not simulate electrical USB timing.
 6. Only after those checks, arm output and confirm physical motion can both add
    to and oppose the generated movement.
 
 ## Verification boundary
 
-Both firmware targets are compiled in CI, the RP2350 descriptor/mixing/status
-contracts are regression-tested, and the Windows app has a board-free protocol
+Both firmware targets are compiled in CI, the exact firmware HID decoder is
+replayed natively against boot, report-ID, split-report, 16-bit, unknown-ID,
+and malformed fixtures, and the Windows app has a board-free protocol
 simulator. A software-only test cannot validate connector power, CC resistors,
 signal integrity, or a specific mouse's descriptor. Final acceptance therefore
 requires the short physical checklist above on the actual board and mouse.

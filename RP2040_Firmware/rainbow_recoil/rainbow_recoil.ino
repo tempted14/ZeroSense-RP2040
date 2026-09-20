@@ -14,6 +14,7 @@
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
+#include "hid_report_decoder.h"
 #endif
 
 #ifndef USE_TINYUSB
@@ -29,15 +30,29 @@ enum CommandId : uint8_t {
     CMD_PATTERN     = 0xF5,
     CMD_RAPID_FIRE  = 0xF6,
     CMD_KEEPALIVE   = 0xF7,
+    CMD_ARM_LEASE   = 0xF8,
+    CMD_CONFIG_BEGIN = 0xF9,
+    CMD_CONFIG_COMMIT = 0xFA,
+    CMD_CONFIG_ABORT = 0xFB,
+    CMD_STATUS      = 0xFC,
     CMD_RESET       = 0xFF
 };
 
 static constexpr uint16_t maxCommandPayload = 63;
 static constexpr uint16_t maxPatternPoints = 160;
-// Mitigation: adaptive polling intervals (ms) - lower = higher rate
-static constexpr uint32_t POLL_IDLE_MS   = 4;    // ~250 Hz during idle
-static constexpr uint32_t POLL_NORMAL_MS = 2;    // ~500 Hz normal operation
-static constexpr uint32_t POLL_HIGH_MS   = 1;    // ~900 Hz rapid fire / active movement
+static constexpr uint16_t maxPatternRoundsPerMinute = 2000;
+static constexpr float minCompensation = -20.0f;
+static constexpr float maxCompensation = 20.0f;
+static constexpr float minVerticalCompensation = 0.0f;
+static constexpr float minSensitivityFactor = 0.05f;
+static constexpr float maxSensitivityFactor = 8.0f;
+// Adaptive standalone polling intervals in microseconds.
+static constexpr uint32_t POLL_IDLE_US   = 4000; // 250 Hz during idle
+static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
+// A 1 ms endpoint is the closest USB full-speed interval. Firmware targets
+// 1 kHz; normal host/controller overhead yields roughly 900 Hz in practice.
+static constexpr uint32_t POLL_HIGH_US   = 1000;
+static constexpr uint32_t PROXY_POLL_US  = 1000; // 1 kHz transparent RP2350 proxy
 
 // General-mode cadence variation. Pattern and rapid-fire timing use exact RPM
 // intervals so their configured shot sequence does not drift.
@@ -86,24 +101,67 @@ static VelocitySimulator sim = {
 
 static int shotsInBurst = 0;
 static uint32_t nextMovementAtUs = 0;
+static uint32_t movementIntervalRemainder = 0;
 static int32_t pendingMouseX = 0;
 static int32_t pendingMouseY = 0;
 static int32_t pendingPhysicalMouseX = 0;
 static int32_t pendingPhysicalMouseY = 0;
 static int32_t pendingPhysicalWheel = 0;
 static int32_t pendingPhysicalPan = 0;
+static int32_t scheduledCorrectionXQ16 = 0;
+static int32_t scheduledCorrectionYQ16 = 0;
+static int32_t correctionFractionXQ16 = 0;
+static int32_t correctionFractionYQ16 = 0;
+static uint16_t scheduledCorrectionFrames = 0;
+static uint32_t nextCorrectionFrameAtUs = 0;
 static bool rapidFireEnabled = false;
 static bool rapidFireActive = false;
 static bool rapidButtonDown = false;
 static bool hidStateDirty = false;
 static uint16_t rapidFireRoundsPerMinute = 0;
 static uint32_t nextRapidShotAtUs = 0;
+static uint32_t rapidIntervalRemainder = 0;
 static uint32_t lastHostKeepAliveAtMs = 0;
+
+static constexpr uint8_t configurationSchemaVersion = 1;
+static constexpr uint32_t configurationTransactionTimeoutMs = 10000;
+typedef struct {
+    char profileName[54];
+    float verticalCompensation;
+    float horizontalCompensation;
+    uint8_t burstProgression;
+    CompensationMode mode;
+    uint16_t roundsPerMinute;
+    uint16_t expectedPoints;
+    uint16_t loadedPoints;
+    int16_t horizontal[maxPatternPoints];
+    int16_t vertical[maxPatternPoints];
+    float horizontalSensitivity;
+    float verticalSensitivity;
+    bool rapidEnabled;
+    uint16_t rapidRoundsPerMinute;
+} ConfigurationSnapshot;
+
+static ConfigurationSnapshot previousConfiguration;
+static bool configurationTransactionActive = false;
+static uint32_t configurationTransactionId = 0;
+static uint32_t configurationExpectedHash = 0;
+static uint32_t configurationTransactionTouchedAtMs = 0;
 
 // Mitigation: additional global variables for adaptive polling and watchdog
 static uint32_t lastHidReportAtUs = 0;
 static const uint32_t hostWatchdogTimeoutMs = 750; // ms - matches original constant value
 static uint32_t rapidButtonReleaseAtUs = 0;
+
+#ifdef ZEROSENSE_RP2350_USB_C
+// The Windows app grants a short foreground/armed lease, but the RP2350 uses
+// the raw downstream mouse state as the only firing trigger. This keeps
+// synthesized rapid-fire releases out of the activation feedback path.
+static bool rp2350ArmLeaseEnabled = false;
+static bool rp2350TriggerLatched = false;
+static uint32_t lastRp2350ArmLeaseAtMs = 0;
+static constexpr uint32_t rp2350ArmLeaseTimeoutMs = 750;
+#endif
 
 #ifdef ZEROSENSE_RP2350_USB_C
 // The proxy descriptor keeps the standard relative-mouse packet layout but
@@ -158,39 +216,19 @@ static Adafruit_USBD_HID usbHid;
 
 #ifdef ZEROSENSE_RP2350_USB_C
 static constexpr uint8_t hostMouseDpPin = 12;
-static constexpr uint8_t maxHostMouseLayouts = 8;
-static constexpr uint8_t maxHostMouseFields = 16;
+static constexpr uint8_t maxHostMouseInterfaces = 4;
 static constexpr int32_t maxHostAccumulator = 32767;
 
-enum class HostMouseFieldKind : uint8_t {
-    Button,
-    X,
-    Y,
-    Wheel,
-    Pan
-};
-
-struct HostMouseField {
-    uint16_t bitOffset;
-    uint8_t bitSize;
-    HostMouseFieldKind kind;
-    uint8_t buttonMask;
-    bool isSigned;
-};
-
-struct HostMouseLayout {
+struct HostMouseInterface {
     bool used;
-    uint8_t reportId;
-    uint8_t fieldCount;
-    HostMouseField fields[maxHostMouseFields];
-};
-
-struct HidGlobalState {
-    uint16_t usagePage;
-    int32_t logicalMinimum;
-    uint8_t reportSize;
-    uint8_t reportCount;
-    uint8_t reportId;
+    bool connected;
+    bool bootProtocolPending;
+    uint8_t deviceAddress;
+    uint8_t instance;
+    uint8_t buttons;
+    uint16_t vid;
+    uint16_t pid;
+    ZeroSenseHid::Decoder decoder;
 };
 
 enum class MouseProxyEvent : uint8_t {
@@ -202,11 +240,7 @@ enum class MouseProxyEvent : uint8_t {
 };
 
 static Adafruit_USBH_Host usbHost;
-static HostMouseLayout hostMouseLayouts[maxHostMouseLayouts] = {};
-static uint8_t activeHostDevice = 0;
-static uint8_t activeHostInstance = 0;
-static bool hostMouseUsesBootProtocol = false;
-static bool descriptorHadMouseApplication = false;
+static HostMouseInterface hostMouseInterfaces[maxHostMouseInterfaces] = {};
 static bool hostStackStarted = false;
 
 static std::atomic<int32_t> hostMouseX{0};
@@ -218,321 +252,24 @@ static std::atomic<bool> hostMouseConnected{false};
 static std::atomic<uint16_t> hostMouseVid{0};
 static std::atomic<uint16_t> hostMousePid{0};
 static std::atomic<MouseProxyEvent> mouseProxyEvent{MouseProxyEvent::None};
-
-static int32_t signed_hid_value(uint32_t value, uint8_t bitSize) {
-    if (bitSize == 0 || bitSize >= 32) {
-        return static_cast<int32_t>(value);
-    }
-    const uint32_t signBit = 1UL << (bitSize - 1);
-    const uint32_t mask = (1UL << bitSize) - 1UL;
-    value &= mask;
-    return (value & signBit) != 0
-        ? static_cast<int32_t>(value | ~mask)
-        : static_cast<int32_t>(value);
-}
-
-static uint32_t read_hid_bits(
-    const uint8_t* report,
-    uint16_t reportLength,
-    uint16_t bitOffset,
-    uint8_t bitSize,
-    bool* valid) {
-    if (bitSize == 0 || bitSize > 32 ||
-        static_cast<uint32_t>(bitOffset) + bitSize >
-            static_cast<uint32_t>(reportLength) * 8U) {
-        *valid = false;
-        return 0;
-    }
-
-    uint32_t value = 0;
-    for (uint8_t bit = 0; bit < bitSize; ++bit) {
-        const uint16_t sourceBit = bitOffset + bit;
-        if ((report[sourceBit / 8] & (1U << (sourceBit % 8))) != 0) {
-            value |= 1UL << bit;
-        }
-    }
-    return value;
-}
-
-static HostMouseLayout* find_or_add_host_layout(uint8_t reportId) {
-    for (auto& layout : hostMouseLayouts) {
-        if (layout.used && layout.reportId == reportId) {
-            return &layout;
-        }
-    }
-    for (auto& layout : hostMouseLayouts) {
-        if (!layout.used) {
-            layout.used = true;
-            layout.reportId = reportId;
-            layout.fieldCount = 0;
-            return &layout;
-        }
-    }
-    return nullptr;
-}
-
-static bool add_host_mouse_field(
-    uint8_t reportId,
-    uint16_t bitOffset,
-    uint8_t bitSize,
-    HostMouseFieldKind kind,
-    uint8_t buttonMask,
-    bool isSigned) {
-    HostMouseLayout* layout = find_or_add_host_layout(reportId);
-    if (layout == nullptr || layout->fieldCount >= maxHostMouseFields ||
-        bitSize == 0 || bitSize > 32) {
-        return false;
-    }
-    layout->fields[layout->fieldCount++] = {
-        bitOffset,
-        bitSize,
-        kind,
-        buttonMask,
-        isSigned
-    };
-    return true;
-}
-
-static uint32_t hid_item_value(const uint8_t* data, uint8_t size) {
-    uint32_t value = 0;
-    for (uint8_t index = 0; index < size; ++index) {
-        value |= static_cast<uint32_t>(data[index]) << (index * 8);
-    }
-    return value;
-}
-
-static int32_t hid_item_signed_value(const uint8_t* data, uint8_t size) {
-    return signed_hid_value(hid_item_value(data, size), size * 8);
-}
-
-static uint32_t qualified_usage(uint16_t usagePage, uint32_t usage) {
-    return usage > 0xffffU
-        ? usage
-        : (static_cast<uint32_t>(usagePage) << 16) | usage;
-}
+static std::atomic<bool> hostMouseFaultPending{false};
 
 // Parse the standard HID short-item format so report-ID, 16-bit movement, and
 // ordinary gaming-mouse descriptors work without assuming a fixed byte layout.
 static bool parse_host_mouse_descriptor(
+    HostMouseInterface& mouseInterface,
     const uint8_t* descriptor,
-    uint16_t descriptorLength) {
-    memset(hostMouseLayouts, 0, sizeof(hostMouseLayouts));
-    descriptorHadMouseApplication = false;
-    if (descriptor == nullptr || descriptorLength == 0) {
-        return false;
-    }
-
-    HidGlobalState global = {};
-    HidGlobalState globalStack[4] = {};
-    uint8_t globalDepth = 0;
-    uint16_t bitOffsets[256] = {};
-    uint32_t usages[24] = {};
-    uint8_t usageCount = 0;
-    uint32_t usageMinimum = 0;
-    uint32_t usageMaximum = 0;
-    bool hasUsageMinimum = false;
-    bool hasUsageMaximum = false;
-    bool mouseCollectionStack[12] = {};
-    uint8_t collectionDepth = 0;
-    bool parsedField = false;
-
-    const auto clearLocals = [&]() {
-        usageCount = 0;
-        usageMinimum = 0;
-        usageMaximum = 0;
-        hasUsageMinimum = false;
-        hasUsageMaximum = false;
-    };
-
-    uint16_t offset = 0;
-    while (offset < descriptorLength) {
-        const uint8_t prefix = descriptor[offset++];
-        if (prefix == 0xfe) {
-            if (offset + 2 > descriptorLength) {
-                return false;
-            }
-            const uint8_t longSize = descriptor[offset];
-            offset += 2;
-            if (offset + longSize > descriptorLength) {
-                return false;
-            }
-            offset += longSize;
-            continue;
-        }
-
-        uint8_t itemSize = prefix & 0x03U;
-        itemSize = itemSize == 3 ? 4 : itemSize;
-        if (offset + itemSize > descriptorLength) {
-            return false;
-        }
-        const uint8_t itemType = (prefix >> 2) & 0x03U;
-        const uint8_t itemTag = (prefix >> 4) & 0x0fU;
-        const uint32_t value = hid_item_value(descriptor + offset, itemSize);
-        const int32_t signedValue = hid_item_signed_value(descriptor + offset, itemSize);
-        offset += itemSize;
-
-        if (itemType == 1) {
-            switch (itemTag) {
-                case 0: global.usagePage = static_cast<uint16_t>(value); break;
-                case 1: global.logicalMinimum = signedValue; break;
-                case 7: global.reportSize = static_cast<uint8_t>(value); break;
-                case 8: global.reportId = static_cast<uint8_t>(value); break;
-                case 9: global.reportCount = static_cast<uint8_t>(value); break;
-                case 10:
-                    if (globalDepth < 4) {
-                        globalStack[globalDepth++] = global;
-                    }
-                    break;
-                case 11:
-                    if (globalDepth > 0) {
-                        global = globalStack[--globalDepth];
-                    }
-                    break;
-                default: break;
-            }
-            continue;
-        }
-
-        if (itemType == 2) {
-            switch (itemTag) {
-                case 0:
-                    if (usageCount < 24) {
-                        usages[usageCount++] = qualified_usage(global.usagePage, value);
-                    }
-                    break;
-                case 1:
-                    usageMinimum = qualified_usage(global.usagePage, value);
-                    hasUsageMinimum = true;
-                    break;
-                case 2:
-                    usageMaximum = qualified_usage(global.usagePage, value);
-                    hasUsageMaximum = true;
-                    break;
-                default: break;
-            }
-            continue;
-        }
-
-        if (itemType != 0) {
-            continue;
-        }
-
-        const uint32_t firstUsage = usageCount > 0
-            ? usages[0]
-            : hasUsageMinimum ? usageMinimum : 0;
-        if (itemTag == 10) {
-            const bool parentIsMouse = collectionDepth > 0 &&
-                mouseCollectionStack[collectionDepth - 1];
-            const bool isMouseApplication = value == HID_COLLECTION_APPLICATION &&
-                firstUsage == ((static_cast<uint32_t>(HID_USAGE_PAGE_DESKTOP) << 16) |
-                    HID_USAGE_DESKTOP_MOUSE);
-            descriptorHadMouseApplication = descriptorHadMouseApplication ||
-                isMouseApplication;
-            if (collectionDepth < 12) {
-                mouseCollectionStack[collectionDepth++] =
-                    parentIsMouse || isMouseApplication;
-            }
-            clearLocals();
-            continue;
-        }
-        if (itemTag == 12) {
-            if (collectionDepth > 0) {
-                --collectionDepth;
-            }
-            clearLocals();
-            continue;
-        }
-
-        if (itemTag == 8) {
-            const uint16_t startingBit = bitOffsets[global.reportId];
-            const bool inMouseCollection = collectionDepth > 0 &&
-                mouseCollectionStack[collectionDepth - 1];
-            const bool isData = (value & HID_CONSTANT) == 0;
-            const bool isVariable = (value & HID_VARIABLE) != 0;
-            const bool isRelative = (value & HID_RELATIVE) != 0;
-
-            if (inMouseCollection && isData && isVariable) {
-                for (uint8_t index = 0; index < global.reportCount; ++index) {
-                    uint32_t usage = 0;
-                    if (index < usageCount) {
-                        usage = usages[index];
-                    } else if (hasUsageMinimum && hasUsageMaximum &&
-                        usageMinimum + index <= usageMaximum) {
-                        usage = usageMinimum + index;
-                    } else if (usageCount > 0) {
-                        usage = usages[usageCount - 1];
-                    }
-
-                    const uint16_t page = static_cast<uint16_t>(usage >> 16);
-                    const uint16_t id = static_cast<uint16_t>(usage);
-                    const uint16_t fieldOffset = startingBit +
-                        static_cast<uint16_t>(index) * global.reportSize;
-                    bool added = false;
-                    if (page == HID_USAGE_PAGE_BUTTON && id >= 1 && id <= 8) {
-                        added = add_host_mouse_field(
-                            global.reportId,
-                            fieldOffset,
-                            global.reportSize,
-                            HostMouseFieldKind::Button,
-                            static_cast<uint8_t>(1U << (id - 1)),
-                            false);
-                    } else if (page == HID_USAGE_PAGE_DESKTOP && isRelative) {
-                        HostMouseFieldKind kind;
-                        bool supported = true;
-                        if (id == HID_USAGE_DESKTOP_X) {
-                            kind = HostMouseFieldKind::X;
-                        } else if (id == HID_USAGE_DESKTOP_Y) {
-                            kind = HostMouseFieldKind::Y;
-                        } else if (id == HID_USAGE_DESKTOP_WHEEL) {
-                            kind = HostMouseFieldKind::Wheel;
-                        } else {
-                            supported = false;
-                        }
-                        if (supported) {
-                            added = add_host_mouse_field(
-                                global.reportId,
-                                fieldOffset,
-                                global.reportSize,
-                                kind,
-                                0,
-                                global.logicalMinimum < 0);
-                        }
-                    } else if (page == HID_USAGE_PAGE_CONSUMER &&
-                        id == HID_USAGE_CONSUMER_AC_PAN && isRelative) {
-                        added = add_host_mouse_field(
-                            global.reportId,
-                            fieldOffset,
-                            global.reportSize,
-                            HostMouseFieldKind::Pan,
-                            0,
-                            global.logicalMinimum < 0);
-                    }
-                    parsedField = parsedField || added;
-                }
-            }
-
-            bitOffsets[global.reportId] = startingBit +
-                static_cast<uint16_t>(global.reportSize) * global.reportCount;
-        }
-        clearLocals();
-    }
-
-    return parsedField;
+    uint16_t descriptorLength,
+    bool& descriptorHadMouseApplication) {
+    return ZeroSenseHid::parseDescriptor(
+        mouseInterface.decoder,
+        descriptor,
+        descriptorLength,
+        descriptorHadMouseApplication);
 }
 
-static void configure_boot_mouse_layout() {
-    memset(hostMouseLayouts, 0, sizeof(hostMouseLayouts));
-    for (uint8_t button = 0; button < 8; ++button) {
-        add_host_mouse_field(
-            0,
-            button,
-            1,
-            HostMouseFieldKind::Button,
-            static_cast<uint8_t>(1U << button),
-            false);
-    }
-    add_host_mouse_field(0, 8, 8, HostMouseFieldKind::X, 0, true);
-    add_host_mouse_field(0, 16, 8, HostMouseFieldKind::Y, 0, true);
+static void configure_boot_mouse_layout(HostMouseInterface& mouseInterface) {
+    ZeroSenseHid::configureBootMouse(mouseInterface.decoder);
 }
 
 static void add_host_accumulator(std::atomic<int32_t>& accumulator, int32_t value) {
@@ -552,71 +289,80 @@ static void add_host_accumulator(std::atomic<int32_t>& accumulator, int32_t valu
     }
 }
 
-static bool decode_host_mouse_report(const uint8_t* report, uint16_t length) {
-    if (report == nullptr || length == 0) {
-        return false;
+static HostMouseInterface* find_host_mouse_interface(
+    uint8_t deviceAddress,
+    uint8_t instance) {
+    for (auto& mouseInterface : hostMouseInterfaces) {
+        if (mouseInterface.used &&
+            mouseInterface.deviceAddress == deviceAddress &&
+            mouseInterface.instance == instance) {
+            return &mouseInterface;
+        }
     }
+    return nullptr;
+}
 
-    const HostMouseLayout* layout = nullptr;
-    const uint8_t* payload = report;
-    uint16_t payloadLength = length;
-    for (const auto& candidate : hostMouseLayouts) {
-        if (!candidate.used) {
+static HostMouseInterface* allocate_host_mouse_interface(
+    uint8_t deviceAddress,
+    uint8_t instance) {
+    HostMouseInterface* existing = find_host_mouse_interface(deviceAddress, instance);
+    if (existing != nullptr) {
+        return existing;
+    }
+    for (auto& mouseInterface : hostMouseInterfaces) {
+        if (!mouseInterface.used) {
+            memset(&mouseInterface, 0, sizeof(mouseInterface));
+            mouseInterface.used = true;
+            mouseInterface.deviceAddress = deviceAddress;
+            mouseInterface.instance = instance;
+            return &mouseInterface;
+        }
+    }
+    return nullptr;
+}
+
+static void publish_aggregate_host_mouse_state() {
+    uint8_t buttons = 0;
+    bool connected = false;
+    uint16_t vid = 0;
+    uint16_t pid = 0;
+    for (const auto& mouseInterface : hostMouseInterfaces) {
+        if (!mouseInterface.used || !mouseInterface.connected) {
             continue;
         }
-        if (candidate.reportId == 0) {
-            if (layout == nullptr) {
-                layout = &candidate;
-            }
-        } else if (report[0] == candidate.reportId) {
-            layout = &candidate;
-            payload = report + 1;
-            payloadLength = length - 1;
-            break;
+        buttons |= mouseInterface.buttons;
+        if (!connected) {
+            vid = mouseInterface.vid;
+            pid = mouseInterface.pid;
         }
+        connected = true;
     }
-    if (layout == nullptr) {
+    hostMouseButtons.store(buttons, std::memory_order_release);
+    hostMouseVid.store(vid, std::memory_order_release);
+    hostMousePid.store(pid, std::memory_order_release);
+    hostMouseConnected.store(connected, std::memory_order_release);
+}
+
+static bool decode_host_mouse_report(
+    HostMouseInterface& mouseInterface,
+    const uint8_t* report,
+    uint16_t length) {
+    ZeroSenseHid::DecodedReport sharedDecoded = {};
+    if (!ZeroSenseHid::decodeReport(
+            mouseInterface.decoder,
+            report,
+            length,
+            sharedDecoded)) {
         return false;
     }
-
-    uint8_t buttons = 0;
-    int32_t deltaX = 0;
-    int32_t deltaY = 0;
-    int32_t wheel = 0;
-    int32_t pan = 0;
-    for (uint8_t index = 0; index < layout->fieldCount; ++index) {
-        const HostMouseField& field = layout->fields[index];
-        bool valid = true;
-        const uint32_t raw = read_hid_bits(
-            payload,
-            payloadLength,
-            field.bitOffset,
-            field.bitSize,
-            &valid);
-        if (!valid) {
-            return false;
-        }
-        const int32_t value = field.isSigned
-            ? signed_hid_value(raw, field.bitSize)
-            : static_cast<int32_t>(raw);
-        switch (field.kind) {
-            case HostMouseFieldKind::Button:
-                if (value != 0) {
-                    buttons |= field.buttonMask;
-                }
-                break;
-            case HostMouseFieldKind::X: deltaX += value; break;
-            case HostMouseFieldKind::Y: deltaY += value; break;
-            case HostMouseFieldKind::Wheel: wheel += value; break;
-            case HostMouseFieldKind::Pan: pan += value; break;
-        }
-    }
-
-    hostMouseButtons.store(buttons, std::memory_order_release);
-    add_host_accumulator(hostMouseX, deltaX);
-    add_host_accumulator(hostMouseY, deltaY);
-    add_host_accumulator(hostMouseWheel, wheel);
-    add_host_accumulator(hostMousePan, pan);
+    mouseInterface.buttons = static_cast<uint8_t>(
+        (mouseInterface.buttons & ~sharedDecoded.reportedButtonMask) |
+        (sharedDecoded.buttons & sharedDecoded.reportedButtonMask));
+    publish_aggregate_host_mouse_state();
+    add_host_accumulator(hostMouseX, sharedDecoded.deltaX);
+    add_host_accumulator(hostMouseY, sharedDecoded.deltaY);
+    add_host_accumulator(hostMouseWheel, sharedDecoded.wheel);
+    add_host_accumulator(hostMousePan, sharedDecoded.pan);
     return true;
 }
 
@@ -627,10 +373,31 @@ static void clear_host_mouse_state() {
     hostMousePan.store(0, std::memory_order_release);
     hostMouseButtons.store(0, std::memory_order_release);
     hostMouseConnected.store(false, std::memory_order_release);
-    hostMouseUsesBootProtocol = false;
-    activeHostDevice = 0;
-    activeHostInstance = 0;
-    memset(hostMouseLayouts, 0, sizeof(hostMouseLayouts));
+    memset(hostMouseInterfaces, 0, sizeof(hostMouseInterfaces));
+    hostMouseFaultPending.store(true, std::memory_order_release);
+}
+
+static void clear_host_mouse_interface(HostMouseInterface& mouseInterface) {
+    const bool wasConnected = mouseInterface.connected;
+    memset(&mouseInterface, 0, sizeof(mouseInterface));
+    publish_aggregate_host_mouse_state();
+    if (wasConnected) {
+        hostMouseFaultPending.store(true, std::memory_order_release);
+    }
+}
+
+static void connect_host_mouse_interface(HostMouseInterface& mouseInterface) {
+    uint16_t vid = 0;
+    uint16_t pid = 0;
+    tuh_vid_pid_get(mouseInterface.deviceAddress, &vid, &pid);
+    mouseInterface.vid = vid;
+    mouseInterface.pid = pid;
+    mouseInterface.connected = true;
+    mouseInterface.bootProtocolPending = false;
+    // Do not clear a queued fault from another interface here. Core 0 must
+    // observe every disconnect and revoke the arm lease before re-arming.
+    publish_aggregate_host_mouse_state();
+    mouseProxyEvent.store(MouseProxyEvent::Connected, std::memory_order_release);
 }
 
 extern "C" {
@@ -639,37 +406,39 @@ void tuh_hid_mount_cb(
     uint8_t instance,
     const uint8_t* reportDescriptor,
     uint16_t descriptorLength) {
-    if (activeHostDevice != 0) {
+    HostMouseInterface* mouseInterface = allocate_host_mouse_interface(
+        deviceAddress,
+        instance);
+    if (mouseInterface == nullptr) {
+        hostMouseFaultPending.store(true, std::memory_order_release);
+        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
         return;
     }
 
     const uint8_t protocol = tuh_hid_interface_protocol(deviceAddress, instance);
-    const bool parsed = parse_host_mouse_descriptor(reportDescriptor, descriptorLength);
+    bool descriptorHadMouseApplication = false;
+    const bool parsed = parse_host_mouse_descriptor(
+        *mouseInterface,
+        reportDescriptor,
+        descriptorLength,
+        descriptorHadMouseApplication);
     if (!parsed) {
         if (protocol == HID_ITF_PROTOCOL_MOUSE &&
             tuh_hid_set_protocol(deviceAddress, instance, HID_PROTOCOL_BOOT)) {
-            activeHostDevice = deviceAddress;
-            activeHostInstance = instance;
-            hostMouseUsesBootProtocol = true;
+            mouseInterface->bootProtocolPending = true;
             return;
         }
         if (protocol == HID_ITF_PROTOCOL_MOUSE || descriptorHadMouseApplication) {
+            hostMouseFaultPending.store(true, std::memory_order_release);
             mouseProxyEvent.store(MouseProxyEvent::Unsupported, std::memory_order_release);
         }
+        memset(mouseInterface, 0, sizeof(*mouseInterface));
         return;
     }
 
-    activeHostDevice = deviceAddress;
-    activeHostInstance = instance;
-    uint16_t vid = 0;
-    uint16_t pid = 0;
-    tuh_vid_pid_get(deviceAddress, &vid, &pid);
-    hostMouseVid.store(vid, std::memory_order_release);
-    hostMousePid.store(pid, std::memory_order_release);
-    hostMouseConnected.store(true, std::memory_order_release);
-    mouseProxyEvent.store(MouseProxyEvent::Connected, std::memory_order_release);
+    connect_host_mouse_interface(*mouseInterface);
     if (!tuh_hid_receive_report(deviceAddress, instance)) {
-        clear_host_mouse_state();
+        clear_host_mouse_interface(*mouseInterface);
         mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
     }
 }
@@ -678,29 +447,33 @@ void tuh_hid_set_protocol_complete_cb(
     uint8_t deviceAddress,
     uint8_t instance,
     uint8_t protocol) {
-    if (deviceAddress != activeHostDevice || instance != activeHostInstance ||
-        protocol != HID_PROTOCOL_BOOT || !hostMouseUsesBootProtocol) {
+    HostMouseInterface* mouseInterface = find_host_mouse_interface(
+        deviceAddress,
+        instance);
+    if (mouseInterface == nullptr || protocol != HID_PROTOCOL_BOOT ||
+        !mouseInterface->bootProtocolPending) {
         return;
     }
 
-    configure_boot_mouse_layout();
-    uint16_t vid = 0;
-    uint16_t pid = 0;
-    tuh_vid_pid_get(deviceAddress, &vid, &pid);
-    hostMouseVid.store(vid, std::memory_order_release);
-    hostMousePid.store(pid, std::memory_order_release);
-    hostMouseConnected.store(true, std::memory_order_release);
-    mouseProxyEvent.store(MouseProxyEvent::Connected, std::memory_order_release);
+    configure_boot_mouse_layout(*mouseInterface);
+    connect_host_mouse_interface(*mouseInterface);
     if (!tuh_hid_receive_report(deviceAddress, instance)) {
-        clear_host_mouse_state();
+        clear_host_mouse_interface(*mouseInterface);
         mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
     }
 }
 
 void tuh_hid_umount_cb(uint8_t deviceAddress, uint8_t instance) {
-    if (deviceAddress == activeHostDevice && instance == activeHostInstance) {
-        clear_host_mouse_state();
-        mouseProxyEvent.store(MouseProxyEvent::Disconnected, std::memory_order_release);
+    HostMouseInterface* mouseInterface = find_host_mouse_interface(
+        deviceAddress,
+        instance);
+    if (mouseInterface != nullptr) {
+        clear_host_mouse_interface(*mouseInterface);
+        mouseProxyEvent.store(
+            hostMouseConnected.load(std::memory_order_acquire)
+                ? MouseProxyEvent::HostError
+                : MouseProxyEvent::Disconnected,
+            std::memory_order_release);
     }
 }
 
@@ -709,10 +482,13 @@ void tuh_hid_report_received_cb(
     uint8_t instance,
     const uint8_t* report,
     uint16_t length) {
-    if (deviceAddress == activeHostDevice && instance == activeHostInstance) {
-        decode_host_mouse_report(report, length);
+    HostMouseInterface* mouseInterface = find_host_mouse_interface(
+        deviceAddress,
+        instance);
+    if (mouseInterface != nullptr && mouseInterface->connected) {
+        decode_host_mouse_report(*mouseInterface, report, length);
         if (!tuh_hid_receive_report(deviceAddress, instance)) {
-            clear_host_mouse_state();
+            clear_host_mouse_interface(*mouseInterface);
             mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
         }
     }
@@ -721,17 +497,29 @@ void tuh_hid_report_received_cb(
 #endif
 
 enum class ParserState : uint8_t {
-    LengthLow,
-    LengthHigh,
+    MagicFirst,
+    MagicSecond,
+    Version,
+    SequenceLow,
+    SequenceHigh,
     Command,
+    Length,
     Payload,
-    DiscardCommand,
-    DiscardPayload
+    CrcLow,
+    CrcHigh
 };
-static ParserState parserState = ParserState::LengthLow;
-static uint16_t parserLength = 0;
-static uint16_t parserOffset = 0;
+static constexpr uint8_t frameMagicFirst = 0xA5;
+static constexpr uint8_t frameMagicSecond = 0x5A;
+static constexpr uint8_t frameVersion = 1;
+static constexpr uint32_t parserTimeoutMs = 250;
+static ParserState parserState = ParserState::MagicFirst;
+static uint8_t parserLength = 0;
+static uint8_t parserOffset = 0;
 static uint8_t parserCommand = 0;
+static uint16_t parserSequence = 0;
+static uint16_t parserCrc = 0xFFFF;
+static uint16_t parserReceivedCrc = 0;
+static uint32_t parserFrameStartedAtMs = 0;
 static uint8_t parserPayload[maxCommandPayload + 1];
 
 // Mitigation: RNG state with entropy seeding from multiple sources
@@ -763,6 +551,13 @@ static uint16_t readUint16LittleEndian(const uint8_t* source) {
         (static_cast<uint16_t>(source[1]) << 8);
 }
 
+static uint32_t readUint32LittleEndian(const uint8_t* source) {
+    return static_cast<uint32_t>(source[0]) |
+        (static_cast<uint32_t>(source[1]) << 8) |
+        (static_cast<uint32_t>(source[2]) << 16) |
+        (static_cast<uint32_t>(source[3]) << 24);
+}
+
 static int16_t readInt16LittleEndian(const uint8_t* source) {
     return static_cast<int16_t>(readUint16LittleEndian(source));
 }
@@ -777,12 +572,39 @@ static uint32_t get_jittered_interval(uint32_t base_us) {
     return std::max<uint32_t>(interval, 1U);
 }
 
+// Carry the fractional microseconds instead of always rounding an RPM period
+// down. Across exactly `roundsPerMinute` intervals, the returned values sum to
+// exactly 60,000,000 us, so phase-locked scheduling has no systematic drift.
+static uint32_t next_rpm_interval(
+    uint16_t roundsPerMinute,
+    uint32_t& remainderAccumulator) {
+    if (roundsPerMinute == 0) {
+        return 1;
+    }
+
+    const uint32_t base = 60000000UL / roundsPerMinute;
+    remainderAccumulator += 60000000UL % roundsPerMinute;
+    if (remainderAccumulator >= roundsPerMinute) {
+        remainderAccumulator -= roundsPerMinute;
+        return base + 1U;
+    }
+    return base;
+}
+
 static void reset_movement_state() {
     shotsInBurst = 0;
+    movementIntervalRemainder = 0;
+    rapidIntervalRemainder = 0;
     fractionalMouseX = 0.0f;
     fractionalMouseY = 0.0f;
     pendingMouseX = 0;
     pendingMouseY = 0;
+    scheduledCorrectionXQ16 = 0;
+    scheduledCorrectionYQ16 = 0;
+    correctionFractionXQ16 = 0;
+    correctionFractionYQ16 = 0;
+    scheduledCorrectionFrames = 0;
+    nextCorrectionFrameAtUs = 0;
     sim.velocityX = 0.0f;
     sim.velocityY = 0.0f;
     sim.accelerating = false;
@@ -802,11 +624,183 @@ static void stop_output() {
     reset_movement_state();
 }
 
+static int32_t round_q16_to_integer(int32_t value) {
+    return value >= 0
+        ? (value + 32768) / 65536
+        : (value - 32768) / 65536;
+}
+
+// A normally completed pattern is different from an emergency STOP. Preserve
+// every whole-count delta already queued for HID, and quantize the final
+// sub-count residue once, instead of clearing the last scheduled correction.
+static void complete_pattern_output() {
+    if (!fireActive) {
+        return;
+    }
+
+    pendingMouseX += round_q16_to_integer(correctionFractionXQ16);
+    pendingMouseY += round_q16_to_integer(correctionFractionYQ16);
+    correctionFractionXQ16 = 0;
+    correctionFractionYQ16 = 0;
+    scheduledCorrectionXQ16 = 0;
+    scheduledCorrectionYQ16 = 0;
+    scheduledCorrectionFrames = 0;
+    nextCorrectionFrameAtUs = 0;
+    sim.velocityX = 0.0f;
+    sim.velocityY = 0.0f;
+    sim.accelerating = false;
+    fireActive = false;
+    rapidFireActive = false;
+    set_rapid_button(false);
+    Serial.println("STOP:PATTERN_COMPLETE");
+}
+
+static void capture_configuration(ConfigurationSnapshot& snapshot) {
+    memcpy(snapshot.profileName, activeProfileName, sizeof(activeProfileName));
+    snapshot.verticalCompensation = activeVerticalCompensation;
+    snapshot.horizontalCompensation = activeHorizontalCompensation;
+    snapshot.burstProgression = activeBurstProgression;
+    snapshot.mode = activeMode;
+    snapshot.roundsPerMinute = activeRoundsPerMinute;
+    snapshot.expectedPoints = expectedPatternPoints;
+    snapshot.loadedPoints = loadedPatternPoints;
+    memcpy(snapshot.horizontal, patternHorizontal, sizeof(patternHorizontal));
+    memcpy(snapshot.vertical, patternVertical, sizeof(patternVertical));
+    snapshot.horizontalSensitivity = horizontalSensitivityFactor;
+    snapshot.verticalSensitivity = verticalSensitivityFactor;
+    snapshot.rapidEnabled = rapidFireEnabled;
+    snapshot.rapidRoundsPerMinute = rapidFireRoundsPerMinute;
+}
+
+static void restore_configuration(const ConfigurationSnapshot& snapshot) {
+    stop_output();
+    memcpy(activeProfileName, snapshot.profileName, sizeof(activeProfileName));
+    activeProfileName[sizeof(activeProfileName) - 1] = '\0';
+    activeVerticalCompensation = snapshot.verticalCompensation;
+    activeHorizontalCompensation = snapshot.horizontalCompensation;
+    activeBurstProgression = snapshot.burstProgression;
+    activeMode = snapshot.mode;
+    activeRoundsPerMinute = snapshot.roundsPerMinute;
+    expectedPatternPoints = snapshot.expectedPoints;
+    loadedPatternPoints = snapshot.loadedPoints;
+    memcpy(patternHorizontal, snapshot.horizontal, sizeof(patternHorizontal));
+    memcpy(patternVertical, snapshot.vertical, sizeof(patternVertical));
+    horizontalSensitivityFactor = snapshot.horizontalSensitivity;
+    verticalSensitivityFactor = snapshot.verticalSensitivity;
+    rapidFireEnabled = snapshot.rapidEnabled;
+    rapidFireRoundsPerMinute = snapshot.rapidRoundsPerMinute;
+}
+
+static void hash_byte(uint32_t& hash, uint8_t value) {
+    hash ^= value;
+    hash *= 16777619UL;
+}
+
+static void hash_uint16(uint32_t& hash, uint16_t value) {
+    hash_byte(hash, static_cast<uint8_t>(value));
+    hash_byte(hash, static_cast<uint8_t>(value >> 8));
+}
+
+static void hash_int16(uint32_t& hash, int16_t value) {
+    hash_uint16(hash, static_cast<uint16_t>(value));
+}
+
+static void hash_float(uint32_t& hash, float value) {
+    uint32_t bits = 0;
+    static_assert(sizeof(bits) == sizeof(value), "32-bit floats are required");
+    memcpy(&bits, &value, sizeof(bits));
+    hash_byte(hash, static_cast<uint8_t>(bits));
+    hash_byte(hash, static_cast<uint8_t>(bits >> 8));
+    hash_byte(hash, static_cast<uint8_t>(bits >> 16));
+    hash_byte(hash, static_cast<uint8_t>(bits >> 24));
+}
+
+static uint32_t current_configuration_hash() {
+    uint32_t hash = 2166136261UL;
+    hash_byte(hash, configurationSchemaVersion);
+    hash_byte(hash, static_cast<uint8_t>(activeMode));
+    hash_float(hash, activeVerticalCompensation);
+    hash_float(hash, activeHorizontalCompensation);
+    hash_byte(hash, activeBurstProgression);
+    hash_uint16(hash, activeMode == MODE_WEAPON_PATTERN ? activeRoundsPerMinute : 0);
+    const uint8_t pointCount = activeMode == MODE_WEAPON_PATTERN
+        ? static_cast<uint8_t>(loadedPatternPoints)
+        : 0;
+    hash_byte(hash, pointCount);
+    const uint8_t nameLength = static_cast<uint8_t>(strnlen(
+        activeProfileName,
+        sizeof(activeProfileName) - 1));
+    hash_byte(hash, nameLength);
+    for (uint8_t index = 0; index < nameLength; ++index) {
+        hash_byte(hash, static_cast<uint8_t>(activeProfileName[index]));
+    }
+    hash_float(hash, horizontalSensitivityFactor);
+    hash_float(hash, verticalSensitivityFactor);
+    hash_byte(hash, rapidFireEnabled ? 1 : 0);
+    hash_uint16(hash, rapidFireEnabled ? rapidFireRoundsPerMinute : 0);
+    for (uint8_t index = 0; index < pointCount; ++index) {
+        hash_int16(hash, patternHorizontal[index]);
+        hash_int16(hash, patternVertical[index]);
+    }
+    return hash;
+}
+
+static void rollback_configuration_transaction() {
+    if (!configurationTransactionActive) {
+        return;
+    }
+    restore_configuration(previousConfiguration);
+    configurationTransactionActive = false;
+    configurationTransactionId = 0;
+    configurationExpectedHash = 0;
+}
+
+static bool start_output() {
+    if (activeMode == MODE_WEAPON_PATTERN &&
+        loadedPatternPoints != expectedPatternPoints) {
+        fireActive = false;
+        Serial.println("ERROR:PATTERN:INCOMPLETE");
+        return false;
+    }
+
+    fireActive = true;
+    rapidFireActive = rapidFireEnabled;
+    lastHostKeepAliveAtMs = millis();
+    rng_seed();
+    set_rapid_button(false);
+    reset_movement_state();
+    nextMovementAtUs = micros();
+    nextRapidShotAtUs = nextMovementAtUs;
+    Serial.printf("START:%s\n", activeProfileName);
+    return true;
+}
+
 static void reset_parser() {
-    parserState = ParserState::LengthLow;
+    parserState = ParserState::MagicFirst;
     parserLength = 0;
     parserOffset = 0;
     parserCommand = 0;
+    parserSequence = 0;
+    parserCrc = 0xFFFF;
+    parserReceivedCrc = 0;
+    parserFrameStartedAtMs = 0;
+}
+
+static void reset_parser_preserving_magic(uint8_t currentByte) {
+    reset_parser();
+    if (currentByte == frameMagicFirst) {
+        parserFrameStartedAtMs = millis();
+        parserState = ParserState::MagicSecond;
+    }
+}
+
+static void parser_crc_byte(uint8_t value) {
+    parserCrc ^= static_cast<uint16_t>(value) << 8;
+    for (uint8_t bit = 0; bit < 8; ++bit) {
+        parserCrc = (parserCrc & 0x8000U) != 0
+            ? static_cast<uint16_t>((parserCrc << 1) ^ 0x1021U)
+            : static_cast<uint16_t>(parserCrc << 1);
+    }
 }
 
 static void print_hardware_identity() {
@@ -848,10 +842,47 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
         Serial.println("ERROR:PROFILE:VALUE");
         return false;
     }
+    if (vertical < minVerticalCompensation || vertical > maxCompensation ||
+        horizontal < minCompensation || horizontal > maxCompensation) {
+        Serial.println("ERROR:PROFILE:RANGE");
+        return false;
+    }
+    if (payload[burstOffset] > 100) {
+        Serial.println("ERROR:PROFILE:BURST_RANGE");
+        return false;
+    }
 
-    activeVerticalCompensation = std::clamp(vertical, 0.0f, 20.0f);
-    activeHorizontalCompensation = std::clamp(horizontal, -20.0f, 20.0f);
-    activeBurstProgression = std::min<uint8_t>(payload[burstOffset], 100);
+    uint8_t requestedMode = MODE_GENERAL;
+    uint16_t requestedRpm = 0;
+    uint16_t requestedPoints = 0;
+    if (is_version2) {
+        requestedMode = payload[1];
+        requestedRpm = readUint16LittleEndian(payload + 11);
+        requestedPoints = payload[13];
+        if (requestedMode > MODE_WEAPON_PATTERN ||
+            (requestedMode == MODE_WEAPON_PATTERN &&
+             (requestedRpm == 0 || requestedPoints == 0 ||
+              requestedRpm > maxPatternRoundsPerMinute ||
+              requestedPoints > maxPatternPoints)) ||
+            (requestedMode == MODE_GENERAL &&
+             (requestedRpm != 0 || requestedPoints != 0))) {
+            Serial.println("ERROR:PROFILE:MODE_RANGE");
+            return false;
+        }
+    }
+
+    const uint16_t sourceNameLength = length - nameOffset;
+    for (uint16_t index = 0; index < sourceNameLength; ++index) {
+        const uint8_t value = payload[nameOffset + index];
+        if (value < 0x20 || value == 0x7F) {
+            Serial.println("ERROR:PROFILE:NAME");
+            return false;
+        }
+    }
+
+    activeVerticalCompensation = vertical;
+    activeHorizontalCompensation = horizontal;
+    activeBurstProgression = payload[burstOffset];
     activeMode = MODE_GENERAL;
     activeRoundsPerMinute = 0;
     expectedPatternPoints = 0;
@@ -861,21 +892,12 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
     rapidFireRoundsPerMinute = 0;
     set_rapid_button(false);
 
-    if (is_version2) {
-        const uint8_t requestedMode = payload[1];
-        const uint16_t requestedRpm = readUint16LittleEndian(payload + 11);
-        const uint16_t requestedPoints = payload[13];
-        if (requestedMode == MODE_WEAPON_PATTERN &&
-            requestedRpm > 0 &&
-            requestedPoints > 0 &&
-            requestedPoints <= maxPatternPoints) {
-            activeMode = MODE_WEAPON_PATTERN;
-            activeRoundsPerMinute = requestedRpm;
-            expectedPatternPoints = requestedPoints;
-        }
+    if (is_version2 && requestedMode == MODE_WEAPON_PATTERN) {
+        activeMode = MODE_WEAPON_PATTERN;
+        activeRoundsPerMinute = requestedRpm;
+        expectedPatternPoints = requestedPoints;
     }
 
-    const uint16_t sourceNameLength = length - nameOffset;
     const uint16_t nameLength = std::min<uint16_t>(sourceNameLength, sizeof(activeProfileName) - 1);
     if (nameLength > 0) {
         memcpy(activeProfileName, payload + nameOffset, nameLength);
@@ -914,6 +936,18 @@ static bool apply_pattern_payload(const uint8_t* payload, uint16_t length) {
         return false;
     }
 
+    static constexpr int16_t minimumHorizontalQ8_8 = -127 * 256;
+    static constexpr int16_t maximumPatternQ8_8 = 127 * 256;
+    for (uint16_t index = 0; index < count; ++index) {
+        const uint16_t sourceOffset = 3 + index * 4;
+        const int16_t horizontal = readInt16LittleEndian(payload + sourceOffset);
+        const int16_t vertical = readInt16LittleEndian(payload + sourceOffset + 2);
+        if (horizontal < minimumHorizontalQ8_8 || horizontal > maximumPatternQ8_8 ||
+            vertical < 0 || vertical > maximumPatternQ8_8) {
+            Serial.println("ERROR:PATTERN:VALUE");
+            return false;
+        }
+    }
     for (uint16_t index = 0; index < count; ++index) {
         const uint16_t sourceOffset = 3 + index * 4;
         patternHorizontal[offset + index] = readInt16LittleEndian(payload + sourceOffset);
@@ -926,15 +960,16 @@ static bool apply_pattern_payload(const uint8_t* payload, uint16_t length) {
     return true;
 }
 
-// Mitigation: sensitivity with velocity-aware clamping (avoid extreme values)
+// Apply exact host-calibrated sensitivity inside the shared finite safety range.
 static void apply_sensitivity_payload(const uint8_t* payload, uint16_t length) {
     if (length == sizeof(float) * 2) {
         const float horizontal = readFloatLittleEndian(payload);
         const float vertical = readFloatLittleEndian(payload + sizeof(float));
-        if (std::isfinite(horizontal) && std::isfinite(vertical)) {
-            // Clamp to realistic DPI ranges (avoid extreme values that trigger heuristics)
-            horizontalSensitivityFactor = std::clamp(horizontal, 0.3f, 6.0f);
-            verticalSensitivityFactor = std::clamp(vertical, 0.3f, 6.0f);
+        if (std::isfinite(horizontal) && std::isfinite(vertical) &&
+            horizontal >= minSensitivityFactor && horizontal <= maxSensitivityFactor &&
+            vertical >= minSensitivityFactor && vertical <= maxSensitivityFactor) {
+            horizontalSensitivityFactor = horizontal;
+            verticalSensitivityFactor = vertical;
             Serial.printf("SENSITIVITY:H=%.3f:V=%.3f\n", horizontalSensitivityFactor, verticalSensitivityFactor);
             return;
         }
@@ -942,10 +977,14 @@ static void apply_sensitivity_payload(const uint8_t* payload, uint16_t length) {
 
     if (length == sizeof(float)) {
         const float value = readFloatLittleEndian(payload);
-        if (std::isfinite(value)) {
-            horizontalSensitivityFactor = std::clamp(value, 0.3f, 6.0f);
+        if (std::isfinite(value) && value >= minSensitivityFactor &&
+            value <= maxSensitivityFactor) {
+            horizontalSensitivityFactor = value;
             verticalSensitivityFactor = horizontalSensitivityFactor;
-            Serial.printf("SENSITIVITY:H=%.3f:V=%.3f\n", value, value);
+            Serial.printf(
+                "SENSITIVITY:H=%.3f:V=%.3f\n",
+                horizontalSensitivityFactor,
+                verticalSensitivityFactor);
             return;
         }
     }
@@ -965,6 +1004,10 @@ static void apply_rapid_fire_payload(const uint8_t* payload, uint16_t length) {
         Serial.println("ERROR:RAPID_FIRE:RATE");
         return;
     }
+    if (enabled && activeMode == MODE_WEAPON_PATTERN) {
+        Serial.println("ERROR:RAPID_FIRE:MODE");
+        return;
+    }
 
     rapidFireEnabled = enabled;
     rapidFireActive = false;
@@ -977,28 +1020,23 @@ static void apply_rapid_fire_payload(const uint8_t* payload, uint16_t length) {
 static void process_command(uint8_t command, const uint8_t* payload, uint16_t length) {
     switch (command) {
         case CMD_PING:
-            Serial.println("PONG:RAINBOW-RECOIL:3");
+            Serial.println("PONG:RAINBOW-RECOIL:4");
             print_hardware_identity();
             break;
 
         case CMD_START:
-            if (activeMode == MODE_WEAPON_PATTERN &&
-                loadedPatternPoints != expectedPatternPoints) {
-                fireActive = false;
-                Serial.println("ERROR:PATTERN:INCOMPLETE");
+            if (configurationTransactionActive) {
+                Serial.println("ERROR:START:CONFIGURATION_ACTIVE");
                 break;
             }
-            fireActive = true;
-            rapidFireActive = rapidFireEnabled;
-            lastHostKeepAliveAtMs = millis();
-
-            rng_seed();
-
-            set_rapid_button(false);
-            reset_movement_state();
-            nextMovementAtUs = micros();
-            nextRapidShotAtUs = nextMovementAtUs;
-            Serial.printf("START:%s\n", activeProfileName);
+#ifdef ZEROSENSE_RP2350_USB_C
+            // RP2350 firing is gated locally from the raw downstream mouse.
+            // Accepting host START here would reintroduce the synthesized-HID
+            // feedback loop that local activation is designed to remove.
+            Serial.println("ERROR:START:LOCAL_TRIGGER_REQUIRED");
+#else
+            start_output();
+#endif
             break;
 
         case CMD_STOP:
@@ -1007,18 +1045,38 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             break;
 
         case CMD_PROFILE:
+            if (!configurationTransactionActive) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
             apply_profile_payload(payload, length);
             break;
 
         case CMD_SENSITIVITY:
+            if (!configurationTransactionActive) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
             apply_sensitivity_payload(payload, length);
             break;
 
         case CMD_PATTERN:
+            if (!configurationTransactionActive) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
             apply_pattern_payload(payload, length);
             break;
 
         case CMD_RAPID_FIRE:
+            if (!configurationTransactionActive) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
             apply_rapid_fire_payload(payload, length);
             break;
 
@@ -1027,6 +1085,128 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 Serial.println("ERROR:KEEPALIVE:FORMAT");
             } else if (fireActive) {
                 lastHostKeepAliveAtMs = millis();
+            }
+            break;
+
+        case CMD_ARM_LEASE:
+#ifdef ZEROSENSE_RP2350_USB_C
+            if (length != 1 || payload[0] > 1) {
+                Serial.println("ERROR:ARM_LEASE:FORMAT");
+            } else if (configurationTransactionActive && payload[0] != 0) {
+                Serial.println("ERROR:ARM_LEASE:CONFIGURATION_ACTIVE");
+            } else if (payload[0] == 0) {
+                const bool wasEnabled = rp2350ArmLeaseEnabled;
+                rp2350ArmLeaseEnabled = false;
+                stop_output();
+                if (wasEnabled) {
+                    Serial.println("ARM_LEASE:OFF");
+                }
+            } else if (!hostMouseConnected.load(std::memory_order_acquire)) {
+                rp2350ArmLeaseEnabled = false;
+                stop_output();
+                Serial.println("ERROR:ARM_LEASE:MOUSE_DISCONNECTED");
+            } else {
+                const bool wasEnabled = rp2350ArmLeaseEnabled;
+                rp2350ArmLeaseEnabled = true;
+                lastRp2350ArmLeaseAtMs = millis();
+                lastHostKeepAliveAtMs = lastRp2350ArmLeaseAtMs;
+                if (!wasEnabled) {
+                    Serial.println("ARM_LEASE:ON");
+                }
+            }
+#else
+            Serial.println("ERROR:ARM_LEASE:UNSUPPORTED");
+#endif
+            break;
+
+        case CMD_CONFIG_BEGIN: {
+            if (length != 9 || payload[0] != configurationSchemaVersion) {
+                Serial.println("ERROR:CONFIG:BEGIN_FORMAT");
+                break;
+            }
+            if (configurationTransactionActive) {
+                rollback_configuration_transaction();
+            }
+            stop_output();
+#ifdef ZEROSENSE_RP2350_USB_C
+            rp2350ArmLeaseEnabled = false;
+#endif
+            capture_configuration(previousConfiguration);
+            configurationTransactionId = readUint32LittleEndian(payload + 1);
+            configurationExpectedHash = readUint32LittleEndian(payload + 5);
+            configurationTransactionTouchedAtMs = millis();
+            configurationTransactionActive = true;
+            Serial.printf(
+                "CONFIG:BEGIN:TX=%08lX:HASH=%08lX\n",
+                static_cast<unsigned long>(configurationTransactionId),
+                static_cast<unsigned long>(configurationExpectedHash));
+            break;
+        }
+
+        case CMD_CONFIG_COMMIT: {
+            if (length != 8) {
+                Serial.println("ERROR:CONFIG:COMMIT_FORMAT");
+                break;
+            }
+            const uint32_t transactionId = readUint32LittleEndian(payload);
+            const uint32_t requestedHash = readUint32LittleEndian(payload + 4);
+            if (!configurationTransactionActive || transactionId != configurationTransactionId) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_ID");
+                break;
+            }
+            if (activeMode == MODE_WEAPON_PATTERN &&
+                loadedPatternPoints != expectedPatternPoints) {
+                rollback_configuration_transaction();
+                Serial.println("ERROR:CONFIG:PATTERN_INCOMPLETE");
+                break;
+            }
+            const uint32_t actualHash = current_configuration_hash();
+            if (requestedHash != configurationExpectedHash ||
+                actualHash != configurationExpectedHash) {
+                const uint32_t expectedHash = configurationExpectedHash;
+                rollback_configuration_transaction();
+                Serial.printf(
+                    "ERROR:CONFIG:HASH:EXPECTED=%08lX:ACTUAL=%08lX\n",
+                    static_cast<unsigned long>(expectedHash),
+                    static_cast<unsigned long>(actualHash));
+                break;
+            }
+            configurationTransactionActive = false;
+            configurationTransactionId = 0;
+            configurationExpectedHash = 0;
+            Serial.printf(
+                "CONFIG:COMMIT:TX=%08lX:HASH=%08lX\n",
+                static_cast<unsigned long>(transactionId),
+                static_cast<unsigned long>(actualHash));
+            break;
+        }
+
+        case CMD_CONFIG_ABORT: {
+            if (length != 4) {
+                Serial.println("ERROR:CONFIG:ABORT_FORMAT");
+                break;
+            }
+            const uint32_t transactionId = readUint32LittleEndian(payload);
+            if (!configurationTransactionActive || transactionId != configurationTransactionId) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_ID");
+                break;
+            }
+            rollback_configuration_transaction();
+            Serial.printf(
+                "CONFIG:ABORT:TX=%08lX\n",
+                static_cast<unsigned long>(transactionId));
+            break;
+        }
+
+        case CMD_STATUS:
+            if (length != 0) {
+                Serial.println("ERROR:STATUS:FORMAT");
+            } else {
+                Serial.printf(
+                    "STATUS:HASH=%08lX:TX=%s:FIRE=%s\n",
+                    static_cast<unsigned long>(current_configuration_hash()),
+                    configurationTransactionActive ? "ACTIVE" : "IDLE",
+                    fireActive ? "ON" : "OFF");
             }
             break;
 
@@ -1043,34 +1223,88 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
     }
 }
 
+static void service_configuration_transaction() {
+    if (configurationTransactionActive &&
+        static_cast<uint32_t>(millis() - configurationTransactionTouchedAtMs) >
+            configurationTransactionTimeoutMs) {
+        const uint32_t transactionId = configurationTransactionId;
+        rollback_configuration_transaction();
+        Serial.printf(
+            "CONFIG:ROLLBACK:TIMEOUT:TX=%08lX\n",
+            static_cast<unsigned long>(transactionId));
+    }
+}
+
 static void service_serial() {
+    if (parserState != ParserState::MagicFirst && parserFrameStartedAtMs != 0 &&
+        static_cast<uint32_t>(millis() - parserFrameStartedAtMs) > parserTimeoutMs) {
+        reset_parser();
+        Serial.println("ERROR:FRAME:TIMEOUT");
+    }
+
     while (Serial.available() > 0) {
         const int value = Serial.read();
         if (value < 0) { return; }
         const uint8_t byte = static_cast<uint8_t>(value);
 
         switch (parserState) {
-            case ParserState::LengthLow:
-                parserLength = byte;
-                parserState = ParserState::LengthHigh;
+            case ParserState::MagicFirst:
+                if (byte == frameMagicFirst) {
+                    parserFrameStartedAtMs = millis();
+                    parserState = ParserState::MagicSecond;
+                }
                 break;
 
-            case ParserState::LengthHigh:
-                parserLength |= static_cast<uint16_t>(byte) << 8;
-                if (parserLength > maxCommandPayload) {
-                    parserOffset = 0;
-                    parserState = ParserState::DiscardCommand;
+            case ParserState::MagicSecond:
+                if (byte == frameMagicSecond) {
+                    parserCrc = 0xFFFF;
+                    parserState = ParserState::Version;
+                } else if (byte == frameMagicFirst) {
+                    // A repeated first magic byte may be the beginning of a
+                    // valid frame; keep it instead of discarding both bytes.
+                    parserFrameStartedAtMs = millis();
                 } else {
-                    parserState = ParserState::Command;
+                    reset_parser();
                 }
+                break;
+
+            case ParserState::Version:
+                if (byte != frameVersion) {
+                    reset_parser_preserving_magic(byte);
+                    Serial.println("ERROR:FRAME:VERSION");
+                    break;
+                }
+                parser_crc_byte(byte);
+                parserState = ParserState::SequenceLow;
+                break;
+
+            case ParserState::SequenceLow:
+                parserSequence = byte;
+                parser_crc_byte(byte);
+                parserState = ParserState::SequenceHigh;
+                break;
+
+            case ParserState::SequenceHigh:
+                parserSequence |= static_cast<uint16_t>(byte) << 8;
+                parser_crc_byte(byte);
+                parserState = ParserState::Command;
                 break;
 
             case ParserState::Command:
                 parserCommand = byte;
+                parser_crc_byte(byte);
+                parserState = ParserState::Length;
+                break;
+
+            case ParserState::Length:
+                parserLength = byte;
                 parserOffset = 0;
-                if (parserLength == 0) {
-                    process_command(parserCommand, parserPayload, 0);
-                    reset_parser();
+                parser_crc_byte(byte);
+                if (parserLength > maxCommandPayload) {
+                    reset_parser_preserving_magic(byte);
+                    Serial.println("ERROR:FRAME:TOO_LARGE");
+                } else if (parserLength == 0) {
+                    parserState = ParserState::CrcLow;
                 } else {
                     parserState = ParserState::Payload;
                 }
@@ -1078,24 +1312,31 @@ static void service_serial() {
 
             case ParserState::Payload:
                 parserPayload[parserOffset++] = byte;
+                parser_crc_byte(byte);
                 if (parserOffset == parserLength) {
                     parserPayload[parserOffset] = 0;
-                    process_command(parserCommand, parserPayload, parserLength);
-                    reset_parser();
+                    parserState = ParserState::CrcLow;
                 }
                 break;
 
-            case ParserState::DiscardCommand:
-                parserOffset = 0;
-                parserState = parserLength == 0 ? ParserState::LengthLow : ParserState::DiscardPayload;
+            case ParserState::CrcLow:
+                parserReceivedCrc = byte;
+                parserState = ParserState::CrcHigh;
                 break;
 
-            case ParserState::DiscardPayload:
-                if (++parserOffset >= parserLength) {
+            case ParserState::CrcHigh: {
+                parserReceivedCrc |= static_cast<uint16_t>(byte) << 8;
+                if (parserReceivedCrc == parserCrc) {
+                    const uint8_t command = parserCommand;
+                    const uint8_t length = parserLength;
                     reset_parser();
-                    Serial.println("ERROR:FRAME:TOO_LARGE");
+                    process_command(command, parserPayload, length);
+                } else {
+                    reset_parser_preserving_magic(byte);
+                    Serial.println("ERROR:FRAME:CRC");
                 }
                 break;
+            }
         }
     }
 }
@@ -1173,6 +1414,11 @@ static uint8_t current_output_buttons() {
 }
 
 static void service_mouse_proxy_status() {
+    if (hostMouseFaultPending.exchange(false, std::memory_order_acq_rel)) {
+        rp2350ArmLeaseEnabled = false;
+        stop_output();
+    }
+
     switch (mouseProxyEvent.exchange(MouseProxyEvent::None, std::memory_order_acq_rel)) {
         case MouseProxyEvent::Connected:
             Serial.printf(
@@ -1191,6 +1437,43 @@ static void service_mouse_proxy_status() {
             break;
         case MouseProxyEvent::None:
             break;
+    }
+}
+
+static void service_rp2350_local_activation() {
+    const uint8_t rawButtons = hostMouseButtons.load(std::memory_order_acquire);
+    const bool rawAimAndFire =
+        (rawButtons & (MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT)) ==
+        (MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT);
+
+    if (!rawAimAndFire) {
+        rp2350TriggerLatched = false;
+    }
+
+    const uint32_t now = millis();
+    const bool mouseReady = hostMouseConnected.load(std::memory_order_acquire);
+    const bool leaseFresh = rp2350ArmLeaseEnabled &&
+        static_cast<uint32_t>(now - lastRp2350ArmLeaseAtMs) <=
+            rp2350ArmLeaseTimeoutMs;
+
+    if (!mouseReady || !leaseFresh) {
+        if (rp2350ArmLeaseEnabled && !leaseFresh) {
+            rp2350ArmLeaseEnabled = false;
+            Serial.println("ARM_LEASE:EXPIRED");
+        }
+        if (fireActive) {
+            stop_output();
+            Serial.println(mouseReady ? "STOP:ARM_LEASE" : "STOP:MOUSE_DISCONNECTED");
+        }
+        return;
+    }
+
+    if (rawAimAndFire && !rp2350TriggerLatched) {
+        rp2350TriggerLatched = true;
+        start_output();
+    } else if (!rawAimAndFire && fireActive) {
+        stop_output();
+        Serial.println("STOP:PHYSICAL_RELEASE");
     }
 }
 #else
@@ -1246,6 +1529,69 @@ static void queue_mouse_movement(
     pendingMouseY += queuedY;
 }
 
+static void schedule_pattern_correction(
+    float requestedDx,
+    float requestedDy,
+    uint32_t shotIntervalUs) {
+    // If scheduling was delayed, preserve every remaining sub-count by folding
+    // it into the next shot instead of dropping or clipping it.
+    scheduledCorrectionXQ16 += static_cast<int32_t>(std::lround(
+        requestedDx * horizontalSensitivityFactor * 65536.0f));
+    scheduledCorrectionYQ16 += static_cast<int32_t>(std::lround(
+        requestedDy * verticalSensitivityFactor * 65536.0f));
+    const uint32_t availableFrames = std::max<uint32_t>(
+        (shotIntervalUs + 999U) / 1000U,
+        1U);
+    scheduledCorrectionFrames = static_cast<uint16_t>(std::min<uint32_t>(
+        std::max<uint32_t>(scheduledCorrectionFrames, availableFrames),
+        1000U));
+    if (nextCorrectionFrameAtUs == 0) {
+        nextCorrectionFrameAtUs = micros();
+    }
+}
+
+static void service_scheduled_correction() {
+    if (scheduledCorrectionFrames == 0) {
+        return;
+    }
+
+    const uint32_t now = micros();
+    uint8_t serviced = 0;
+    while (scheduledCorrectionFrames > 0 &&
+        static_cast<int32_t>(now - nextCorrectionFrameAtUs) >= 0 &&
+        serviced < 4) {
+        const int32_t stepX = scheduledCorrectionXQ16 /
+            static_cast<int32_t>(scheduledCorrectionFrames);
+        const int32_t stepY = scheduledCorrectionYQ16 /
+            static_cast<int32_t>(scheduledCorrectionFrames);
+        scheduledCorrectionXQ16 -= stepX;
+        scheduledCorrectionYQ16 -= stepY;
+        --scheduledCorrectionFrames;
+
+        correctionFractionXQ16 += stepX;
+        correctionFractionYQ16 += stepY;
+        const int32_t queuedX = correctionFractionXQ16 / 65536;
+        const int32_t queuedY = correctionFractionYQ16 / 65536;
+        correctionFractionXQ16 -= queuedX * 65536;
+        correctionFractionYQ16 -= queuedY * 65536;
+        pendingMouseX += queuedX;
+        pendingMouseY += queuedY;
+        nextCorrectionFrameAtUs += 1000U;
+        ++serviced;
+    }
+
+    if (scheduledCorrectionFrames == 0) {
+        nextCorrectionFrameAtUs = 0;
+        if (fireActive && !rapidFireActive &&
+            activeMode == MODE_WEAPON_PATTERN &&
+            shotsInBurst >= loadedPatternPoints) {
+            complete_pattern_output();
+        }
+    } else if (static_cast<int32_t>(now - nextCorrectionFrameAtUs) >= 0) {
+        nextCorrectionFrameAtUs = now + 1000U;
+    }
+}
+
 static void service_hid() {
 #ifdef ZEROSENSE_RP2350_USB_C
     transfer_host_mouse_input();
@@ -1268,17 +1614,17 @@ static void service_hid() {
     // The RP2350 proxy always services the upstream HID endpoint at 1 kHz so a
     // high-polling physical mouse is not artificially reduced to the idle rate.
 #ifdef ZEROSENSE_RP2350_USB_C
-    const uint32_t poll_interval_us = POLL_HIGH_MS * 1000UL;
+    const uint32_t poll_interval_us = PROXY_POLL_US;
 #else
     // Adaptive polling for the standalone RP2040 output device.
-    uint32_t poll_interval_us = POLL_NORMAL_MS * 1000UL;
+    uint32_t poll_interval_us = POLL_NORMAL_US;
     const bool is_idle = !fireActive && !rapidFireActive;
     const bool is_high_activity = rapidFireActive || sim.accelerating;
 
     if (is_idle) {
-        poll_interval_us = POLL_IDLE_MS * 1000UL; // Reduce packet rate during inactivity
+        poll_interval_us = POLL_IDLE_US; // Reduce packet rate during inactivity
     } else if (is_high_activity) {
-        poll_interval_us = POLL_HIGH_MS * 1000UL;
+        poll_interval_us = POLL_HIGH_US;
     }
 #endif
 
@@ -1310,13 +1656,15 @@ static void service_hid() {
 }
 
 // Generate one configured recoil step.
-static void generate_movement() {
+static void generate_movement(uint32_t shotIntervalUs) {
     float vertical;
     float horizontal;
 
     if (activeMode == MODE_WEAPON_PATTERN) {
         if (shotsInBurst >= loadedPatternPoints) {
-            stop_output();
+            if (scheduledCorrectionFrames == 0) {
+                complete_pattern_output();
+            }
             return;
         }
         // Pattern values are stored as Q8.8 fixed-point (int16 / 256.0f)
@@ -1334,7 +1682,11 @@ static void generate_movement() {
         horizontal *= std::max(0.5f, reduction);
     }
 
-    queue_mouse_movement(horizontal, vertical, activeMode == MODE_GENERAL);
+    if (activeMode == MODE_WEAPON_PATTERN) {
+        schedule_pattern_correction(horizontal, vertical, shotIntervalUs);
+    } else {
+        queue_mouse_movement(horizontal, vertical, true);
+    }
 
     ++shotsInBurst;
 }
@@ -1347,17 +1699,14 @@ static void service_movement() {
 
     const uint32_t now = micros();
     if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
-        generate_movement();
+        const uint32_t interval = activeMode == MODE_WEAPON_PATTERN
+            ? next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)
+            : get_jittered_interval(8000UL);
+        generate_movement(interval);
         if (!fireActive) {
             return;
         }
 
-        const uint32_t base_interval = activeMode == MODE_WEAPON_PATTERN && activeRoundsPerMinute > 0
-            ? static_cast<uint32_t>(60000000.0f / activeRoundsPerMinute)
-            : 8000UL;
-        const uint32_t interval = activeMode == MODE_WEAPON_PATTERN
-            ? base_interval
-            : get_jittered_interval(base_interval);
         nextMovementAtUs += interval;
         if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
             nextMovementAtUs = now + interval;
@@ -1383,14 +1732,15 @@ static void service_rapid_fire() {
     // Schedule the next shot from the prior deadline to avoid cumulative drift.
     if (!rapidButtonDown && static_cast<int32_t>(now - nextRapidShotAtUs) >= 0) {
         set_rapid_button(true);
-        generate_movement();
+        const uint32_t shot_interval = next_rpm_interval(
+            rapidFireRoundsPerMinute,
+            rapidIntervalRemainder);
+        generate_movement(shot_interval);
         if (!fireActive) {
             return;
         }
         rapidButtonReleaseAtUs = now + 8000;
 
-        const uint32_t base_interval = static_cast<uint32_t>(60000000.0f / rapidFireRoundsPerMinute);
-        const uint32_t shot_interval = base_interval;
         nextRapidShotAtUs += shot_interval;
 
         if (static_cast<int32_t>(now - nextRapidShotAtUs) >= 0) {
@@ -1424,7 +1774,7 @@ void setup() {
 
     usbHid.setBootProtocol(HID_ITF_PROTOCOL_MOUSE);
     // The endpoint permits 1 ms reports; service_hid applies the 1/2/4 ms pacing.
-    usbHid.setPollInterval(POLL_HIGH_MS);
+    usbHid.setPollInterval(1);
     usbHid.setReportDescriptor(hidReportDescriptor, sizeof(hidReportDescriptor));
 
 #ifdef ZEROSENSE_RP2350_USB_C
@@ -1453,12 +1803,15 @@ void loop() {
     TinyUSBDevice.task();
 #endif
     service_serial();
+    service_configuration_transaction();
 #ifdef ZEROSENSE_RP2350_USB_C
     service_mouse_proxy_status();
+    service_rp2350_local_activation();
 #endif
     service_host_watchdog();
     service_rapid_fire();
     service_movement();
+    service_scheduled_correction();
     service_hid();
     // Send a zero-delta heartbeat while active but stationary. Never synthesize
     // movement or alter a pressed rapid-fire button state in this path.
@@ -1492,6 +1845,7 @@ void setup1() {
     configuration.pin_dp = hostMouseDpPin;
     configuration.pinout = PIO_USB_PINOUT_DPDM;
     if (!usbHost.configure_pio_usb(1, &configuration) || !usbHost.begin(1)) {
+        hostMouseFaultPending.store(true, std::memory_order_release);
         mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
         return;
     }

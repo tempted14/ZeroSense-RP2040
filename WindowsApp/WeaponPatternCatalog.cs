@@ -34,7 +34,8 @@ internal enum PatternShape
     RightDrift,
     Sway,
     Irregular,
-    TwoStage
+    TwoStage,
+    ReaperStages
 }
 
 internal sealed record WeaponPatternDefinition(
@@ -47,12 +48,12 @@ internal sealed record WeaponPatternDefinition(
 
 /// <summary>
 /// Timing and qualitative recoil classifications for current automatic weapons.
-/// RPM/capacity were checked against hanslhansl's Y11 weapon-statistics data.
-/// Barrel choices and qualitative shapes were checked against SINOOS's current
-/// all-weapon guide (YouTube video 4YhYKtgUrDY, reviewed 2026-09-15). Grip is
-/// intentionally normalized to the user's requested Vertical Grip setup.
-/// Ubisoft does not publish numeric per-shot vectors, so generated points are
-/// deliberately identified as estimates rather than exact game data.
+/// Ubisoft's Y11 release notes are authoritative for balance changes. RPM and
+/// capacity were cross-checked against hanslhansl's hand-measured Y11 dataset,
+/// with current Ubisoft changes overriding stale third-party values. Qualitative
+/// shapes remain estimates because Ubisoft does not publish numeric X/Y vectors.
+/// Reaper's stage boundaries use the published bullet indices 0, 3, 10, and 25;
+/// the magnitudes between those boundaries are explicitly estimated.
 /// </summary>
 internal static class WeaponPatternCatalog
 {
@@ -116,7 +117,7 @@ SMG-12|1273|22|Extreme|Irregular|Vertical grip|Not available
 C75 Auto|999|26|High|Irregular|Vertical grip|Not available
 SPSMG9|980|20|High|Centered|Vertical grip|Flash hider
 PCX-33|744|31|Low|Centered|Vertical grip|Flash hider
-REAPER-MK2|764|33|Normal|Sway|Vertical grip|Flash hider
+REAPER-MK2|764|33|Normal|ReaperStages|Vertical grip|Flash hider
 XK23|676|35|Normal|Sway|Vertical grip|Flash hider
 """;
 
@@ -136,7 +137,7 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
     {
         var definition = Find(weaponName);
         var effectiveRoundsPerMinute = roundsPerMinute > 0
-            ? Math.Clamp(roundsPerMinute, 1, ushort.MaxValue)
+            ? Math.Clamp(roundsPerMinute, 1, FirmwareContract.MaximumPatternRoundsPerMinute)
             : definition?.RoundsPerMinute ?? 0;
         var effectiveMagazineSize = magazineSize > 0
             ? Math.Clamp(magazineSize, 1, 160)
@@ -171,7 +172,7 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
         for (var index = 0; index < pointCount; ++index)
         {
             var progress = pointCount <= 1 ? 0.0 : index / (double)(pointCount - 1);
-            var stageScale = StageScale(progress, shape, effectiveMagazineSize >= 60);
+            var stageScale = StageScale(index, progress, shape, effectiveMagazineSize >= 60);
             var vertical = baseVerticalPerShot * stageScale;
             if (index == 0 && barrel.Equals("Muzzle brake", StringComparison.OrdinalIgnoreCase))
             {
@@ -192,9 +193,17 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
         return points;
     }
 
-    private static double StageScale(double progress, PatternShape shape, bool largeMagazine)
+    private static double StageScale(
+        int shotIndex,
+        double progress,
+        PatternShape shape,
+        bool largeMagazine)
     {
         progress = Math.Clamp(progress, 0.0, 1.0);
+        if (shape == PatternShape.ReaperStages)
+        {
+            return ReaperStageScale(shotIndex);
+        }
         if (shape == PatternShape.TwoStage)
         {
             // Preserve the two-stage character without an instantaneous jump
@@ -222,6 +231,27 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
             largeMagazine ? 1.24 : 1.18,
             largeMagazine ? 1.372 : 1.252,
             Normalize(progress, 0.76, 1.0));
+    }
+
+    private static double ReaperStageScale(int shotIndex)
+    {
+        // Ubisoft publishes the stage starts, not their numeric recoil vectors.
+        // Keep those exact boundaries while blending estimated magnitudes within
+        // each stage so the generated compensation never jumps at a boundary.
+        if (shotIndex < 3)
+        {
+            return SmoothInterpolate(0.82, 0.88, Normalize(shotIndex, 0, 2));
+        }
+        if (shotIndex < 10)
+        {
+            return SmoothInterpolate(0.90, 1.02, Normalize(shotIndex, 3, 9));
+        }
+        if (shotIndex < 25)
+        {
+            return SmoothInterpolate(1.04, 1.18, Normalize(shotIndex, 10, 24));
+        }
+
+        return SmoothInterpolate(1.20, 1.28, Normalize(shotIndex, 25, 32));
     }
 
     private static double Normalize(double value, double start, double end) =>
@@ -255,6 +285,8 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
             // A rightward weapon pull is countered with negative HID X.
             PatternShape.RightDrift => -amplitude,
             PatternShape.Sway => -Math.Sin(shotIndex * 0.72) * amplitude,
+            PatternShape.ReaperStages => -Math.Sin(shotIndex * 0.72) * amplitude *
+                SmoothInterpolate(0.55, 1.0, Normalize(shotIndex, 3, 25)),
             PatternShape.Irregular => -IrregularDirection(shotIndex) * amplitude * 1.45,
             PatternShape.TwoStage => SmoothInterpolate(
                 -0.25 * amplitude,
