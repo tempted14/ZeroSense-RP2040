@@ -23,6 +23,7 @@
     <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />
     <Compile Include="..\WindowsApp\FirmwareContract.cs" Link="Source\FirmwareContract.cs" />
     <Compile Include="..\WindowsApp\MeasuredProfileStore.cs" Link="Source\MeasuredProfileStore.cs" />
+    <Compile Include="..\WindowsApp\ReleaseUpdateService.cs" Link="Source\ReleaseUpdateService.cs" />
     <Compile Include="..\WindowsApp\IRecoilDeviceConnection.cs" Link="Source\IRecoilDeviceConnection.cs" />
     <Compile Include="..\WindowsApp\SimulatedRecoilDeviceConnection.cs" Link="Source\SimulatedRecoilDeviceConnection.cs" />
     <Compile Include="..\WindowsApp\SettingsManager.cs" Link="Source\SettingsManager.cs" />

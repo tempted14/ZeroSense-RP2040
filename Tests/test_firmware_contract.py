@@ -59,6 +59,26 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertGreater(FIRMWARE.index("service_hid();", loop_position), loop_position)
         self.assertIn("now - lastHidReportAtUs", FIRMWARE)
         self.assertIn("usbHid.setPollInterval(1)", FIRMWARE)
+        self.assertIn("METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:", FIRMWARE)
+        self.assertIn("HOST_SATURATIONS=%lu:USB_STOPS=%lu", FIRMWARE)
+        self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
+        self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
+
+    def test_upstream_disconnect_immediately_clears_generated_output(self) -> None:
+        fail_safe = re.search(
+            r"static void service_upstream_usb_fail_safe\(\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(fail_safe)
+        body = fail_safe.group("body")
+        self.assertIn("TinyUSBDevice.mounted()", body)
+        self.assertIn("rp2350ArmLeaseEnabled = false", body)
+        self.assertIn("stop_output();", body)
+        loop_position = FIRMWARE.index("void loop()")
+        fail_safe_call = FIRMWARE.index("service_upstream_usb_fail_safe();", loop_position)
+        movement_call = FIRMWARE.index("service_movement();", loop_position)
+        self.assertLess(fail_safe_call, movement_call)
 
     def test_fractional_movement_reaches_pending_reports(self) -> None:
         self.assertIn("pendingMouseX += queuedX;", FIRMWARE)
@@ -84,7 +104,7 @@ class FirmwareContractTests(unittest.TestCase):
 
     def test_zero_delta_reports_cannot_create_cursor_drift(self) -> None:
         self.assertIn(
-            "std::clamp<int32_t>(value, -100, 100)",
+            "std::clamp<int64_t>(value, -100, 100)",
             FIRMWARE,
         )
         self.assertNotIn("DELTA_NOISE_RANGE", FIRMWARE)
@@ -94,8 +114,10 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("const float scaledY = requested_dy * verticalSensitivityFactor;", FIRMWARE)
         self.assertIn("sim.velocityX = scaledX;", FIRMWARE)
         self.assertIn("sim.velocityY = scaledY;", FIRMWARE)
-        self.assertIn("fractionalMouseX += sim.velocityX;", FIRMWARE)
-        self.assertIn("fractionalMouseY += sim.velocityY;", FIRMWARE)
+        self.assertIn("fractionalMouseX += sim.velocityX * timeScale;", FIRMWARE)
+        self.assertIn("fractionalMouseY += sim.velocityY * timeScale;", FIRMWARE)
+        self.assertIn("sim.acceleration * timeScale", FIRMWARE)
+        self.assertIn("frictionForInterval", FIRMWARE)
         self.assertNotIn("raw_dx / 256.0f", FIRMWARE)
         self.assertNotIn("raw_dy / 256.0f", FIRMWARE)
         self.assertNotIn("horizontal * 100.0f", FIRMWARE)
@@ -115,15 +137,31 @@ class FirmwareContractTests(unittest.TestCase):
             "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
             body,
         )
-        self.assertIn("queue_mouse_movement(horizontal, vertical, true)", body)
+        self.assertIn("activeMode == MODE_WEAPON_PATTERN || rapidFireActive", body)
+        self.assertIn("queue_mouse_movement(horizontal, vertical, true, shotIntervalUs)", body)
         self.assertIn("service_scheduled_correction();", FIRMWARE)
+
+    def test_rapid_fire_recoil_uses_smooth_per_shot_scheduler(self) -> None:
+        movement = re.search(
+            r"static void generate_movement\(uint32_t shotIntervalUs\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(movement)
+        body = movement.group("body")
+        self.assertIn("activeMode == MODE_WEAPON_PATTERN || rapidFireActive", body)
+        self.assertIn(
+            "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
+            body,
+        )
+        self.assertIn("(shotIntervalUs + 999U) / 1000U", FIRMWARE)
 
     def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:
         self.assertIn(
             "next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)",
             FIRMWARE,
         )
-        self.assertIn("nextMovementAtUs += interval;", FIRMWARE)
+        self.assertIn("nextMovementAtUs += scheduledInterval;", FIRMWARE)
         self.assertIn(
             "next_rpm_interval(\n"
             "            rapidFireRoundsPerMinute,\n"
@@ -164,7 +202,10 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("1.2f,", FIRMWARE)
         self.assertIn("40.0f,", FIRMWARE)
         self.assertIn("0.85f,", FIRMWARE)
+        self.assertIn("GENERAL_TIMING_JITTER_ENABLED = false", FIRMWARE)
         self.assertIn("TIMING_JITTER_PCT = 8.0f", FIRMWARE)
+        self.assertIn("now - lastMovementIntegrationAtUs", FIRMWARE)
+        self.assertIn("generate_movement(integrationInterval);", FIRMWARE)
         self.assertIn("POLL_IDLE_US   = 4000", FIRMWARE)
         self.assertIn("POLL_NORMAL_US = 2000", FIRMWARE)
         self.assertIn("POLL_HIGH_US   = 1000", FIRMWARE)
@@ -206,8 +247,14 @@ class FirmwareContractTests(unittest.TestCase):
             "hostMouseX.exchange(0, std::memory_order_acq_rel)",
             FIRMWARE,
         )
-        self.assertIn("pendingMouseX + pendingPhysicalMouseX", FIRMWARE)
-        self.assertIn("pendingMouseY + pendingPhysicalMouseY", FIRMWARE)
+        self.assertIn(
+            "static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX",
+            FIRMWARE,
+        )
+        self.assertIn(
+            "static_cast<int64_t>(pendingMouseY) + pendingPhysicalMouseY",
+            FIRMWARE,
+        )
         reset = re.search(
             r"static void reset_movement_state\(\)\s*\{(?P<body>.*?)\n\}",
             FIRMWARE,

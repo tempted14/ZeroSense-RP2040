@@ -1,0 +1,38 @@
+ZeroSense quick start
+=====================
+
+This bundle contains the Windows app and firmware for both supported boards.
+You only flash ONE firmware file. Never flash an RP2350 image to an RP2040, or
+an RP2040 image to an RP2350.
+
+1. Before extracting this bundle, verify its SHA-256 value against the release's
+   SHA256SUMS.txt file. In PowerShell:
+
+     Get-FileHash -Algorithm SHA256 .\ZeroSense-<version>-Starter-Bundle.zip
+
+2. Extract the entire ZIP to a normal local folder.
+
+3. Open the Firmware folder and choose exactly one image:
+
+   - TENSTAR/Waveshare RP2040-Zero:
+     ZeroSense-RP2040-Zero-<version>.uf2
+
+   - Waveshare RP2350-USB-C with two female USB-C ports:
+     ZeroSense-RP2350-USB-C-<version>.uf2
+
+4. Put the board in boot-loader mode. Hold BOOT, tap RESET, and release BOOT
+   after the RPI-RP2 drive appears. Copy the matching UF2 onto RPI-RP2 and wait
+   for the board to restart.
+
+5. Open the ZeroSense folder and run zerosense.exe. Select Scan for device and
+   verify that the Device page identifies the board you flashed.
+
+RP2350 users: connect the PC to the USB-C port beside BOOT/RESET and the mouse
+to the opposite female port. Confirm the board's CC1/CC2 selectors are in the
+silkscreen's 1 / Source position before connecting the mouse. Read the bundled
+RP2350_MOUSE_PROXY.md guide and complete its desktop pass-through test before
+arming output.
+
+If Windows blocks or cannot launch the app, read the bundled TROUBLESHOOTING.md.
+An unsigned portable ZIP may still show a Windows reputation warning; a user
+clicking through that warning does not create an Authenticode signature.

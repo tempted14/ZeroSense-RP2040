@@ -10,13 +10,22 @@ public enum FirmwareStatusKind
     MouseConnected,
     MouseDisconnected,
     MouseUnsupported,
-    MouseHostError
+    MouseHostError,
+    TransportMetrics
 }
 
 public readonly record struct FirmwareStatusUpdate(
     FirmwareStatusKind Kind,
     ushort VendorId = 0,
-    ushort ProductId = 0);
+    ushort ProductId = 0,
+    uint HidReportsSent = 0,
+    uint HidBusyDeferrals = 0,
+    uint MaximumQueuedDelta = 0,
+    uint MaximumActiveReportGapUs = 0,
+    uint HostReportsReceived = 0,
+    uint HostDecodeErrors = 0,
+    uint HostAccumulatorSaturations = 0,
+    uint UpstreamDisconnectStops = 0);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -30,6 +39,10 @@ public static class FirmwareStatusParser
         }
 
         var value = message.Trim();
+        if (TryParseMetrics(value, out update))
+        {
+            return true;
+        }
         if (value.Equals("DEVICE:RP2040-ZERO:CDC+HID", StringComparison.Ordinal))
         {
             update = new(FirmwareStatusKind.Rp2040Device);
@@ -80,5 +93,49 @@ public static class FirmwareStatusParser
 
         update = new(FirmwareStatusKind.MouseConnected, vendorId, productId);
         return true;
+    }
+
+    private static bool TryParseMetrics(string value, out FirmwareStatusUpdate update)
+    {
+        update = default;
+        var fields = value.Split(':', StringSplitOptions.None);
+        var upstreamDisconnectStops = 0u;
+        if (fields.Length is not (8 or 9) || fields[0] != "METRICS" ||
+            !TryParseMetric(fields[1], "HID_SENT", out var hidReportsSent) ||
+            !TryParseMetric(fields[2], "HID_BUSY", out var hidBusyDeferrals) ||
+            !TryParseMetric(fields[3], "MAX_QUEUE", out var maximumQueuedDelta) ||
+            !TryParseMetric(fields[4], "MAX_ACTIVE_GAP_US", out var maximumActiveReportGapUs) ||
+            !TryParseMetric(fields[5], "HOST_REPORTS", out var hostReportsReceived) ||
+            !TryParseMetric(fields[6], "HOST_DECODE_ERRORS", out var hostDecodeErrors) ||
+            !TryParseMetric(fields[7], "HOST_SATURATIONS", out var hostAccumulatorSaturations) ||
+            (fields.Length == 9 &&
+             !TryParseMetric(fields[8], "USB_STOPS", out upstreamDisconnectStops)))
+        {
+            return false;
+        }
+
+        update = new FirmwareStatusUpdate(
+            FirmwareStatusKind.TransportMetrics,
+            HidReportsSent: hidReportsSent,
+            HidBusyDeferrals: hidBusyDeferrals,
+            MaximumQueuedDelta: maximumQueuedDelta,
+            MaximumActiveReportGapUs: maximumActiveReportGapUs,
+            HostReportsReceived: hostReportsReceived,
+            HostDecodeErrors: hostDecodeErrors,
+            HostAccumulatorSaturations: hostAccumulatorSaturations,
+            UpstreamDisconnectStops: upstreamDisconnectStops);
+        return true;
+    }
+
+    private static bool TryParseMetric(string field, string name, out uint value)
+    {
+        value = 0;
+        var prefix = name + "=";
+        return field.StartsWith(prefix, StringComparison.Ordinal) &&
+            uint.TryParse(
+                field.AsSpan(prefix.Length),
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out value);
     }
 }
