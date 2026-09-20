@@ -95,22 +95,28 @@ the present COM port and verifies it with the protocol handshake.
 
 ## Serial protocol
 
-Every host-to-device frame is:
+Every protocol-v4 host-to-device frame is:
 
 ```text
-[payload length: uint16 little-endian][command: uint8][payload]
+[A5 5A][version: u8][sequence: u16 LE][command: u8][length: u8]
+[payload: 0..63 bytes][CRC16-CCITT over version..payload: u16 LE]
 ```
 
 | Command | Byte | Payload |
 |---|---:|---|
-| PING | `F0` | Empty; replies `PONG:RAINBOW-RECOIL:3` |
-| START | `F1` | Empty; resets and starts the loaded burst |
+| PING | `F0` | Empty; replies `PONG:RAINBOW-RECOIL:4` |
+| START | `F1` | RP2040: resets/starts; RP2350 rejects host start and uses raw local M1+M2 |
 | STOP | `F2` | Empty |
 | PROFILE | `F3` | Versioned mode, compensation, timing, and name data |
 | SENSITIVITY | `F4` | Horizontal and vertical IEEE-754 floats |
 | PATTERN | `F5` | Sequential Q8.8 horizontal/vertical point chunks |
 | RAPID_FIRE | `F6` | Enabled byte and little-endian uint16 RPM |
 | KEEPALIVE | `F7` | Empty; refreshes the active-output watchdog |
+| ARM_LEASE | `F8` | RP2350 foreground/armed lease; raw mouse buttons remain the trigger |
+| CONFIG_BEGIN | `F9` | Schema, transaction ID, and expected canonical configuration hash |
+| CONFIG_COMMIT | `FA` | Transaction ID and exact hash; mismatch rolls back |
+| CONFIG_ABORT | `FB` | Transaction ID; restores the previous configuration |
+| STATUS | `FC` | Reports active hash, transaction state, and fire state |
 | RESET | `FF` | Empty; enters the UF2 boot loader |
 
 After `PONG`, current firmware also emits a board identity line. RP2350 emits
@@ -124,9 +130,11 @@ MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR
 MOUSE:HOST_ERROR
 ```
 
-Payloads are limited to 63 bytes. Oversized frames are consumed and rejected so
-the parser is synchronized for the next valid frame. A pattern profile is not
-allowed to start until every declared point has arrived in order.
+Payloads are limited to 63 bytes. The parser scan-recovers at the next magic
+word after a bad version, oversized frame, CRC failure, or a 250 ms partial-frame
+timeout. Configuration mutations require a transaction. Firmware snapshots the
+last-good configuration, verifies every pattern point and the canonical FNV-1a
+hash at commit, and rolls back on abort, mismatch, or a 10 second timeout.
 
 General mode emits one movement step every 8 ms. Pattern mode emits one point per
 shot using a phase-locked `60,000,000 / RPM` interval and stops at the loaded
@@ -138,8 +146,10 @@ rate and emit one recoil step per pulse. While output is active, the desktop app
 sends a keepalive every 250 ms; missing keepalives stop all output after 750 ms.
 
 On RP2350, physical reports use a 1 ms upstream service interval even while
-generated output is idle. Relative fields are decoded from the attached mouse's
-HID report descriptor, including report IDs and common 8/16/32-bit field sizes.
+generated output is idle. Up to four HID interfaces are decoded from the
+attached mouse's report descriptors, including split report IDs and common
+8/16/32-bit field sizes. Movement-only reports do not clear buttons latched by
+button-only reports.
 The upstream descriptor exposes eight buttons plus X, Y, wheel, and pan. Larger
 deltas are retained and drained rather than clipped away. STOP clears generated
 output state but never clears pending physical input.

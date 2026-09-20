@@ -39,6 +39,9 @@ public sealed class WeaponProfile
     public string PatternSource { get; set; } = "No pattern data";
 
     [JsonIgnore]
+    public string PatternOptic { get; set; } = string.Empty;
+
+    [JsonIgnore]
     public bool SupportsContinuousCompensation => WeaponType is
         "Assault Rifle" or "SMG" or "LMG" or "Machine Pistol";
 
@@ -101,16 +104,11 @@ public sealed class WeaponProfile
             "weapon-profiles.json");
 
         var custom = LoadFromFile(customPath);
-        if (custom.Count == 0)
-        {
-            return DefaultProfiles.Select(Clone).ToList();
-        }
-
         var customByName = custom
             .Where(profile => !string.IsNullOrWhiteSpace(profile.Name))
             .GroupBy(profile => profile.Name, StringComparer.OrdinalIgnoreCase)
             .ToDictionary(group => group.Key, group => group.Last(), StringComparer.OrdinalIgnoreCase);
-        return DefaultProfiles
+        var profiles = DefaultProfiles
             .Select(defaultProfile => customByName.TryGetValue(defaultProfile.Name, out var replacement)
                 ? MarkModified(Hydrate(replacement, defaultProfile))
                 : Clone(defaultProfile))
@@ -119,6 +117,8 @@ public sealed class WeaponProfile
                 .Select(profile => MarkModified(Hydrate(profile, null))))
             .OrderBy(profile => profile.Name, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
+        MeasuredProfileStore.Apply(profiles);
+        return profiles;
     }
 
     public static List<WeaponProfile> LoadFromFile(string path)
@@ -262,13 +262,46 @@ public sealed class WeaponProfile
 
         effective.Grip = setup.Grip;
         effective.Barrel = setup.Barrel;
-        effective.Pattern = WeaponPatternCatalog.CreateEstimatedPattern(
-            effective.Name,
-            effective.VerticalCompensation,
-            effective.HorizontalCompensation,
-            effective.Barrel,
-            effective.RoundsPerMinute,
-            effective.MagazineSize);
+        var sameMeasuredLoadout = PatternDataQuality == PatternDataQuality.Measured &&
+            setup.Grip.Equals(Grip, StringComparison.OrdinalIgnoreCase) &&
+            setup.Barrel.Equals(Barrel, StringComparison.OrdinalIgnoreCase);
+        if (!sameMeasuredLoadout)
+        {
+            effective.Pattern = WeaponPatternCatalog.CreateEstimatedPattern(
+                effective.Name,
+                effective.VerticalCompensation,
+                effective.HorizontalCompensation,
+                effective.Barrel,
+                effective.RoundsPerMinute,
+                effective.MagazineSize);
+            effective.PatternDataQuality = effective.Pattern.Length > 0
+                ? PatternDataQuality.VideoDerivedEstimate
+                : PatternDataQuality.None;
+            effective.PatternSource = "Deterministic estimate for the selected attachment setup";
+            effective.PatternOptic = string.Empty;
+        }
+        return effective;
+    }
+
+    internal WeaponProfile WithOpticSetup(string optic)
+    {
+        var effective = Clone(this);
+        if (effective.PatternDataQuality == PatternDataQuality.Measured &&
+            !effective.PatternOptic.Equals(optic, StringComparison.OrdinalIgnoreCase))
+        {
+            effective.Pattern = WeaponPatternCatalog.CreateEstimatedPattern(
+                effective.Name,
+                effective.VerticalCompensation,
+                effective.HorizontalCompensation,
+                effective.Barrel,
+                effective.RoundsPerMinute,
+                effective.MagazineSize);
+            effective.PatternDataQuality = effective.Pattern.Length > 0
+                ? PatternDataQuality.VideoDerivedEstimate
+                : PatternDataQuality.None;
+            effective.PatternSource = $"Estimate used because measured data targets {PatternOptic}";
+            effective.PatternOptic = string.Empty;
+        }
         return effective;
     }
 
@@ -379,7 +412,10 @@ public sealed class WeaponProfile
             ? Math.Clamp(profile.HorizontalCompensation, -20.0, 20.0)
             : 0.0;
         profile.BurstProgression = Math.Clamp(profile.BurstProgression, 0, 100);
-        profile.RoundsPerMinute = Math.Clamp(profile.RoundsPerMinute, 0, ushort.MaxValue);
+        profile.RoundsPerMinute = Math.Clamp(
+            profile.RoundsPerMinute,
+            0,
+            FirmwareContract.MaximumPatternRoundsPerMinute);
         profile.MagazineSize = Math.Clamp(profile.MagazineSize, 0, 160);
 
         if (fallback != null)
@@ -475,6 +511,7 @@ public sealed class WeaponProfile
         clone.Pattern = profile.Pattern.ToArray();
         clone.PatternDataQuality = profile.PatternDataQuality;
         clone.PatternSource = profile.PatternSource;
+        clone.PatternOptic = profile.PatternOptic;
         return clone;
     }
 }

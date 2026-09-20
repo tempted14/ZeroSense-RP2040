@@ -131,30 +131,33 @@ The desktop app does not assume a fixed COM number or look for a bridge-chip nam
 Desktop-to-firmware packets are:
 
 ```text
-[payload length: uint16 little-endian][command: uint8][payload]
+[A5 5A][version][sequence u16 LE][command][length][payload][CRC16-CCITT u16 LE]
 ```
 
 | Command | Byte | Payload |
 |---|---:|---|
-| PING | `F0` | Empty; firmware replies `PONG:RAINBOW-RECOIL:3` |
-| START | `F1` | Empty; starts the loaded profile |
+| PING | `F0` | Empty; firmware replies `PONG:RAINBOW-RECOIL:4` |
+| START | `F1` | RP2040 only; RP2350 activation is raw-device-local |
 | STOP | `F2` | Empty |
 | PROFILE | `F3` | Version 2 mode/baselines/RPM/count/name; version 1 remains accepted |
 | SENSITIVITY | `F4` | Horizontal float followed by vertical float, little-endian |
 | PATTERN | `F5` | Versioned chunks containing Q8.8 horizontal/vertical point pairs |
 | RAPID_FIRE | `F6` | Enabled flag plus semi-automatic rate in RPM |
 | KEEPALIVE | `F7` | Empty; refreshes the active-output safety watchdog |
+| ARM_LEASE | `F8` | RP2350 foreground/armed lease; does not replace raw M1+M2 activation |
+| CONFIG_BEGIN / COMMIT / ABORT | `F9` / `FA` / `FB` | Transaction ID, rollback, and canonical configuration hash |
+| STATUS | `FC` | Current hash, transaction state, and output state |
 | RESET | `FF` | Empty; enter UF2 mode |
 
-The current app sends version 2 profiles containing mode, numeric baselines, RPM, and pattern length. The firmware retains version 1 profile compatibility. Pattern points are transferred in bounded chunks so every framed CDC payload remains at or below 63 bytes. General mode schedules movement every 8 ms; pattern mode uses phase-locked `60,000,000 / RPM` deadlines, applies sensitivity once, preserves the pattern's HID-count displacement, and stops at the loaded magazine length. Experimental calibration is deliberately host-side: it transforms a copy of the selected pattern and sends the established firmware pattern mode, so no protocol or firmware behavior changes.
+The current app sends version 2 profiles inside an all-or-nothing v4 configuration transaction. The firmware snapshots the last-good state and commits only after exact readbacks, a complete pattern, and an identical canonical FNV-1a hash. Frames use a sync word, sequence, bounded one-byte length, CRC-16, and partial-frame timeout recovery. Pattern points remain bounded chunks. General mode schedules movement every 8 ms; pattern mode uses phase-locked `60,000,000 / RPM` deadlines and distributes each point across 1 ms frames with Q16 remainder preservation. Experimental calibration remains host-side.
 
-Arming output does not start HID movement. The Windows app polls the physical right and left mouse-button state without suppressing the normal mouse, sends `START` while both aim and fire are held, and sends `STOP` on release. During output it sends a keepalive every 250 ms; the firmware stops movement and releases its synthetic button after 750 ms without one. Each `START` resets the firmware's burst index.
+Arming output does not start HID movement. RP2040 uses the Windows foreground-gated M1+M2 monitor and 750 ms keepalive. RP2350 receives only a short app lease: the board itself activates from raw downstream M1+M2, stops immediately on raw release or interface disconnect, and never uses its synthesized upstream rapid-fire report as trigger input.
 
 ## User calibration and roster
 
 The checked-in calibration defaults match the supplied `GameSettings.ini` input values: yaw/pitch `55`, `MouseSensitivityMultiplierUnit=0.001000`, 1600 DPI, and ADS values 38/67/72/74 for 1.0x/2.5x/3.5x/8.0x. Automatic optic selection applies 2.5x to attackers, 1.0x to defenders, and 2.5x to the defender DMR exceptions TCSG12, Tubarão's AR-15.50, and Aruni's Mk 14 EBR; disabling it enables a persistent manual selection. Display resolution and aspect ratio are not used because USB mouse reports are relative counts; FOV is likewise not part of the direct per-optic ADS scaling. At the default `0.02` multiplier, the hip-fire value is equivalent to 2.75.
 
-All 115 weapons in the current Y11S3 catalog are individually selectable, including SIX12 SD. Sixty-one automatic weapons have current RPM/magazine timing and deterministic, staged estimates derived from recent weapon/attachment footage, the supplied 2025 reference tables, and maintained public statistics. Supported semi-automatic weapons have explicit rapid-fire rates and non-zero per-shot recoil. Every automatic profile applies Vertical Grip. Attachment modifiers are centralized: vertical grip and flash hider modify vertical compensation, compensator modifies estimated horizontal movement, and muzzle brake modifies the first pattern point. The current F2 setup is vertical grip plus flash hider; the SCORPION EVO 3 A1 uses vertical grip while retaining Compensator as its barrel exception.
+All 115 weapons in the current Y11S3 catalog are individually selectable, including SIX12 SD. Sixty-one automatic weapons have current RPM/magazine timing and deterministic, staged estimates derived from recent weapon/attachment footage, the supplied 2025 reference tables, official balance notes, and maintained public statistics. Reaper uses Ubisoft's published current stage boundaries at bullets 0/3/10/25; the numeric stage magnitudes remain explicitly estimated. Supported semi-automatic weapons have explicit rapid-fire rates and non-zero per-shot recoil. Every automatic profile applies Vertical Grip. Attachment modifiers are centralized: vertical grip and flash hider modify vertical compensation, compensator modifies estimated horizontal movement, and muzzle brake modifies the first pattern point. The current F2 setup is vertical grip plus flash hider; the SCORPION EVO 3 A1 uses vertical grip while retaining Compensator as its barrel exception. The source hierarchy and calculation invariants are documented in `docs/RECOIL_DATA_SOURCES.md`.
 
 Automatic profiles apply Vertical Grip and prefer Flash Hider anywhere they previously selected Compensator, with Ela's SCORPION EVO 3 A1 retaining Compensator as the sole barrel exception. Older saved profiles are normalized to those preferences when loaded. Shared-weapon attachment availability is resolved after operator selection. Aruni's Mk 14 EBR and Tubarão's AR-15.50 do not receive the Y11S3-removed muzzle brake, while Dokkaebi and Maverick retain it on attack. Supported semi-automatic profiles instead apply recoil once per generated shot; pump/manual weapons do not enable rapid fire.
 

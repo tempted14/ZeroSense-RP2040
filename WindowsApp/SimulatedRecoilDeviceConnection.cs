@@ -44,6 +44,7 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
     public bool LastRapidFireEnabled { get; private set; }
     public int LastRapidFireRoundsPerMinute { get; private set; }
     public string? LastCommand { get; private set; }
+    public uint LastConfigurationHash { get; private set; }
 
     public async Task ConnectAsync(CancellationToken cancellationToken)
     {
@@ -79,6 +80,15 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
         var started = Stopwatch.GetTimestamp();
         try
         {
+            var transactionId = 1u;
+            var configurationHash = SerialProtocol.ComputeConfigurationHash(
+                profile,
+                mode,
+                scale,
+                rapidFireEnabled,
+                rapidFireRoundsPerMinute);
+            _ = SerialProtocol.BuildConfigurationBeginCommand(transactionId, configurationHash);
+            Interlocked.Increment(ref _commandsSent);
             // Build every packet the real transport would send. This catches
             // protocol bounds and serialization regressions without a board.
             _ = SerialProtocol.BuildProfileCommand(profile, mode);
@@ -94,6 +104,8 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             Interlocked.Increment(ref _commandsSent);
             _ = SerialProtocol.BuildRapidFireCommand(rapidFireEnabled, rapidFireRoundsPerMinute);
             Interlocked.Increment(ref _commandsSent);
+            _ = SerialProtocol.BuildConfigurationCommitCommand(transactionId, configurationHash);
+            Interlocked.Increment(ref _commandsSent);
 
             await Task.Delay(5, cancellationToken).ConfigureAwait(false);
             LastProfile = profile;
@@ -101,6 +113,7 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             LastSensitivity = scale;
             LastRapidFireEnabled = rapidFireEnabled;
             LastRapidFireRoundsPerMinute = rapidFireRoundsPerMinute;
+            LastConfigurationHash = configurationHash;
             RecordAcknowledgement(Stopwatch.GetTimestamp() - started);
             RaiseCommandReceived("SIMULATOR:CONFIGURATION_ACCEPTED");
         }
@@ -125,6 +138,14 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             Interlocked.Increment(ref _failedCommands);
             throw;
         }
+    }
+
+    public void SendArmLease(bool enabled)
+    {
+        EnsureConnected();
+        _ = SerialProtocol.BuildArmLeaseCommand(enabled);
+        LastCommand = enabled ? "ARM_LEASE:ON" : "ARM_LEASE:OFF";
+        Interlocked.Increment(ref _commandsSent);
     }
 
     public DeviceConnectionMetrics GetMetrics()

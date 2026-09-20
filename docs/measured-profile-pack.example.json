@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "gameBuild": "replace-with-tested-game-build",
+  "source": "replace-with-capture-method-and-session-reference",
+  "profiles": [
+    {
+      "weapon": "replace-with-exact-weapon-name",
+      "grip": "Vertical grip",
+      "barrel": "Flash hider",
+      "optic": "1.0x",
+      "roundsPerMinute": 700,
+      "measuredAtUtc": "2026-01-01T00:00:00Z",
+      "points": [
+        { "horizontal": 0.0, "vertical": 1.0 }
+      ]
+    }
+  ]
+}

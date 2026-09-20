@@ -112,7 +112,7 @@ If HID appears but CDC does not, or CDC appears but HID does not:
 - Check the port with the `Win32_SerialPort` command above. The PNP device ID should contain `VID_2E8A`.
 - Restart the app after the runtime COM port is present.
 
-The app does not search for a bridge-chip description. It considers active COM ports associated with VID `2E8A`, prefers the last working port, and tries every current candidate until one replies `PONG:RAINBOW-RECOIL:3`. A message that no port passed the firmware handshake usually means the board is running an older or unrelated sketch; flash the checked-in `rainbow_recoil.uf2` again.
+The app does not search for a bridge-chip description. It considers active COM ports associated with VID `2E8A`, prefers the last working port, and tries every current candidate until one replies `PONG:RAINBOW-RECOIL:4`. A message that no port passed the firmware handshake usually means the board is running an older or unrelated sketch; flash the matching v1.3-or-newer UF2 again.
 
 ## The COM number changed
 

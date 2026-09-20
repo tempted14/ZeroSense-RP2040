@@ -29,6 +29,7 @@ public interface IRecoilDeviceConnection : IDisposable
         CancellationToken cancellationToken);
 
     void SendCommand(string commandType);
+    void SendArmLease(bool enabled);
     DeviceConnectionMetrics GetMetrics();
 }
 

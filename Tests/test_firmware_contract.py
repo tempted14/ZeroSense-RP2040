@@ -8,7 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = (
     ROOT / "RP2040_Firmware" / "rainbow_recoil" / "rainbow_recoil.ino"
 ).read_text()
+HID_DECODER = (
+    ROOT / "RP2040_Firmware" / "rainbow_recoil" / "hid_report_decoder.h"
+).read_text()
 CS_PROTOCOL = (ROOT / "WindowsApp" / "SerialProtocol.cs").read_text()
+CS_CONNECTION = (ROOT / "WindowsApp" / "SerialConnection.cs").read_text()
 PLATFORMIO = (ROOT / "RP2040_Firmware" / "platformio.ini").read_text()
 RP2350_BOARD = json.loads((
     ROOT / "RP2040_Firmware" / "boards" / "waveshare_rp2350_usb_c.json"
@@ -25,22 +29,36 @@ def enum_values(source: str, prefix: str = "") -> dict[str, int]:
 class FirmwareContractTests(unittest.TestCase):
     def test_desktop_and_firmware_command_ids_match(self) -> None:
         firmware = enum_values(FIRMWARE, "CMD_")
-        desktop = enum_values(CS_PROTOCOL)
+        desktop = enum_values(CS_PROTOCOL.split("private enum CommandType", 1)[1])
         expected = {
             "ping", "start", "stop", "profile", "sensitivity",
-            "pattern", "rapid_fire", "keepalive", "reset",
+            "pattern", "rapid_fire", "keepalive", "arm_lease",
+            "config_begin", "config_commit", "config_abort", "status", "reset",
         }
         self.assertEqual(expected, firmware.keys())
+        expected_desktop_names = {
+            "ping": "ping", "start": "start", "stop": "stop",
+            "profile": "profile", "sensitivity": "sensitivity",
+            "pattern": "pattern", "rapid_fire": "rapidfire",
+            "keepalive": "keepalive", "arm_lease": "armlease",
+            "config_begin": "configurationbegin",
+            "config_commit": "configurationcommit",
+            "config_abort": "configurationabort", "status": "status",
+            "reset": "reset",
+        }
         self.assertEqual(
-            {name.replace("_", ""): value for name, value in firmware.items()},
+            {expected_desktop_names[name]: value for name, value in firmware.items()},
             desktop,
         )
+
+    def test_exact_profile_readback_uses_utf8(self) -> None:
+        self.assertIn("Encoding = new UTF8Encoding(false, true)", CS_CONNECTION)
 
     def test_hid_service_is_reached_and_rate_limited(self) -> None:
         loop_position = FIRMWARE.index("void loop()")
         self.assertGreater(FIRMWARE.index("service_hid();", loop_position), loop_position)
         self.assertIn("now - lastHidReportAtUs", FIRMWARE)
-        self.assertIn("usbHid.setPollInterval(POLL_HIGH_MS)", FIRMWARE)
+        self.assertIn("usbHid.setPollInterval(1)", FIRMWARE)
 
     def test_fractional_movement_reaches_pending_reports(self) -> None:
         self.assertIn("pendingMouseX += queuedX;", FIRMWARE)
@@ -85,7 +103,7 @@ class FirmwareContractTests(unittest.TestCase):
 
     def test_pattern_points_bypass_smoothing_and_double_scaling(self) -> None:
         movement = re.search(
-            r"static void generate_movement\(\)\s*\{(?P<body>.*?)\n\}",
+            r"static void generate_movement\(uint32_t shotIntervalUs\)\s*\{(?P<body>.*?)\n\}",
             FIRMWARE,
             re.DOTALL,
         )
@@ -94,20 +112,76 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotIn("* horizontalSensitivityFactor", body)
         self.assertNotIn("* verticalSensitivityFactor", body)
         self.assertIn(
-            "queue_mouse_movement(horizontal, vertical, activeMode == MODE_GENERAL)",
+            "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
             body,
         )
+        self.assertIn("queue_mouse_movement(horizontal, vertical, true)", body)
+        self.assertIn("service_scheduled_correction();", FIRMWARE)
 
     def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:
         self.assertIn(
-            "activeMode == MODE_WEAPON_PATTERN\n"
-            "            ? base_interval\n"
-            "            : get_jittered_interval(base_interval)",
+            "next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)",
             FIRMWARE,
         )
         self.assertIn("nextMovementAtUs += interval;", FIRMWARE)
-        self.assertIn("const uint32_t shot_interval = base_interval;", FIRMWARE)
+        self.assertIn(
+            "next_rpm_interval(\n"
+            "            rapidFireRoundsPerMinute,\n"
+            "            rapidIntervalRemainder)",
+            FIRMWARE,
+        )
         self.assertIn("nextRapidShotAtUs += shot_interval;", FIRMWARE)
+        self.assertIn("remainderAccumulator += 60000000UL % roundsPerMinute", FIRMWARE)
+        self.assertIn("(shotIntervalUs + 999U) / 1000U", FIRMWARE)
+
+    def test_pattern_completion_flushes_without_erasing_final_delta(self) -> None:
+        completion = re.search(
+            r"static void complete_pattern_output\(\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(completion)
+        body = completion.group("body")
+        self.assertIn("round_q16_to_integer(correctionFractionXQ16)", body)
+        self.assertIn("round_q16_to_integer(correctionFractionYQ16)", body)
+        self.assertNotIn("reset_movement_state", body)
+        self.assertNotIn("pendingMouseX = 0", body)
+        self.assertNotIn("pendingMouseY = 0", body)
+        self.assertIn("complete_pattern_output();", FIRMWARE)
+
+    def test_rapid_fire_cannot_double_run_pattern_compensation(self) -> None:
+        movement_service = re.search(
+            r"static void service_movement\(\)\s*\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(movement_service)
+        self.assertIn("!fireActive || rapidFireActive", movement_service.group("body"))
+        self.assertIn("enabled && activeMode == MODE_WEAPON_PATTERN", FIRMWARE)
+        self.assertIn("ERROR:RAPID_FIRE:MODE", FIRMWARE)
+
+    def test_requested_smoothing_jitter_polling_and_sensitivity_contract(self) -> None:
+        self.assertIn("1.2f,", FIRMWARE)
+        self.assertIn("40.0f,", FIRMWARE)
+        self.assertIn("0.85f,", FIRMWARE)
+        self.assertIn("TIMING_JITTER_PCT = 8.0f", FIRMWARE)
+        self.assertIn("POLL_IDLE_US   = 4000", FIRMWARE)
+        self.assertIn("POLL_NORMAL_US = 2000", FIRMWARE)
+        self.assertIn("POLL_HIGH_US   = 1000", FIRMWARE)
+        self.assertIn("minSensitivityFactor = 0.05f", FIRMWARE)
+        self.assertIn("maxSensitivityFactor = 8.0f", FIRMWARE)
+        self.assertIn("maxPatternRoundsPerMinute = 2000", FIRMWARE)
+        self.assertNotIn("std::clamp(horizontal, minSensitivityFactor", FIRMWARE)
+
+    def test_rp2350_local_activation_and_transaction_recovery_are_present(self) -> None:
+        self.assertIn("service_rp2350_local_activation();", FIRMWARE)
+        self.assertIn("MOUSE_BUTTON_LEFT | MOUSE_BUTTON_RIGHT", FIRMWARE)
+        self.assertIn("hostMouseFaultPending.exchange(false", FIRMWARE)
+        self.assertIn("rollback_configuration_transaction", FIRMWARE)
+        self.assertIn("current_configuration_hash()", FIRMWARE)
+        self.assertIn("ERROR:FRAME:CRC", FIRMWARE)
+        self.assertIn("ERROR:FRAME:TIMEOUT", FIRMWARE)
+        self.assertIn("reset_parser_preserving_magic(byte)", FIRMWARE)
 
     def test_rp2350_target_is_separate_and_pinned(self) -> None:
         self.assertIn("[env:waveshare_rp2040_zero]", PLATFORMIO)
@@ -141,8 +215,8 @@ class FirmwareContractTests(unittest.TestCase):
 
     def test_proxy_preserves_buttons_wheel_pan_and_requeues_reports(self) -> None:
         self.assertIn("hostMouseButtons.store(buttons", FIRMWARE)
-        self.assertIn("HostMouseFieldKind::Wheel", FIRMWARE)
-        self.assertIn("HostMouseFieldKind::Pan", FIRMWARE)
+        self.assertIn("FieldKind::Wheel", HID_DECODER)
+        self.assertIn("FieldKind::Pan", HID_DECODER)
         self.assertIn("usbHid.mouseReport(0, buttons, dx, dy, wheel, pan)", FIRMWARE)
         self.assertIn("(physical & ~MOUSE_BUTTON_LEFT)", FIRMWARE)
         self.assertIn("if (!rapidFireActive)", FIRMWARE)
