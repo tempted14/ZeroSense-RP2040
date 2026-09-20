@@ -1,4 +1,8 @@
 import re
+import json
+import subprocess
+import sys
+import tempfile
 import unittest
 import xml.etree.ElementTree as element_tree
 from pathlib import Path
@@ -32,6 +36,16 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("permissions:\n      contents: write", publish)
         self.assertIn('RELEASE_NOTES_${GITHUB_REF_NAME#v}.md', workflow)
         self.assertNotIn("RELEASE_NOTES_1.3.0.md", workflow)
+        self.assertIn("attestations: write", publish)
+        self.assertIn("artifact-metadata: write", publish)
+        self.assertIn("id-token: write", publish)
+        self.assertIn("actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6", publish)
+
+        for path in (ROOT / ".github" / "workflows").glob("*.yml"):
+            contents = path.read_text()
+            self.assertNotRegex(contents, r"uses:\s+[^\s]+@v\d+")
+            for reference in re.findall(r"uses:\s+[^@\s]+@([^\s#]+)", contents):
+                self.assertRegex(reference, r"^[0-9a-f]{40}$")
 
     def test_starter_bundle_contains_app_firmware_and_quick_start(self) -> None:
         workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text()
@@ -56,6 +70,34 @@ class ReleaseContractTests(unittest.TestCase):
         ignore = (ROOT / ".gitignore").read_text().splitlines()
         for pattern in ("*.pfx", "*.p12", "*.pem", "*.key", ".env"):
             self.assertIn(pattern, ignore)
+
+    def test_release_sbom_inventories_assets_with_checksums(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            assets = Path(temporary)
+            (assets / "ZeroSense-1.4.0-Windows-x64.zip").write_bytes(b"app")
+            (assets / "ZeroSense-RP2040-Zero-1.4.0.uf2").write_bytes(b"firmware")
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "tools" / "generate_release_sbom.py"),
+                    "--assets",
+                    str(assets),
+                    "--version",
+                    "1.4.0",
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            document = json.loads(
+                (assets / "ZeroSense-1.4.0.spdx.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual("SPDX-2.3", document["spdxVersion"])
+            self.assertEqual("1.4.0", document["packages"][0]["versionInfo"])
+            self.assertEqual(2, len(document["files"]))
+            for entry in document["files"]:
+                algorithms = {checksum["algorithm"] for checksum in entry["checksums"]}
+                self.assertEqual({"SHA1", "SHA256"}, algorithms)
 
 
 if __name__ == "__main__":

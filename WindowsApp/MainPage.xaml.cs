@@ -2047,6 +2047,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         if (WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
         {
             ProfileDescriptionText.Text = "No weapon is available for this operator.";
+            ProfileQualityText.Text = "QUALITY · Unavailable";
             WeaponSlotText.Text = "NO ACTIVE SLOT";
             RapidFireStatusText.Text = "Rapid fire unavailable";
             RapidFireToggle.IsEnabled = false;
@@ -2057,12 +2058,34 @@ public sealed partial class MainPage : UserControl, IDisposable
 
         var operatorName = (OperatorSelector.SelectedItem as OperatorViewModel)?.OperatorName;
         var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
+        var settings = SettingsManager.LoadSettings();
+        var effectiveProfile = BuildEffectiveSelectedProfile(settings);
         WeaponSlotText.Text = $"{WeaponSlotCatalog.GetSlot(selected.Profile).ToString().ToUpperInvariant()} SLOT";
         ProfileDescriptionText.Text = selected.Description;
+        if (settings.CompensationMode == CompensationMode.General)
+        {
+            ProfileQualityText.Text =
+                "QUALITY · Not used in General mode · steady correction is active";
+        }
+        else
+        {
+            var quality = settings.CompensationMode == CompensationMode.Experimental &&
+                effectiveProfile?.HasWeaponPattern == true
+                    ? "Experimental"
+                    : effectiveProfile?.PatternDataQuality switch
+                    {
+                        PatternDataQuality.Measured => "Measured",
+                        PatternDataQuality.VideoDerivedEstimate => "Estimated",
+                        _ => "Unavailable"
+                    };
+            ProfileQualityText.Text = effectiveProfile is null
+                ? $"QUALITY · {quality}"
+                : $"QUALITY · {quality} · {effectiveProfile.PatternSource}";
+        }
         var rapidAvailable = selected.Profile.SupportsRapidFire;
         RapidFireToggle.IsEnabled = rapidAvailable;
         RapidFireStatusText.Text = rapidAvailable
-            ? SettingsManager.LoadSettings().RapidFireEnabled
+            ? settings.RapidFireEnabled
                 ? $"ON · {selected.Profile.RapidFireRoundsPerMinute} RPM · recoil applied per shot"
                 : "OFF · manual clicks still receive one recoil correction per shot"
             : "Automatic weapon · rapid fire not applicable";

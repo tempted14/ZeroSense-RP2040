@@ -939,6 +939,42 @@ static void MeasuredProfilePacksAreExact()
         Equal(PatternDataQuality.VideoDerivedEstimate, mismatchedOptic.PatternDataQuality,
             "missing optic must use estimate");
         True(mismatchedOptic.Pattern.Length > 2, "mismatch falls back to full estimate");
+
+        File.WriteAllText(Path.Combine(directory, "f2-new-build.json"), """
+        {
+          "schemaVersion": 1,
+          "gameBuild": "test-build-2",
+          "source": "second controlled range capture",
+          "profiles": [
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "1.0x",
+              "operator": "Twitch",
+              "roundsPerMinute": 982,
+              "measuredAtUtc": "2026-09-20T00:00:00Z",
+              "points": [{ "horizontal": 1.0, "vertical": 4.0 }]
+            }
+          ]
+        }
+        """);
+        MeasuredProfileStore.Apply(profiles, directory);
+
+        var ambiguousBuild = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x", "Twitch");
+        Equal(PatternDataQuality.VideoDerivedEstimate, ambiguousBuild.PatternDataQuality,
+            "multiple game builds must fail closed without an exact build selection");
+
+        var exactBuild = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x", "Twitch", "test-build");
+        Equal(PatternDataQuality.Measured, exactBuild.PatternDataQuality,
+            "explicit game build selects the matching measurement");
+        Equal("test-build", exactBuild.PatternGameBuild, "measured game build metadata");
+        Near(2.25, exactBuild.Pattern[0].Vertical, 0.0001,
+            "explicit game build keeps its exact trace");
     }
     finally
     {

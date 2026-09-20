@@ -54,9 +54,10 @@ static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
 // 1 kHz; normal host/controller overhead yields roughly 900 Hz in practice.
 static constexpr uint32_t POLL_HIGH_US   = 1000;
 
-// General-mode cadence variation. Pattern and rapid-fire timing use exact RPM
-// intervals so their configured shot sequence does not drift.
-static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% variance on intervals
+// General-mode cadence variation is opt-in. Pattern and rapid-fire timing use
+// exact RPM intervals so their configured shot sequence does not drift.
+static constexpr bool GENERAL_TIMING_JITTER_ENABLED = false;
+static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% when explicitly enabled
 
 enum CompensationMode : uint8_t {
     MODE_GENERAL = 0,
@@ -101,6 +102,7 @@ static VelocitySimulator sim = {
 
 static int shotsInBurst = 0;
 static uint32_t nextMovementAtUs = 0;
+static uint32_t lastMovementIntegrationAtUs = 0;
 static uint32_t movementIntervalRemainder = 0;
 static int32_t pendingMouseX = 0;
 static int32_t pendingMouseY = 0;
@@ -581,6 +583,9 @@ static int16_t readInt16LittleEndian(const uint8_t* source) {
 // General mode may vary its fixed 8 ms update cadence slightly. This is not
 // used for configured weapon patterns or rapid-fire shot scheduling.
 static uint32_t get_jittered_interval(uint32_t base_us) {
+    if (!GENERAL_TIMING_JITTER_ENABLED) {
+        return base_us;
+    }
     const float jitter_scale = 1.0f +
         rng_next() * 2.0f * (TIMING_JITTER_PCT / 100.0f);
     const uint32_t interval = static_cast<uint32_t>(
@@ -621,6 +626,7 @@ static void reset_movement_state() {
     correctionFractionYQ16 = 0;
     scheduledCorrectionFrames = 0;
     nextCorrectionFrameAtUs = 0;
+    lastMovementIntegrationAtUs = 0;
     sim.velocityX = 0.0f;
     sim.velocityY = 0.0f;
     sim.accelerating = false;
@@ -786,6 +792,9 @@ static bool start_output() {
     set_rapid_button(false);
     reset_movement_state();
     nextMovementAtUs = micros();
+    // The first General-mode update represents one complete reference frame.
+    // Subsequent updates integrate the actual elapsed time between executions.
+    lastMovementIntegrationAtUs = nextMovementAtUs - 8000UL;
     nextRapidShotAtUs = nextMovementAtUs;
     Serial.printf("START:%s\n", activeProfileName);
     return true;
@@ -1519,10 +1528,9 @@ static uint8_t current_output_buttons() {
 }
 #endif
 
-// Inputs are HID counts per reference 8 ms movement step. General-mode jitter
-// changes only when the integration runs, not its output rate: acceleration,
-// friction and displacement are normalized to the actual interval. Sensitivity
-// is applied exactly once here.
+// Inputs are HID counts per reference 8 ms movement step. General-mode
+// acceleration, friction, and displacement are normalized to the actual
+// elapsed integration interval. Sensitivity is applied exactly once here.
 static void queue_mouse_movement(
     float requested_dx,
     float requested_dy,
@@ -1754,7 +1762,8 @@ static void generate_movement(uint32_t shotIntervalUs) {
     ++shotsInBurst;
 }
 
-// Service recoil movement using phase-locked timing for weapon patterns.
+// Service recoil movement using actual elapsed time in General mode and
+// phase-locked timing for weapon patterns.
 static void service_movement() {
     if (!fireActive || rapidFireActive) {
         return;
@@ -1762,17 +1771,23 @@ static void service_movement() {
 
     const uint32_t now = micros();
     if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
-        const uint32_t interval = activeMode == MODE_WEAPON_PATTERN
+        const uint32_t scheduledInterval = activeMode == MODE_WEAPON_PATTERN
             ? next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)
             : get_jittered_interval(8000UL);
-        generate_movement(interval);
+        const uint32_t integrationInterval = activeMode == MODE_WEAPON_PATTERN
+            ? scheduledInterval
+            : std::max<uint32_t>(
+                static_cast<uint32_t>(now - lastMovementIntegrationAtUs),
+                1U);
+        generate_movement(integrationInterval);
+        lastMovementIntegrationAtUs = now;
         if (!fireActive) {
             return;
         }
 
-        nextMovementAtUs += interval;
+        nextMovementAtUs += scheduledInterval;
         if (static_cast<int32_t>(now - nextMovementAtUs) >= 0) {
-            nextMovementAtUs = now + interval;
+            nextMovementAtUs = now + scheduledInterval;
         }
     }
 }

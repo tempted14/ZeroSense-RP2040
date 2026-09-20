@@ -161,7 +161,7 @@ class FirmwareContractTests(unittest.TestCase):
             "next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)",
             FIRMWARE,
         )
-        self.assertIn("nextMovementAtUs += interval;", FIRMWARE)
+        self.assertIn("nextMovementAtUs += scheduledInterval;", FIRMWARE)
         self.assertIn(
             "next_rpm_interval(\n"
             "            rapidFireRoundsPerMinute,\n"
@@ -202,7 +202,10 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("1.2f,", FIRMWARE)
         self.assertIn("40.0f,", FIRMWARE)
         self.assertIn("0.85f,", FIRMWARE)
+        self.assertIn("GENERAL_TIMING_JITTER_ENABLED = false", FIRMWARE)
         self.assertIn("TIMING_JITTER_PCT = 8.0f", FIRMWARE)
+        self.assertIn("now - lastMovementIntegrationAtUs", FIRMWARE)
+        self.assertIn("generate_movement(integrationInterval);", FIRMWARE)
         self.assertIn("POLL_IDLE_US   = 4000", FIRMWARE)
         self.assertIn("POLL_NORMAL_US = 2000", FIRMWARE)
         self.assertIn("POLL_HIGH_US   = 1000", FIRMWARE)

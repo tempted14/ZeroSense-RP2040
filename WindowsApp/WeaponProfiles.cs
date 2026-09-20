@@ -42,6 +42,9 @@ public sealed class WeaponProfile
     public string PatternOptic { get; set; } = string.Empty;
 
     [JsonIgnore]
+    public string PatternGameBuild { get; set; } = string.Empty;
+
+    [JsonIgnore]
     internal IReadOnlyList<MeasuredPatternVariant> MeasuredPatterns { get; set; } =
         Array.Empty<MeasuredPatternVariant>();
 
@@ -281,10 +284,13 @@ public sealed class WeaponProfile
         return effective;
     }
 
-    internal WeaponProfile WithOpticSetup(string optic, string? operatorName = null)
+    internal WeaponProfile WithOpticSetup(
+        string optic,
+        string? operatorName = null,
+        string? gameBuild = null)
     {
         var effective = Clone(this);
-        var candidate = effective.MeasuredPatterns
+        var loadoutCandidates = effective.MeasuredPatterns
             .Where(value => value.Grip.Equals(
                 effective.Grip,
                 StringComparison.OrdinalIgnoreCase))
@@ -297,6 +303,29 @@ public sealed class WeaponProfile
             .Where(value => string.IsNullOrEmpty(value.Operator) ||
                 (!string.IsNullOrWhiteSpace(operatorName) &&
                  value.Operator.Equals(operatorName, StringComparison.OrdinalIgnoreCase)))
+            .ToArray();
+
+        // Never silently pick a measurement from an arbitrary game build. A
+        // single available build is unambiguous; multiple builds require the
+        // caller to name the intended one or the deterministic estimate wins.
+        if (!string.IsNullOrWhiteSpace(gameBuild))
+        {
+            loadoutCandidates = loadoutCandidates
+                .Where(value => value.GameBuild.Equals(
+                    gameBuild.Trim(),
+                    StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+        else if (loadoutCandidates
+            .Select(value => value.GameBuild)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Skip(1)
+            .Any())
+        {
+            loadoutCandidates = [];
+        }
+
+        var candidate = loadoutCandidates
             .OrderByDescending(value =>
                 !string.IsNullOrEmpty(value.Operator) &&
                 value.Operator.Equals(operatorName, StringComparison.OrdinalIgnoreCase))
@@ -308,6 +337,7 @@ public sealed class WeaponProfile
             effective.PatternDataQuality = PatternDataQuality.Measured;
             effective.PatternSource = candidate.Source;
             effective.PatternOptic = candidate.Optic;
+            effective.PatternGameBuild = candidate.GameBuild;
             effective.RoundsPerMinute = candidate.RoundsPerMinute;
             return effective;
         }
@@ -327,6 +357,7 @@ public sealed class WeaponProfile
                 : PatternDataQuality.None;
             effective.PatternSource = $"Estimate used because measured data targets {PatternOptic}";
             effective.PatternOptic = string.Empty;
+            effective.PatternGameBuild = string.Empty;
         }
         return effective;
     }
@@ -538,6 +569,7 @@ public sealed class WeaponProfile
         clone.PatternDataQuality = profile.PatternDataQuality;
         clone.PatternSource = profile.PatternSource;
         clone.PatternOptic = profile.PatternOptic;
+        clone.PatternGameBuild = profile.PatternGameBuild;
         clone.MeasuredPatterns = profile.MeasuredPatterns.ToArray();
         return clone;
     }

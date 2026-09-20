@@ -68,6 +68,7 @@ internal static class MeasuredProfileStore
                     value.Profile.Barrel.Trim(),
                     value.Profile.Optic.Trim(),
                     value.Profile.Operator?.Trim() ?? string.Empty,
+                    value.GameBuild,
                     value.Profile.RoundsPerMinute,
                     value.Profile.MeasuredAtUtc,
                     value.Profile.Points
@@ -135,6 +136,7 @@ internal sealed record MeasuredPatternVariant(
     string Barrel,
     string Optic,
     string Operator,
+    string GameBuild,
     int RoundsPerMinute,
     DateTimeOffset MeasuredAtUtc,
     RecoilPatternPoint[] Points,

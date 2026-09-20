@@ -240,6 +240,10 @@
                                                            Style="{StaticResource LabelStyle}" />
                                                 <TextBlock x:Name="ProfileDescriptionText"
                                                            Style="{StaticResource MutedTextStyle}" />
+                                                <TextBlock x:Name="ProfileQualityText"
+                                                           Foreground="#9BD3AE" FontSize="11"
+                                                           TextWrapping="Wrap"
+                                                           AutomationProperties.Name="Profile data quality" />
                                                 <TextBlock x:Name="AttachmentNoteText" Foreground="#D8B45A"
                                                            FontSize="11" TextWrapping="Wrap"
                                                            Visibility="Collapsed" />

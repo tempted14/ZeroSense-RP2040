@@ -11,11 +11,11 @@ jobs:
   windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Restore
@@ -32,7 +32,7 @@ jobs:
           --configuration Release --runtime win-x64 --self-contained true
           --no-restore --output WindowsApp/artifacts/win-x64
           -p:WindowsAppSDKSelfContained=true
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ZeroSense-Windows-x64
           path: WindowsApp/artifacts/win-x64
@@ -40,8 +40,8 @@ jobs:
   firmware:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - name: Install PlatformIO
@@ -61,11 +61,11 @@ jobs:
         run: |
           python tools/verify_uf2.py rp2040 RP2040_Firmware/.pio/build/waveshare_rp2040_zero/firmware.uf2
           python tools/verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rainbow-recoil-rp2040-zero-uf2
           path: RP2040_Firmware/.pio/build/waveshare_rp2040_zero/firmware.uf2
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rainbow-recoil-rp2350-usb-c-uf2
           path: RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2
