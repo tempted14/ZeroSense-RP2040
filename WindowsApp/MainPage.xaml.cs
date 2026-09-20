@@ -1834,7 +1834,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
         var effectiveProfile = selected.Profile
             .WithAttachmentSetup(setup)
-            .WithOpticSetup(settings.ActiveMagnification)
+            .WithOpticSetup(settings.ActiveMagnification, operatorName)
             .WithOutputStrength(settings.GetWeaponOutputStrength(selected.Name));
         if (settings.CompensationMode == CompensationMode.Experimental &&
             effectiveProfile.HasWeaponPattern)

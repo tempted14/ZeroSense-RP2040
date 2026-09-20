@@ -94,8 +94,10 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("const float scaledY = requested_dy * verticalSensitivityFactor;", FIRMWARE)
         self.assertIn("sim.velocityX = scaledX;", FIRMWARE)
         self.assertIn("sim.velocityY = scaledY;", FIRMWARE)
-        self.assertIn("fractionalMouseX += sim.velocityX;", FIRMWARE)
-        self.assertIn("fractionalMouseY += sim.velocityY;", FIRMWARE)
+        self.assertIn("fractionalMouseX += sim.velocityX * timeScale;", FIRMWARE)
+        self.assertIn("fractionalMouseY += sim.velocityY * timeScale;", FIRMWARE)
+        self.assertIn("sim.acceleration * timeScale", FIRMWARE)
+        self.assertIn("frictionForInterval", FIRMWARE)
         self.assertNotIn("raw_dx / 256.0f", FIRMWARE)
         self.assertNotIn("raw_dy / 256.0f", FIRMWARE)
         self.assertNotIn("horizontal * 100.0f", FIRMWARE)
@@ -115,7 +117,7 @@ class FirmwareContractTests(unittest.TestCase):
             "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
             body,
         )
-        self.assertIn("queue_mouse_movement(horizontal, vertical, true)", body)
+        self.assertIn("queue_mouse_movement(horizontal, vertical, true, smoothingIntervalUs)", body)
         self.assertIn("service_scheduled_correction();", FIRMWARE)
 
     def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:

@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstring>
 #include "pico/bootrom.h"
+#include "motion_math.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
@@ -1481,35 +1482,32 @@ static uint8_t current_output_buttons() {
 }
 #endif
 
-// Inputs are HID counts for this movement step. Sensitivity is applied exactly
-// once here; pattern points bypass smoothing so the transmitted curve retains
-// its calibrated per-shot displacement.
+// Inputs are HID counts per reference 8 ms movement step. General-mode jitter
+// changes only when the integration runs, not its output rate: acceleration,
+// friction and displacement are normalized to the actual interval. Sensitivity
+// is applied exactly once here.
 static void queue_mouse_movement(
     float requested_dx,
     float requested_dy,
-    bool apply_smoothing) {
+    bool apply_smoothing,
+    uint32_t intervalUs) {
     const float scaledX = requested_dx * horizontalSensitivityFactor;
     const float scaledY = requested_dy * verticalSensitivityFactor;
-
-    const auto approach = [](float current, float target, float maximumStep) {
-        if (current < target) {
-            return std::min(current + maximumStep, target);
-        }
-        if (current > target) {
-            return std::max(current - maximumStep, target);
-        }
-        return current;
-    };
+    const float timeScale = ZeroSenseMotion::intervalScale(intervalUs);
 
     if (apply_smoothing) {
         const float targetX = std::clamp(scaledX, -sim.maxVelocity, sim.maxVelocity);
         const float targetY = std::clamp(scaledY, -sim.maxVelocity, sim.maxVelocity);
+        const float maximumStep = sim.acceleration * timeScale;
+        const float friction = ZeroSenseMotion::frictionForInterval(
+            sim.friction,
+            timeScale);
         sim.velocityX = targetX == 0.0f
-            ? sim.velocityX * sim.friction
-            : approach(sim.velocityX, targetX, sim.acceleration);
+            ? sim.velocityX * friction
+            : ZeroSenseMotion::approach(sim.velocityX, targetX, maximumStep);
         sim.velocityY = targetY == 0.0f
-            ? sim.velocityY * sim.friction
-            : approach(sim.velocityY, targetY, sim.acceleration);
+            ? sim.velocityY * friction
+            : ZeroSenseMotion::approach(sim.velocityY, targetY, maximumStep);
     } else {
         sim.velocityX = scaledX;
         sim.velocityY = scaledY;
@@ -1517,8 +1515,8 @@ static void queue_mouse_movement(
     sim.accelerating = std::abs(sim.velocityX) >= 0.01f ||
         std::abs(sim.velocityY) >= 0.01f;
 
-    fractionalMouseX += sim.velocityX;
-    fractionalMouseY += sim.velocityY;
+    fractionalMouseX += sim.velocityX * timeScale;
+    fractionalMouseY += sim.velocityY * timeScale;
 
     const int32_t queuedX = static_cast<int32_t>(fractionalMouseX);
     const int32_t queuedY = static_cast<int32_t>(fractionalMouseY);
@@ -1687,7 +1685,10 @@ static void generate_movement(uint32_t shotIntervalUs) {
     if (activeMode == MODE_WEAPON_PATTERN) {
         schedule_pattern_correction(horizontal, vertical, shotIntervalUs);
     } else {
-        queue_mouse_movement(horizontal, vertical, true);
+        const uint32_t smoothingIntervalUs = rapidFireActive
+            ? static_cast<uint32_t>(ZeroSenseMotion::ReferenceIntervalUs)
+            : shotIntervalUs;
+        queue_mouse_movement(horizontal, vertical, true, smoothingIntervalUs);
     }
 
     ++shotsInBurst;

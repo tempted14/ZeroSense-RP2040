@@ -42,6 +42,10 @@ public sealed class WeaponProfile
     public string PatternOptic { get; set; } = string.Empty;
 
     [JsonIgnore]
+    internal IReadOnlyList<MeasuredPatternVariant> MeasuredPatterns { get; set; } =
+        Array.Empty<MeasuredPatternVariant>();
+
+    [JsonIgnore]
     public bool SupportsContinuousCompensation => WeaponType is
         "Assault Rifle" or "SMG" or "LMG" or "Machine Pistol";
 
@@ -262,30 +266,52 @@ public sealed class WeaponProfile
 
         effective.Grip = setup.Grip;
         effective.Barrel = setup.Barrel;
-        var sameMeasuredLoadout = PatternDataQuality == PatternDataQuality.Measured &&
-            setup.Grip.Equals(Grip, StringComparison.OrdinalIgnoreCase) &&
-            setup.Barrel.Equals(Barrel, StringComparison.OrdinalIgnoreCase);
-        if (!sameMeasuredLoadout)
-        {
-            effective.Pattern = WeaponPatternCatalog.CreateEstimatedPattern(
-                effective.Name,
-                effective.VerticalCompensation,
-                effective.HorizontalCompensation,
-                effective.Barrel,
-                effective.RoundsPerMinute,
-                effective.MagazineSize);
-            effective.PatternDataQuality = effective.Pattern.Length > 0
-                ? PatternDataQuality.VideoDerivedEstimate
-                : PatternDataQuality.None;
-            effective.PatternSource = "Deterministic estimate for the selected attachment setup";
-            effective.PatternOptic = string.Empty;
-        }
+        effective.Pattern = WeaponPatternCatalog.CreateEstimatedPattern(
+            effective.Name,
+            effective.VerticalCompensation,
+            effective.HorizontalCompensation,
+            effective.Barrel,
+            effective.RoundsPerMinute,
+            effective.MagazineSize);
+        effective.PatternDataQuality = effective.Pattern.Length > 0
+            ? PatternDataQuality.VideoDerivedEstimate
+            : PatternDataQuality.None;
+        effective.PatternSource = "Deterministic estimate for the selected attachment setup";
+        effective.PatternOptic = string.Empty;
         return effective;
     }
 
-    internal WeaponProfile WithOpticSetup(string optic)
+    internal WeaponProfile WithOpticSetup(string optic, string? operatorName = null)
     {
         var effective = Clone(this);
+        var candidate = effective.MeasuredPatterns
+            .Where(value => value.Grip.Equals(
+                effective.Grip,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(value => value.Barrel.Equals(
+                effective.Barrel,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(value => value.Optic.Equals(
+                optic,
+                StringComparison.OrdinalIgnoreCase))
+            .Where(value => string.IsNullOrEmpty(value.Operator) ||
+                (!string.IsNullOrWhiteSpace(operatorName) &&
+                 value.Operator.Equals(operatorName, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(value =>
+                !string.IsNullOrEmpty(value.Operator) &&
+                value.Operator.Equals(operatorName, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(value => value.MeasuredAtUtc)
+            .FirstOrDefault();
+        if (candidate is not null)
+        {
+            effective.Pattern = candidate.Points.ToArray();
+            effective.PatternDataQuality = PatternDataQuality.Measured;
+            effective.PatternSource = candidate.Source;
+            effective.PatternOptic = candidate.Optic;
+            effective.RoundsPerMinute = candidate.RoundsPerMinute;
+            return effective;
+        }
+
         if (effective.PatternDataQuality == PatternDataQuality.Measured &&
             !effective.PatternOptic.Equals(optic, StringComparison.OrdinalIgnoreCase))
         {
@@ -512,6 +538,7 @@ public sealed class WeaponProfile
         clone.PatternDataQuality = profile.PatternDataQuality;
         clone.PatternSource = profile.PatternSource;
         clone.PatternOptic = profile.PatternOptic;
+        clone.MeasuredPatterns = profile.MeasuredPatterns.ToArray();
         return clone;
     }
 }

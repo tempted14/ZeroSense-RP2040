@@ -866,18 +866,39 @@ static void MeasuredProfilePacksAreExact()
           "schemaVersion": 1,
           "gameBuild": "test-build",
           "source": "controlled range capture",
-          "profiles": [{
-            "weapon": "F2",
-            "grip": "Vertical grip",
-            "barrel": "Flash hider",
-            "optic": "1.0x",
-            "roundsPerMinute": 980,
-            "measuredAtUtc": "2026-09-19T00:00:00Z",
-            "points": [
-              { "horizontal": 0.25, "vertical": 1.5 },
-              { "horizontal": -0.5, "vertical": 1.75 }
-            ]
-          }]
+          "profiles": [
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "1.0x",
+              "roundsPerMinute": 980,
+              "measuredAtUtc": "2026-09-18T00:00:00Z",
+              "points": [
+                { "horizontal": 0.25, "vertical": 1.5 },
+                { "horizontal": -0.5, "vertical": 1.75 }
+              ]
+            },
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "2.5x",
+              "roundsPerMinute": 981,
+              "measuredAtUtc": "2026-09-19T00:00:00Z",
+              "points": [{ "horizontal": 2.5, "vertical": 3.5 }]
+            },
+            {
+              "weapon": "F2",
+              "grip": "Vertical grip",
+              "barrel": "Flash hider",
+              "optic": "1.0x",
+              "operator": "Twitch",
+              "roundsPerMinute": 979,
+              "measuredAtUtc": "2026-09-17T00:00:00Z",
+              "points": [{ "horizontal": 0.75, "vertical": 2.25 }]
+            }
+          ]
         }
         """);
         var profiles = new List<WeaponProfile>
@@ -886,16 +907,37 @@ static void MeasuredProfilePacksAreExact()
                 "Vertical grip", "Flash hider", roundsPerMinute: 980, magazineSize: 30)
         };
         MeasuredProfileStore.Apply(profiles, directory);
-        Equal(PatternDataQuality.Measured, profiles[0].PatternDataQuality,
-            "matching loadout quality");
-        Equal(2, profiles[0].Pattern.Length, "measured point count");
-        Equal("1.0x", profiles[0].PatternOptic, "measured optic metadata");
-        True(profiles[0].PatternSource.Contains("controlled range capture", StringComparison.Ordinal),
+        Equal(PatternDataQuality.None, profiles[0].PatternDataQuality,
+            "measurement must wait for complete loadout selection");
+
+        var onePower = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x");
+        Equal(PatternDataQuality.Measured, onePower.PatternDataQuality,
+            "exact optic loadout quality");
+        Equal(2, onePower.Pattern.Length, "older exact optic must beat newer other optic");
+        Equal(980, onePower.RoundsPerMinute, "exact optic RPM");
+        Equal("1.0x", onePower.PatternOptic, "measured optic metadata");
+        True(onePower.PatternSource.Contains("controlled range capture", StringComparison.Ordinal),
             "measured provenance");
 
-        var mismatchedOptic = profiles[0].WithOpticSetup("2.5x");
+        var twoPointFive = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("2.5x");
+        Equal(1, twoPointFive.Pattern.Length, "newer exact 2.5x pattern");
+        Equal(981, twoPointFive.RoundsPerMinute, "2.5x RPM remains isolated");
+
+        var twitch = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("1.0x", "Twitch");
+        Equal(1, twitch.Pattern.Length, "operator-specific exact pattern takes priority");
+        Near(2.25, twitch.Pattern[0].Vertical, 0.0001, "operator-specific pattern point");
+
+        var mismatchedOptic = profiles[0]
+            .WithAttachmentSetup(new ResolvedAttachmentSetup("Vertical grip", "Flash hider"))
+            .WithOpticSetup("3.0x");
         Equal(PatternDataQuality.VideoDerivedEstimate, mismatchedOptic.PatternDataQuality,
-            "optic mismatch must not reuse measurement");
+            "missing optic must use estimate");
         True(mismatchedOptic.Pattern.Length > 2, "mismatch falls back to full estimate");
     }
     finally
