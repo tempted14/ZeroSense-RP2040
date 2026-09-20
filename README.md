@@ -51,9 +51,10 @@ mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 ## Easiest install
 
-Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the signed installer plus exactly one firmware image:
+Open the repository's [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest) and download the Windows package plus exactly one firmware image:
 
-1. `ZeroSense-Setup-1.3.0-win-x64.exe` — verify its publisher/signature, then run it.
+1. `ZeroSense-1.3.0-Windows-x64.zip` — verify it against `SHA256SUMS.txt`, extract it, and run `zerosense.exe`.
+   A signed `ZeroSense-Setup-1.3.0-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.
 2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-1.3.0.uf2`.
 3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-1.3.0.uf2`.
 
@@ -264,7 +265,7 @@ The app sends the selected profile as a v4 transaction: begin plus expected hash
 
 **Arm output** does not continuously move the pointer. RP2040 activation uses the desktop's foreground-gated M1+M2 monitor plus a 750 ms keepalive. RP2350 activation is different by design: the app grants a short foreground/armed lease, while the board reads raw M1+M2 from the downstream mouse itself. A raw release or mouse/interface disconnect stops output immediately; synthesized rapid-fire reports cannot feed back into this trigger. Physical movement, buttons, wheel, and pan remain additive and live.
 
-Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), ±8% cadence variation, and adaptive 250/500 Hz idle/normal HID servicing. High activity uses the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). Pattern mode instead uses exact RPM deadlines and distributes each shot's correction across 1 ms frames with fixed-point remainder preservation.
+Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. On both boards, General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), ±8% cadence variation, and adaptive 250/500 Hz idle/normal HID servicing. High activity uses the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). RP2350 physical movement, wheel, pan, and button transitions are always promoted immediately to that 1 ms path, so adaptive idle pacing does not reduce pass-through responsiveness. Pattern mode instead uses exact RPM deadlines and distributes each shot's correction across 1 ms frames with fixed-point remainder preservation.
 
 The Device page includes an explicit **Use simulator** option. It exercises the
 same configuration calculation and binary protocol encoders as real firmware,

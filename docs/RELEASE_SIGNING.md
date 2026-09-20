@@ -1,8 +1,9 @@
 # Release signing
 
-Official ZeroSense releases are fail-closed: `tools/build_release.ps1` will not
-produce an official installer unless an Authenticode certificate and password
-are supplied. The private key must never be committed.
+ZeroSense never publishes an unsigned installer. Every tagged release includes
+a portable Windows ZIP; `tools/build_release.ps1` only produces the optional
+installer when an Authenticode certificate and password are supplied. The
+private key must never be committed.
 
 Required environment variables:
 
@@ -16,4 +17,6 @@ the signature, and emits `SHA256SUMS.txt`. Local development can explicitly use
 
 The GitHub release workflow expects the base64 PFX and its password in the
 `WINDOWS_SIGNING_PFX_BASE64` and `WINDOWS_SIGNING_PFX_PASSWORD` repository
-secrets. Rotate the certificate immediately if either secret is exposed.
+secrets. With neither secret configured, it publishes the portable ZIP and no
+installer. Supplying only one secret fails the build. Rotate the certificate
+immediately if either secret is exposed.

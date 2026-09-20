@@ -52,7 +52,6 @@ static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
 // A 1 ms endpoint is the closest USB full-speed interval. Firmware targets
 // 1 kHz; normal host/controller overhead yields roughly 900 Hz in practice.
 static constexpr uint32_t POLL_HIGH_US   = 1000;
-static constexpr uint32_t PROXY_POLL_US  = 1000; // 1 kHz transparent RP2350 proxy
 
 // General-mode cadence variation. Pattern and rapid-fire timing use exact RPM
 // intervals so their configured shot sequence does not drift.
@@ -1611,22 +1610,25 @@ static void service_hid() {
         TinyUSBDevice.remoteWakeup();
     }
 
-    // The RP2350 proxy always services the upstream HID endpoint at 1 kHz so a
-    // high-polling physical mouse is not artificially reduced to the idle rate.
+    // Both targets use the same 250/500/1000 Hz policy. On RP2350, any queued
+    // physical movement, wheel, pan, or button transition immediately selects
+    // the 1 ms endpoint, so adaptive idle pacing cannot add pass-through lag.
+    bool physical_activity = false;
 #ifdef ZEROSENSE_RP2350_USB_C
-    const uint32_t poll_interval_us = PROXY_POLL_US;
-#else
-    // Adaptive polling for the standalone RP2040 output device.
+    physical_activity = pendingPhysicalMouseX != 0 || pendingPhysicalMouseY != 0 ||
+        pendingPhysicalWheel != 0 || pendingPhysicalPan != 0 ||
+        buttons != lastSentButtons || hidStateDirty;
+#endif
     uint32_t poll_interval_us = POLL_NORMAL_US;
-    const bool is_idle = !fireActive && !rapidFireActive;
-    const bool is_high_activity = rapidFireActive || sim.accelerating;
+    const bool is_idle = !fireActive && !rapidFireActive && !physical_activity;
+    const bool is_high_activity = rapidFireActive || sim.accelerating ||
+        physical_activity;
 
     if (is_idle) {
         poll_interval_us = POLL_IDLE_US; // Reduce packet rate during inactivity
     } else if (is_high_activity) {
         poll_interval_us = POLL_HIGH_US;
     }
-#endif
 
     const uint32_t now = micros();
     if (static_cast<uint32_t>(now - lastHidReportAtUs) < poll_interval_us ||
