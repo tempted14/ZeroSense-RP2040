@@ -365,6 +365,23 @@ public sealed class WeaponProfile
     internal WeaponProfile WithOutputStrength(double requestedStrength)
     {
         var strength = RecoilStrengthModel.Normalize(requestedStrength);
+        return ApplyOutputGain(strength, $"per-weapon output {strength:0.00}x");
+    }
+
+    internal WeaponProfile WithCombinedOutputStrength(
+        double requestedMasterGain,
+        double requestedWeaponStrength)
+    {
+        var master = RecoilStrengthModel.NormalizeMaster(requestedMasterGain);
+        var perWeapon = RecoilStrengthModel.Normalize(requestedWeaponStrength);
+        var combined = RecoilStrengthModel.Combine(master, perWeapon);
+        return ApplyOutputGain(
+            combined,
+            $"master {master:0.00}x; weapon trim {perWeapon:0.00}x; total {combined:0.00}x");
+    }
+
+    private WeaponProfile ApplyOutputGain(double strength, string sourceDescription)
+    {
         var effective = Clone(this);
         effective.VerticalCompensation = Math.Clamp(
             effective.VerticalCompensation * strength,
@@ -381,7 +398,7 @@ public sealed class WeaponProfile
             .ToArray();
         if (Math.Abs(strength - RecoilStrengthModel.Default) > 0.0001)
         {
-            effective.PatternSource = $"{effective.PatternSource}; per-weapon output {strength:0.00}x";
+            effective.PatternSource = $"{effective.PatternSource}; {sourceDescription}";
         }
         return effective;
     }

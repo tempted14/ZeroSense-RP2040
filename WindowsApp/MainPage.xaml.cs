@@ -77,6 +77,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private bool _settingsSavePending;
     private bool _configurationSyncPending;
     private int _configurationRevision;
+    private int _automaticReconnectGeneration;
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
     private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
@@ -87,7 +88,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     public MainPage()
     {
         InitializeComponent();
-        var appVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 5, 0);
+        var appVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version();
         TopVersionText.Text =
             $"v{appVersion.ToString(3)} · config {SerialProtocol.ConfigurationSchemaVersion}";
         DiagnosticLog.Record("app", "Main page initialized.");
@@ -173,6 +174,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             RapidFireToggle.IsOn = settings.RapidFireEnabled;
             GeneralTimingVarianceToggle.IsOn = settings.GeneralTimingVarianceEnabled;
             DeltaNoiseToggle.IsOn = settings.DeltaNoiseEnabled;
+            MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             WeaponConfidenceSlider.Value = settings.WeaponDetectionConfidence * 100.0;
             WeaponDetectionRegionXBox.Value = settings.WeaponDetectionRegionX;
             WeaponDetectionRegionYBox.Value = settings.WeaponDetectionRegionY;
@@ -312,8 +314,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateStatusText.Text = "Checking the official release feed…";
         try
         {
-            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ??
-                new Version(1, 5, 0);
+            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version();
             var result = await new ReleaseUpdateService().CheckAsync(
                 currentVersion,
                 _lifetimeCancellation.Token);
@@ -596,10 +597,76 @@ public sealed partial class MainPage : UserControl, IDisposable
 
     private void HandleConnectionLost(string detail)
     {
+        var connection = _connection;
+        if (connection is null)
+        {
+            return;
+        }
+        var canReconnect = !_isDisposed && !_isConnecting && !connection.IsSimulator;
+        var reconnectGeneration = canReconnect
+            ? Interlocked.Increment(ref _automaticReconnectGeneration)
+            : Volatile.Read(ref _automaticReconnectGeneration);
         SetArmControls(false, false);
         DisconnectCurrentDevice();
-        SetConnectionStatus("Device disconnected", detail, DisconnectedBrush);
+        SetConnectionStatus(
+            canReconnect ? "Device reconnecting…" : "Device disconnected",
+            canReconnect
+                ? $"{detail} ZeroSense will retry the verified device connection."
+                : detail,
+            canReconnect ? WarningBrush : DisconnectedBrush);
         DiagnosticLog.Record("device-error", $"Connection lost: {detail}");
+        if (canReconnect)
+        {
+            _ = AttemptAutomaticReconnectAsync(reconnectGeneration);
+        }
+    }
+
+    private async Task AttemptAutomaticReconnectAsync(int generation)
+    {
+        for (var attempt = 1;
+             attempt <= SerialReliabilityPolicy.MaximumAutomaticReconnectAttempts;
+             ++attempt)
+        {
+            try
+            {
+                await Task.Delay(
+                    TimeSpan.FromMilliseconds(500 * attempt),
+                    _lifetimeCancellation.Token);
+            }
+            catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (_isDisposed || generation != Volatile.Read(ref _automaticReconnectGeneration) ||
+                _connection?.IsConnected == true)
+            {
+                return;
+            }
+            if (_isConnecting)
+            {
+                continue;
+            }
+
+            DiagnosticLog.Record(
+                "device",
+                $"Automatic reconnect attempt {attempt}/" +
+                $"{SerialReliabilityPolicy.MaximumAutomaticReconnectAttempts}.");
+            await ConnectToDeviceAsync(_lifetimeCancellation.Token);
+            if (_connection?.IsConnected == true)
+            {
+                DiagnosticLog.Record("device", "Automatic reconnect succeeded; output remains safe.");
+                return;
+            }
+        }
+
+        if (!_isDisposed && generation == Volatile.Read(ref _automaticReconnectGeneration))
+        {
+            SetConnectionStatus(
+                "Device disconnected",
+                "Automatic reconnect attempts were exhausted. Check the upstream USB cable, then select Scan for device.",
+                DisconnectedBrush);
+        }
     }
 
     private void HandleFirmwareFault(string detail)
@@ -1085,6 +1152,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.VerticalSensitivity = 55.0f;
         settings.MouseDpi = 1600;
         settings.MouseSensitivityMultiplierUnit = 0.001f;
+        settings.MasterRecoilGain = RecoilStrengthModel.MasterDefault;
         settings.AdsSensitivity = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
         {
             ["1.0x"] = 38.0f,
@@ -1100,7 +1168,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.Normalize();
         RefreshCalibrationControls(settings);
         CalibrationActionStatusText.Text =
-            "Reference sensitivity and this weapon's output strength were reset. Undo is available.";
+            "Reference sensitivity, master gain, and this weapon's output strength were reset. Undo is available.";
         DiagnosticLog.Record("calibration", $"Reset calibration for {selectedWeapon ?? "no weapon"}.");
         SaveAndSynchronize();
     }
@@ -1135,6 +1203,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             VerticalSensitivityBox.Value = settings.VerticalSensitivity ?? 55.0f;
             VerticalSensitivitySlider.Value = VerticalSensitivityBox.Value;
             SensitivityMultiplierBox.Value = settings.MouseSensitivityMultiplierUnit;
+            MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             AutomaticMagnificationToggle.IsOn = settings.AutomaticMagnificationEnabled;
             MagnificationSelector.SelectedItem = settings.ActiveMagnification;
             AdsSensitivityBox.Value = settings.GetActiveAdsSensitivity();
@@ -1849,10 +1918,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var settings = SettingsManager.LoadSettings();
         OverlayWeaponText.Text = WeaponSelector.SelectedItem is WeaponProfileViewModel selected
             ? $"{WeaponSlotCatalog.GetSlot(selected.Profile)} · {selected.Name} · {settings.ActiveMagnification}" +
-              (Math.Abs(settings.GetWeaponOutputStrength(selected.Name) -
-                        RecoilStrengthModel.Default) > 0.0001
-                  ? $" · {settings.GetWeaponOutputStrength(selected.Name):0.00}×"
-                  : string.Empty) +
+              $" · {settings.GetEffectiveOutputGain(selected.Name):0.00}× output" +
               (settings.CompensationMode == CompensationMode.Experimental
                   ? " · Experimental"
                   : settings.CompensationMode == CompensationMode.ResearchEstimate
@@ -2062,7 +2128,27 @@ public sealed partial class MainPage : UserControl, IDisposable
             DiagnosticLog.Record("configuration-error", ex.Message);
             if (ReferenceEquals(_connection, connection))
             {
-                HandleConnectionLost(ex.Message);
+                if (connection.IsConnected)
+                {
+                    try
+                    {
+                        connection.SendCommand("STOP");
+                    }
+                    catch
+                    {
+                        // If the transport also failed, its read/write path will
+                        // raise the normal connection-loss notification.
+                    }
+                    SetArmControls(false, false);
+                    SetConnectionStatus(
+                        "Configuration synchronization failed",
+                        $"{ex.Message} The serial device remains connected; select Reconnect to retry safely.",
+                        WarningBrush);
+                }
+                else
+                {
+                    HandleConnectionLost(ex.Message);
+                }
             }
             return false;
         }
@@ -2233,9 +2319,10 @@ public sealed partial class MainPage : UserControl, IDisposable
                         (selected.Profile.VerticalCompensation > 0 ||
                          selected.Profile.HorizontalCompensation != 0 ||
                          selected.Profile.HasWeaponPattern);
+        var settings = SettingsManager.LoadSettings();
         var strength = selected is null
             ? RecoilStrengthModel.Default
-            : SettingsManager.LoadSettings().GetWeaponOutputStrength(selected.Name);
+            : settings.GetWeaponOutputStrength(selected.Name);
 
         var wasInitializing = _isInitializing;
         _isInitializing = true;
@@ -2254,8 +2341,41 @@ public sealed partial class MainPage : UserControl, IDisposable
         WeaponStrengthStatusText.Text = selected is null
             ? "Select a weapon to tune its output."
             : available
-                ? $"{selected.Name} · {strength:0.00}× · 1.00× preserves the profile"
+                ? $"{selected.Name} · {strength:0.00}× trim · " +
+                  $"{settings.GetEffectiveOutputGain(selected.Name):0.00}× total output"
                 : $"{selected.Name} has no automatic recoil output to scale.";
+        MasterRecoilGainStatusText.Text =
+            $"{settings.MasterRecoilGain:0.00}× calibrated hardware output · pattern shape preserved";
+    }
+
+    private void MasterRecoilGain_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        var settings = SettingsManager.LoadSettings();
+        settings.MasterRecoilGain = RecoilStrengthModel.NormalizeMaster(
+            ValidDouble(MasterRecoilGainBox.Value, settings.MasterRecoilGain));
+        UpdateWeaponStrengthUi();
+        UpdateCalibrationSummary(settings);
+        UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
+    private void ResetMasterRecoilGain_Click(object sender, RoutedEventArgs e)
+    {
+        var settings = SettingsManager.LoadSettings();
+        settings.MasterRecoilGain = RecoilStrengthModel.MasterDefault;
+        var wasInitializing = _isInitializing;
+        _isInitializing = true;
+        MasterRecoilGainBox.Value = settings.MasterRecoilGain;
+        _isInitializing = wasInitializing;
+        UpdateWeaponStrengthUi();
+        UpdateCalibrationSummary(settings);
+        UpdateOverlayContent();
+        SaveAndSynchronize();
     }
 
     private void WeaponStrength_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -2330,6 +2450,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var scale = settings.CalculateSensitivityScale();
         CalibrationSummaryText.Text =
             $"Scale H {scale.Horizontal:0.000} / V {scale.Vertical:0.000}  ·  " +
+            $"master gain {settings.MasterRecoilGain:0.00}×  ·  " +
             $"equivalent {settings.DefaultMultiplierEquivalent:0.###}  ·  " +
             $"{settings.ActiveMagnification} ADS {settings.GetActiveAdsSensitivity():0.#}";
     }
@@ -2422,6 +2543,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         _isDisposed = true;
+        Interlocked.Increment(ref _automaticReconnectGeneration);
         _lifetimeCancellation.Cancel();
         _continuousDetectionTimer.Stop();
         _continuousDetectionTimer.Tick -= ContinuousDetectionTimer_Tick;
@@ -2459,6 +2581,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         Dictionary<string, float> AdsSensitivity,
         string ActiveMagnification,
         bool AutomaticMagnification,
+        double MasterRecoilGain,
         string? WeaponName,
         double WeaponStrength)
     {
@@ -2470,6 +2593,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             new Dictionary<string, float>(settings.AdsSensitivity, StringComparer.OrdinalIgnoreCase),
             settings.ActiveMagnification,
             settings.AutomaticMagnificationEnabled,
+            settings.MasterRecoilGain,
             weaponName,
             string.IsNullOrWhiteSpace(weaponName)
                 ? RecoilStrengthModel.Default
@@ -2486,6 +2610,7 @@ public sealed partial class MainPage : UserControl, IDisposable
                 StringComparer.OrdinalIgnoreCase);
             settings.ActiveMagnification = ActiveMagnification;
             settings.AutomaticMagnificationEnabled = AutomaticMagnification;
+            settings.MasterRecoilGain = MasterRecoilGain;
             if (!string.IsNullOrWhiteSpace(WeaponName))
             {
                 settings.SetWeaponOutputStrength(WeaponName, WeaponStrength);

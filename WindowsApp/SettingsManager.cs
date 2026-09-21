@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 12;
+    public const int CurrentCalibrationVersion = 14;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -268,6 +268,9 @@ public sealed class Settings
     [JsonPropertyName("weaponOutputStrengths")]
     public Dictionary<string, double> WeaponOutputStrengths { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
+
+    [JsonPropertyName("masterRecoilGain")]
+    public double MasterRecoilGain { get; set; } = RecoilStrengthModel.MasterDefault;
 
     // Kept for backward-compatible deserialization of the unfinished v4 setting.
     [JsonPropertyName("autoOperatorTrackingEnabled")]
@@ -385,6 +388,21 @@ public sealed class Settings
             DeltaNoiseEnabled = false;
         }
 
+
+        if (CalibrationVersion < 13)
+        {
+            // v1.5 profile vectors were validated for shape but shipped roughly
+            // 2-3x below the physical output observed on RP2350 hardware.
+            MasterRecoilGain = RecoilStrengthModel.MasterDefault;
+        }
+
+        if (CalibrationVersion < 14)
+        {
+            // First physical RP2350 calibration established that the preserved
+            // profile shapes need about 3-4x output on the reference setup.
+            MasterRecoilGain = RecoilStrengthModel.MasterDefault;
+        }
+
         if (CalibrationVersion < 2)
         {
             // Migrate the old 0.5-3.0 placeholder sliders to the supplied Siege setup.
@@ -472,6 +490,7 @@ public sealed class Settings
                 RecoilStrengthModel.Normalize(group.Last().Value)))
             .Where(pair => Math.Abs(pair.Value - RecoilStrengthModel.Default) > 0.0001)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        MasterRecoilGain = RecoilStrengthModel.NormalizeMaster(MasterRecoilGain);
 
         OperatorDetectionConfidence = double.IsFinite(OperatorDetectionConfidence)
             ? Math.Clamp(OperatorDetectionConfidence, 0.55, 1.0)
@@ -533,16 +552,19 @@ public sealed class Settings
         }
     }
 
+    public double GetEffectiveOutputGain(string weaponName) =>
+        RecoilStrengthModel.Combine(MasterRecoilGain, GetWeaponOutputStrength(weaponName));
+
     public SensitivityScale CalculateSensitivityScale()
     {
         const float referenceHipGain = 55.0f * 0.001f;
-        const float referenceAds = 38.0f;
 
         var horizontalGain = Math.Max(0.000001f,
             (HorizontalSensitivity ?? 55.0f) * MouseSensitivityMultiplierUnit);
         var verticalGain = Math.Max(0.000001f,
             (VerticalSensitivity ?? 55.0f) * MouseSensitivityMultiplierUnit);
         var ads = Math.Max(1.0f, GetActiveAdsSensitivity());
+        var referenceAds = GetReferenceAdsSensitivity(ActiveMagnification);
         var adsScale = referenceAds / ads;
 
         return new SensitivityScale(
@@ -560,6 +582,14 @@ public sealed class Settings
         ["2.5x"] = 67.0f,
         ["3.5x"] = 72.0f,
         ["8.0x"] = 74.0f
+    };
+
+    private static float GetReferenceAdsSensitivity(string magnification) => magnification switch
+    {
+        "2.5x" => 67.0f,
+        "3.5x" => 72.0f,
+        "8.0x" => 74.0f,
+        _ => 38.0f
     };
 
     private static double ClampPercent(double value, double fallback, double minimum = 0) =>

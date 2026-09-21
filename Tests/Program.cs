@@ -35,6 +35,7 @@ var tests = new (string Name, Action Run)[]
     ("legacy settings migrate to safe defaults", LegacySettingsMigrateSafely),
     ("attachment math is applied once", AttachmentMathIsConsistent),
     ("serial packets preserve framing and UTF-8", SerialPacketsAreValid),
+    ("serial reliability tolerates isolated read and acknowledgement stalls", SerialReliabilityIsBounded),
     ("all commands and pattern chunks encode exactly", SerialProtocolCoverageIsComplete),
     ("configuration hashes and transactions are deterministic", ConfigurationTransactionsAreDeterministic),
     ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
@@ -353,7 +354,8 @@ static void ProfileSourceSwitchingIsExact()
     var originalSettings = new Settings
     {
         ActiveMagnification = "1.0x",
-        CompensationMode = CompensationMode.WeaponPattern
+        CompensationMode = CompensationMode.WeaponPattern,
+        MasterRecoilGain = 1.0
     };
     var original = RecoilProfileResolver.Build(profile, "Twitch", originalSettings);
     Equal(PatternDataQuality.Measured, original.PatternDataQuality,
@@ -364,7 +366,8 @@ static void ProfileSourceSwitchingIsExact()
     var researchSettings = new Settings
     {
         ActiveMagnification = "1.0x",
-        CompensationMode = CompensationMode.ResearchEstimate
+        CompensationMode = CompensationMode.ResearchEstimate,
+        MasterRecoilGain = 1.0
     };
     var research = RecoilProfileResolver.Build(profile, "Twitch", researchSettings);
     Equal(PatternDataQuality.VideoDerivedEstimate, research.PatternDataQuality,
@@ -393,6 +396,7 @@ static void WeaponOutputStrengthIsSafe()
     };
     var adjusted = source.WithOutputStrength(1.5);
     var neutral = source.WithOutputStrength(RecoilStrengthModel.Default);
+    var combined = source.WithCombinedOutputStrength(2.5, 1.2);
     Equal(source.VerticalCompensation, neutral.VerticalCompensation,
         "neutral strength preserves vertical output");
     True(source.Pattern.SequenceEqual(neutral.Pattern),
@@ -404,6 +408,10 @@ static void WeaponOutputStrengthIsSafe()
     Equal(-1.5, adjusted.HorizontalCompensation, "horizontal output strength");
     Equal(new RecoilPatternPoint(-3.0f, 6.0f), adjusted.Pattern[0],
         "pattern output strength");
+    Equal(6.0, combined.VerticalCompensation, "combined master and weapon vertical output");
+    Equal(-3.0, combined.HorizontalCompensation, "combined master and weapon horizontal output");
+    Equal(new RecoilPatternPoint(-6.0f, 12.0f), combined.Pattern[0],
+        "combined master and weapon pattern output");
 
     Equal(RecoilStrengthModel.Minimum, RecoilStrengthModel.Normalize(-10),
         "strength lower clamp");
@@ -411,6 +419,14 @@ static void WeaponOutputStrengthIsSafe()
         "strength upper clamp");
     Equal(RecoilStrengthModel.Default, RecoilStrengthModel.Normalize(double.NaN),
         "strength non-finite fallback");
+    Equal(RecoilStrengthModel.MasterMinimum, RecoilStrengthModel.NormalizeMaster(-10),
+        "master gain lower clamp");
+    Equal(RecoilStrengthModel.MasterMaximum, RecoilStrengthModel.NormalizeMaster(10),
+        "master gain upper clamp");
+    Equal(RecoilStrengthModel.MasterDefault, RecoilStrengthModel.NormalizeMaster(double.NaN),
+        "master gain non-finite fallback");
+    Equal(3.0, RecoilStrengthModel.Combine(2.5, 1.2),
+        "master and weapon gains combine proportionally");
 }
 
 static void ExperimentalTuningIsIsolated()
@@ -491,6 +507,7 @@ static void SettingsNormalizationIsSafe()
             [" MP7 "] = 99,
             [" F2 "] = double.NaN
         },
+        MasterRecoilGain = 99,
         GeneralTimingVarianceEnabled = true,
         DeltaNoiseEnabled = true
     };
@@ -513,6 +530,10 @@ static void SettingsNormalizationIsSafe()
         "per-weapon strength upper clamp");
     Equal(RecoilStrengthModel.Default, settings.GetWeaponOutputStrength("F2"),
         "non-finite per-weapon strength fallback");
+    Equal(RecoilStrengthModel.MasterMaximum, settings.MasterRecoilGain,
+        "master recoil gain upper clamp");
+    Equal(RecoilStrengthModel.EffectiveMaximum, settings.GetEffectiveOutputGain("MP7"),
+        "master and per-weapon output are bounded together");
     True(!settings.WeaponOutputStrengths.ContainsKey("F2"),
         "neutral per-weapon strengths should not be persisted");
 
@@ -523,8 +544,21 @@ static void SettingsNormalizationIsSafe()
         "experimental per-weapon persistence");
     Equal(RecoilStrengthModel.Maximum, roundTrip.GetWeaponOutputStrength("MP7"),
         "output strength persistence");
+    Equal(RecoilStrengthModel.MasterMaximum, roundTrip.MasterRecoilGain,
+        "master recoil gain persistence");
     True(roundTrip.GeneralTimingVarianceEnabled, "timing variance persistence");
     True(roundTrip.DeltaNoiseEnabled, "delta noise persistence");
+
+    foreach (var magnification in new[] { "1.0x", "2.5x", "3.5x", "8.0x" })
+    {
+        var defaults = new Settings { ActiveMagnification = magnification };
+        defaults.Normalize();
+        var defaultScale = defaults.CalculateSensitivityScale();
+        Equal(1.0f, defaultScale.Horizontal,
+            $"{magnification} default horizontal ADS calibration");
+        Equal(1.0f, defaultScale.Vertical,
+            $"{magnification} default vertical ADS calibration");
+    }
 }
 
 static void ProfilePersistenceRoundTrips()
@@ -595,7 +629,24 @@ static void LegacySettingsMigrateSafely()
     True(settings.AutomaticMagnificationEnabled, "automatic optic migration defaults on");
     True(!settings.GeneralTimingVarianceEnabled, "timing variance migration defaults off");
     True(!settings.DeltaNoiseEnabled, "delta noise migration defaults off");
+    Equal(RecoilStrengthModel.MasterDefault, settings.MasterRecoilGain,
+        "legacy output migration uses corrected hardware gain");
     True(!settings.EnableRecoilControl, "saved armed state must always migrate to safe");
+
+    var v12Settings = new Settings
+    {
+        CalibrationVersion = 12,
+        MasterRecoilGain = RecoilStrengthModel.MasterMinimum,
+        GeneralTimingVarianceEnabled = true,
+        DeltaNoiseEnabled = true
+    };
+    v12Settings.Normalize();
+    Equal(RecoilStrengthModel.MasterDefault, v12Settings.MasterRecoilGain,
+        "v1.5 output migration receives corrected hardware gain");
+    True(v12Settings.GeneralTimingVarianceEnabled,
+        "v1.5 timing variance preference survives gain migration");
+    True(v12Settings.DeltaNoiseEnabled,
+        "v1.5 delta noise preference survives gain migration");
 
     var iconHudSettings = new Settings
     {
@@ -1028,6 +1079,27 @@ static void ConfigurationTransactionsAreDeterministic()
         false,
         true),
         "delta noise toggle must alter the configuration hash");
+}
+
+static void SerialReliabilityIsBounded()
+{
+    True(SerialReliabilityPolicy.MaximumResponseAttempts >= 2,
+        "an isolated acknowledgement loss must be retried");
+    True(SerialReliabilityPolicy.MaximumResponseAttempts <= 3,
+        "response retries must remain bounded");
+    True(SerialReliabilityPolicy.MaximumConsecutiveReadFailures >= 2,
+        "an isolated CDC read failure must not disconnect");
+    True(!SerialReliabilityPolicy.ShouldDisconnectAfterReadFailure(1),
+        "first transient read failure is tolerated");
+    True(SerialReliabilityPolicy.ShouldDisconnectAfterReadFailure(
+            SerialReliabilityPolicy.MaximumConsecutiveReadFailures),
+        "repeated read failure eventually disconnects");
+    True(SerialReliabilityPolicy.IsTransientReadFailure(new IOException()),
+        "I/O read failures are transient candidates");
+    True(SerialReliabilityPolicy.IsTransientReadFailure(new InvalidOperationException()),
+        "temporary closed-state reads are transient candidates");
+    True(!SerialReliabilityPolicy.IsTransientReadFailure(new UnauthorizedAccessException()),
+        "access failures remain terminal");
 }
 
 static void MeasuredProfilePacksAreExact()
