@@ -278,6 +278,29 @@
                                                        TextWrapping="Wrap" />
                                             <Border Padding="10" CornerRadius="7"
                                                     Background="#0B0B0B"
+                                                    BorderBrush="#493A18" BorderThickness="1">
+                                                <Grid ColumnDefinitions="*,110,Auto" ColumnSpacing="9">
+                                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                        <TextBlock Text="MASTER RECOIL GAIN"
+                                                                   Style="{StaticResource LabelStyle}" />
+                                                        <TextBlock x:Name="MasterRecoilGainStatusText"
+                                                                   Text="3.50× calibrated hardware output"
+                                                                   Style="{StaticResource MutedTextStyle}" />
+                                                    </StackPanel>
+                                                    <NumberBox x:Name="MasterRecoilGainBox" Grid.Column="1"
+                                                               Minimum="0.5" Maximum="4" Value="3.5"
+                                                               SmallChange="0.05" SpinButtonPlacementMode="Compact"
+                                                               VerticalAlignment="Center"
+                                                               AutomationProperties.Name="Master recoil output gain"
+                                                               ValueChanged="MasterRecoilGain_ValueChanged" />
+                                                    <Button Grid.Column="2" Content="Reset"
+                                                            VerticalAlignment="Center"
+                                                            AutomationProperties.Name="Reset master recoil output gain"
+                                                            Click="ResetMasterRecoilGain_Click" />
+                                                </Grid>
+                                            </Border>
+                                            <Border Padding="10" CornerRadius="7"
+                                                    Background="#0B0B0B"
                                                     BorderBrush="{StaticResource StrokeBrush}"
                                                     BorderThickness="1">
                                                 <Grid ColumnDefinitions="*,110,Auto" ColumnSpacing="9">
