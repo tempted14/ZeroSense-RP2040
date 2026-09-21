@@ -40,7 +40,8 @@ internal static class RecoilProfileResolver
                   "has no row for this weapon";
         }
 
-        effective = effective.WithOutputStrength(
+        effective = effective.WithCombinedOutputStrength(
+            settings.MasterRecoilGain,
             settings.GetWeaponOutputStrength(selectedProfile.Name));
         if (settings.CompensationMode == CompensationMode.Experimental &&
             effective.HasWeaponPattern)

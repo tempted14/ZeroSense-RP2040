@@ -142,6 +142,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
 
     private void ReadLoop(SerialPort port, CancellationToken cancellationToken)
     {
+        var consecutiveReadFailures = 0;
         try
         {
             while (!cancellationToken.IsCancellationRequested && port.IsOpen)
@@ -151,6 +152,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                     var line = port.ReadLine().TrimEnd('\r');
                     if (line.Length > 0)
                     {
+                        consecutiveReadFailures = 0;
                         CompletePendingResponse(line);
                         RaiseCommandReceived(line);
                     }
@@ -158,6 +160,27 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                 catch (TimeoutException)
                 {
                     // A quiet CDC connection is normal.
+                    consecutiveReadFailures = 0;
+                }
+                catch (Exception ex) when (
+                    !cancellationToken.IsCancellationRequested &&
+                    SerialReliabilityPolicy.IsTransientReadFailure(ex))
+                {
+                    ++consecutiveReadFailures;
+                    if (!port.IsOpen ||
+                        SerialReliabilityPolicy.ShouldDisconnectAfterReadFailure(
+                            consecutiveReadFailures))
+                    {
+                        throw new IOException(
+                            $"The device CDC read failed {consecutiveReadFailures} times consecutively.",
+                            ex);
+                    }
+
+                    if (cancellationToken.WaitHandle.WaitOne(
+                        SerialReliabilityPolicy.ReadFailureBackoffMilliseconds))
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -165,7 +188,6 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         {
             MarkConnectionFailed(port);
             RaiseStatusChanged($"Disconnected: {ex.Message}");
-            RaiseCommandReceived(null);
         }
     }
 
@@ -512,19 +534,33 @@ public sealed class SerialConnection : IRecoilDeviceConnection
 
         try
         {
-            send();
-            string response;
-            try
+            string? response = null;
+            TimeoutException? lastTimeout = null;
+            for (var attempt = 1;
+                 attempt <= SerialReliabilityPolicy.MaximumResponseAttempts;
+                 ++attempt)
             {
-                response = await completion.Task
-                    .WaitAsync(TimeSpan.FromSeconds(2.5), cancellationToken)
-                    .ConfigureAwait(false);
+                send();
+                try
+                {
+                    response = await completion.Task
+                        .WaitAsync(TimeSpan.FromSeconds(2.5), cancellationToken)
+                        .ConfigureAwait(false);
+                    break;
+                }
+                catch (TimeoutException ex)
+                {
+                    lastTimeout = ex;
+                    Interlocked.Increment(ref _failedCommands);
+                }
             }
-            catch (TimeoutException ex)
+
+            if (response is null)
             {
-                Interlocked.Increment(ref _failedCommands);
                 throw new FirmwareResponseTimeoutException(
-                    $"The firmware did not acknowledge the {stage} configuration.", ex);
+                    $"The firmware did not acknowledge the {stage} configuration after " +
+                    $"{SerialReliabilityPolicy.MaximumResponseAttempts} attempts.",
+                    lastTimeout ?? new TimeoutException());
             }
 
             if (isFailure(response))
