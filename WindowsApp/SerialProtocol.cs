@@ -12,7 +12,7 @@ internal static class SerialProtocol
 {
     internal const int MaximumPayloadLength = 63;
     internal const int MaximumProfileNameLength = 49;
-    internal const byte ConfigurationSchemaVersion = 1;
+    internal const byte ConfigurationSchemaVersion = 3;
     internal const byte FrameMagicFirst = 0xA5;
     internal const byte FrameMagicSecond = 0x5A;
     internal const byte FrameVersion = 1;
@@ -76,8 +76,9 @@ internal static class SerialProtocol
         // [burst u8][rpm u16 LE][pattern count u8][name UTF-8]
         var payload = new byte[14 + nameBytes.Length];
         payload[0] = 2;
-        // Experimental is a host-side tuning mode. It reuses the stable v2
-        // firmware pattern representation instead of expanding the wire protocol.
+        // Experimental and Research Estimate are host-side pattern builders.
+        // Both reuse the stable v2 firmware representation instead of expanding
+        // the wire protocol.
         payload[1] = (byte)(patternCount > 0
             ? CompensationMode.WeaponPattern
             : CompensationMode.General);
@@ -174,6 +175,16 @@ internal static class SerialProtocol
         return BuildPacket(CommandType.RapidFire, payload);
     }
 
+    public static byte[] BuildGeneralSettingsCommand(
+        bool timingVarianceEnabled,
+        bool deltaNoiseEnabled = false) =>
+        BuildPacket(
+            CommandType.GeneralSettings,
+            [
+                timingVarianceEnabled ? (byte)1 : (byte)0,
+                deltaNoiseEnabled ? (byte)1 : (byte)0
+            ]);
+
     public static byte[] BuildArmLeaseCommand(bool enabled) =>
         BuildPacket(CommandType.ArmLease, [enabled ? (byte)1 : (byte)0]);
 
@@ -213,7 +224,9 @@ internal static class SerialProtocol
         CompensationMode mode,
         SensitivityScale scale,
         bool rapidFireEnabled,
-        int rapidFireRoundsPerMinute)
+        int rapidFireRoundsPerMinute,
+        bool generalTimingVarianceEnabled = false,
+        bool deltaNoiseEnabled = false)
     {
         ArgumentNullException.ThrowIfNull(profile);
         // Reuse the encoders for all contract validation before hashing.
@@ -243,6 +256,8 @@ internal static class SerialProtocol
         AppendSingle(canonical, scale.Vertical);
         canonical.Add(rapidFireEnabled ? (byte)1 : (byte)0);
         AppendUInt16(canonical, (ushort)(rapidFireEnabled ? rapidFireRoundsPerMinute : 0));
+        canonical.Add(generalTimingVarianceEnabled ? (byte)1 : (byte)0);
+        canonical.Add(deltaNoiseEnabled ? (byte)1 : (byte)0);
 
         for (var index = 0; index < pointCount; ++index)
         {
@@ -369,7 +384,8 @@ internal static class SerialProtocol
     }
 
     internal static bool UsesPattern(CompensationMode mode) =>
-        mode is CompensationMode.WeaponPattern or CompensationMode.Experimental;
+        mode is CompensationMode.WeaponPattern or CompensationMode.Experimental or
+            CompensationMode.ResearchEstimate;
 
     private static CommandType GetCommandType(string name) => name switch
     {
@@ -386,6 +402,7 @@ internal static class SerialProtocol
         "CONFIG_COMMIT" => CommandType.ConfigurationCommit,
         "CONFIG_ABORT" => CommandType.ConfigurationAbort,
         "STATUS" => CommandType.Status,
+        "GENERAL_SETTINGS" => CommandType.GeneralSettings,
         "RESET" => CommandType.Reset,
         _ => throw new ArgumentException($"Unknown command type '{name}'.", nameof(name))
     };
@@ -405,6 +422,7 @@ internal static class SerialProtocol
         ConfigurationCommit = 0xFA,
         ConfigurationAbort = 0xFB,
         Status = 0xFC,
+        GeneralSettings = 0xFD,
         Reset = 0xFF
     }
 }

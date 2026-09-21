@@ -72,6 +72,15 @@ internal static class FirmwareContract
             $"RAPID_FIRE:{(enabled ? "ON" : "OFF")}:RPM={(enabled ? roundsPerMinute : 0)}",
             StringComparison.Ordinal);
 
+    public static bool GeneralSettingsAcknowledgementMatches(
+        string line,
+        bool timingVarianceEnabled,
+        bool deltaNoiseEnabled = false) =>
+        line.Equals(
+            $"GENERAL_SETTINGS:TIMING_VARIANCE={(timingVarianceEnabled ? "ON" : "OFF")}" +
+            $":DELTA_NOISE={(deltaNoiseEnabled ? "ON" : "OFF")}",
+            StringComparison.Ordinal);
+
     public static bool PatternAcknowledgementMatches(string line, WeaponProfile profile) =>
         line.Equals(
             $"PATTERN:READY:{Math.Min(profile.Pattern.Length, MaximumPatternPoints)}",

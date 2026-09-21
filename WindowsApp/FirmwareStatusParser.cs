@@ -25,7 +25,12 @@ public readonly record struct FirmwareStatusUpdate(
     uint HostReportsReceived = 0,
     uint HostDecodeErrors = 0,
     uint HostAccumulatorSaturations = 0,
-    uint UpstreamDisconnectStops = 0);
+    uint UpstreamDisconnectStops = 0,
+    uint CorrectionDelayedFrames = 0,
+    uint MaximumCorrectionLatenessUs = 0,
+    uint CurrentQueuedDelta = 0,
+    uint CurrentReportIntervalUs = 0,
+    uint GeneralIntervalClamps = 0);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -100,7 +105,12 @@ public static class FirmwareStatusParser
         update = default;
         var fields = value.Split(':', StringSplitOptions.None);
         var upstreamDisconnectStops = 0u;
-        if (fields.Length is not (8 or 9) || fields[0] != "METRICS" ||
+        var correctionDelayedFrames = 0u;
+        var maximumCorrectionLatenessUs = 0u;
+        var currentQueuedDelta = 0u;
+        var currentReportIntervalUs = 0u;
+        var generalIntervalClamps = 0u;
+        if (fields.Length is not (8 or 9 or 14) || fields[0] != "METRICS" ||
             !TryParseMetric(fields[1], "HID_SENT", out var hidReportsSent) ||
             !TryParseMetric(fields[2], "HID_BUSY", out var hidBusyDeferrals) ||
             !TryParseMetric(fields[3], "MAX_QUEUE", out var maximumQueuedDelta) ||
@@ -108,8 +118,17 @@ public static class FirmwareStatusParser
             !TryParseMetric(fields[5], "HOST_REPORTS", out var hostReportsReceived) ||
             !TryParseMetric(fields[6], "HOST_DECODE_ERRORS", out var hostDecodeErrors) ||
             !TryParseMetric(fields[7], "HOST_SATURATIONS", out var hostAccumulatorSaturations) ||
-            (fields.Length == 9 &&
-             !TryParseMetric(fields[8], "USB_STOPS", out upstreamDisconnectStops)))
+            (fields.Length >= 9 &&
+             !TryParseMetric(fields[8], "USB_STOPS", out upstreamDisconnectStops)) ||
+            (fields.Length == 14 &&
+             (!TryParseMetric(fields[9], "CORRECTION_LATE", out correctionDelayedFrames) ||
+              !TryParseMetric(
+                  fields[10],
+                  "MAX_CORRECTION_LATE_US",
+                  out maximumCorrectionLatenessUs) ||
+              !TryParseMetric(fields[11], "QUEUE", out currentQueuedDelta) ||
+              !TryParseMetric(fields[12], "REPORT_INTERVAL_US", out currentReportIntervalUs) ||
+              !TryParseMetric(fields[13], "GENERAL_DT_CLAMPS", out generalIntervalClamps))))
         {
             return false;
         }
@@ -123,7 +142,12 @@ public static class FirmwareStatusParser
             HostReportsReceived: hostReportsReceived,
             HostDecodeErrors: hostDecodeErrors,
             HostAccumulatorSaturations: hostAccumulatorSaturations,
-            UpstreamDisconnectStops: upstreamDisconnectStops);
+            UpstreamDisconnectStops: upstreamDisconnectStops,
+            CorrectionDelayedFrames: correctionDelayedFrames,
+            MaximumCorrectionLatenessUs: maximumCorrectionLatenessUs,
+            CurrentQueuedDelta: currentQueuedDelta,
+            CurrentReportIntervalUs: currentReportIntervalUs,
+            GeneralIntervalClamps: generalIntervalClamps);
         return true;
     }
 

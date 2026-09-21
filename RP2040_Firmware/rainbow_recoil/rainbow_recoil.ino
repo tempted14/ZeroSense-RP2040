@@ -11,6 +11,8 @@
 #include <cmath>
 #include <cstring>
 #include "pico/bootrom.h"
+#include "correction_scheduler.h"
+#include "delta_noise.h"
 #include "motion_math.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
@@ -36,6 +38,7 @@ enum CommandId : uint8_t {
     CMD_CONFIG_COMMIT = 0xFA,
     CMD_CONFIG_ABORT = 0xFB,
     CMD_STATUS      = 0xFC,
+    CMD_GENERAL_SETTINGS = 0xFD,
     CMD_RESET       = 0xFF
 };
 
@@ -56,7 +59,7 @@ static constexpr uint32_t POLL_HIGH_US   = 1000;
 
 // General-mode cadence variation is opt-in. Pattern and rapid-fire timing use
 // exact RPM intervals so their configured shot sequence does not drift.
-static constexpr bool GENERAL_TIMING_JITTER_ENABLED = false;
+static bool generalTimingJitterEnabled = false;
 static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% when explicitly enabled
 
 enum CompensationMode : uint8_t {
@@ -110,12 +113,7 @@ static int32_t pendingPhysicalMouseX = 0;
 static int32_t pendingPhysicalMouseY = 0;
 static int32_t pendingPhysicalWheel = 0;
 static int32_t pendingPhysicalPan = 0;
-static int32_t scheduledCorrectionXQ16 = 0;
-static int32_t scheduledCorrectionYQ16 = 0;
-static int32_t correctionFractionXQ16 = 0;
-static int32_t correctionFractionYQ16 = 0;
-static uint16_t scheduledCorrectionFrames = 0;
-static uint32_t nextCorrectionFrameAtUs = 0;
+static ZeroSenseCorrection::State correctionScheduler;
 static bool rapidFireEnabled = false;
 static bool rapidFireActive = false;
 static bool rapidButtonDown = false;
@@ -125,7 +123,7 @@ static uint32_t nextRapidShotAtUs = 0;
 static uint32_t rapidIntervalRemainder = 0;
 static uint32_t lastHostKeepAliveAtMs = 0;
 
-static constexpr uint8_t configurationSchemaVersion = 1;
+static constexpr uint8_t configurationSchemaVersion = 3;
 static constexpr uint32_t configurationTransactionTimeoutMs = 10000;
 typedef struct {
     char profileName[54];
@@ -142,6 +140,8 @@ typedef struct {
     float verticalSensitivity;
     bool rapidEnabled;
     uint16_t rapidRoundsPerMinute;
+    bool generalTimingJitterEnabled;
+    bool deltaNoiseEnabled;
 } ConfigurationSnapshot;
 
 static ConfigurationSnapshot previousConfiguration;
@@ -158,6 +158,11 @@ static uint32_t hidBusyDeferrals = 0;
 static uint32_t maximumQueuedDelta = 0;
 static uint32_t maximumActiveReportGapUs = 0;
 static uint32_t upstreamDisconnectStops = 0;
+static uint32_t generalIntervalClampCount = 0;
+static uint32_t currentHidReportIntervalUs = POLL_IDLE_US;
+static bool deltaNoiseEnabled = false;
+static ZeroSenseDeltaNoise::AxisState deltaNoiseX;
+static ZeroSenseDeltaNoise::AxisState deltaNoiseY;
 static const uint32_t hostWatchdogTimeoutMs = 750; // ms - matches original constant value
 static uint32_t rapidButtonReleaseAtUs = 0;
 
@@ -583,7 +588,7 @@ static int16_t readInt16LittleEndian(const uint8_t* source) {
 // General mode may vary its fixed 8 ms update cadence slightly. This is not
 // used for configured weapon patterns or rapid-fire shot scheduling.
 static uint32_t get_jittered_interval(uint32_t base_us) {
-    if (!GENERAL_TIMING_JITTER_ENABLED) {
+    if (!generalTimingJitterEnabled) {
         return base_us;
     }
     const float jitter_scale = 1.0f +
@@ -620,12 +625,11 @@ static void reset_movement_state() {
     fractionalMouseY = 0.0f;
     pendingMouseX = 0;
     pendingMouseY = 0;
-    scheduledCorrectionXQ16 = 0;
-    scheduledCorrectionYQ16 = 0;
-    correctionFractionXQ16 = 0;
-    correctionFractionYQ16 = 0;
-    scheduledCorrectionFrames = 0;
-    nextCorrectionFrameAtUs = 0;
+    // STOP, disconnect, and configuration changes must not emit a deferred
+    // noise repayment after generated movement has been revoked.
+    deltaNoiseX = {};
+    deltaNoiseY = {};
+    ZeroSenseCorrection::resetOutput(correctionScheduler);
     lastMovementIntegrationAtUs = 0;
     sim.velocityX = 0.0f;
     sim.velocityY = 0.0f;
@@ -646,10 +650,8 @@ static void stop_output() {
     reset_movement_state();
 }
 
-static int32_t round_q16_to_integer(int32_t value) {
-    return value >= 0
-        ? (value + 32768) / 65536
-        : (value - 32768) / 65536;
+static int32_t round_q16_to_integer(int64_t value) {
+    return ZeroSenseCorrection::roundedFraction(value);
 }
 
 // A normally completed pattern is different from an emergency STOP. Preserve
@@ -660,14 +662,9 @@ static void complete_pattern_output() {
         return;
     }
 
-    pendingMouseX += round_q16_to_integer(correctionFractionXQ16);
-    pendingMouseY += round_q16_to_integer(correctionFractionYQ16);
-    correctionFractionXQ16 = 0;
-    correctionFractionYQ16 = 0;
-    scheduledCorrectionXQ16 = 0;
-    scheduledCorrectionYQ16 = 0;
-    scheduledCorrectionFrames = 0;
-    nextCorrectionFrameAtUs = 0;
+    pendingMouseX += round_q16_to_integer(correctionScheduler.fractionXQ16);
+    pendingMouseY += round_q16_to_integer(correctionScheduler.fractionYQ16);
+    ZeroSenseCorrection::resetOutput(correctionScheduler);
     sim.velocityX = 0.0f;
     sim.velocityY = 0.0f;
     sim.accelerating = false;
@@ -692,6 +689,8 @@ static void capture_configuration(ConfigurationSnapshot& snapshot) {
     snapshot.verticalSensitivity = verticalSensitivityFactor;
     snapshot.rapidEnabled = rapidFireEnabled;
     snapshot.rapidRoundsPerMinute = rapidFireRoundsPerMinute;
+    snapshot.generalTimingJitterEnabled = generalTimingJitterEnabled;
+    snapshot.deltaNoiseEnabled = deltaNoiseEnabled;
 }
 
 static void restore_configuration(const ConfigurationSnapshot& snapshot) {
@@ -711,6 +710,8 @@ static void restore_configuration(const ConfigurationSnapshot& snapshot) {
     verticalSensitivityFactor = snapshot.verticalSensitivity;
     rapidFireEnabled = snapshot.rapidEnabled;
     rapidFireRoundsPerMinute = snapshot.rapidRoundsPerMinute;
+    generalTimingJitterEnabled = snapshot.generalTimingJitterEnabled;
+    deltaNoiseEnabled = snapshot.deltaNoiseEnabled;
 }
 
 static void hash_byte(uint32_t& hash, uint8_t value) {
@@ -760,6 +761,8 @@ static uint32_t current_configuration_hash() {
     hash_float(hash, verticalSensitivityFactor);
     hash_byte(hash, rapidFireEnabled ? 1 : 0);
     hash_uint16(hash, rapidFireEnabled ? rapidFireRoundsPerMinute : 0);
+    hash_byte(hash, generalTimingJitterEnabled ? 1 : 0);
+    hash_byte(hash, deltaNoiseEnabled ? 1 : 0);
     for (uint8_t index = 0; index < pointCount; ++index) {
         hash_int16(hash, patternHorizontal[index]);
         hash_int16(hash, patternVertical[index]);
@@ -1042,6 +1045,20 @@ static void apply_rapid_fire_payload(const uint8_t* payload, uint16_t length) {
     Serial.printf("RAPID_FIRE:%s:RPM=%u\n", enabled ? "ON" : "OFF", rapidFireRoundsPerMinute);
 }
 
+static void apply_general_settings_payload(const uint8_t* payload, uint16_t length) {
+    if (length != 2 || payload[0] > 1 || payload[1] > 1) {
+        Serial.println("ERROR:GENERAL_SETTINGS:FORMAT");
+        return;
+    }
+
+    generalTimingJitterEnabled = payload[0] == 1;
+    deltaNoiseEnabled = payload[1] == 1;
+    Serial.printf(
+        "GENERAL_SETTINGS:TIMING_VARIANCE=%s:DELTA_NOISE=%s\n",
+        generalTimingJitterEnabled ? "ON" : "OFF",
+        deltaNoiseEnabled ? "ON" : "OFF");
+}
+
 static void process_command(uint8_t command, const uint8_t* payload, uint16_t length) {
     switch (command) {
         case CMD_PING:
@@ -1103,6 +1120,15 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             }
             configurationTransactionTouchedAtMs = millis();
             apply_rapid_fire_payload(payload, length);
+            break;
+
+        case CMD_GENERAL_SETTINGS:
+            if (!configurationTransactionActive) {
+                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
+            apply_general_settings_payload(payload, length);
             break;
 
         case CMD_KEEPALIVE:
@@ -1241,10 +1267,20 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 hostSaturations =
                     hostAccumulatorSaturations.load(std::memory_order_relaxed);
 #endif
+                const int64_t currentQueuedX =
+                    static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
+                const int64_t currentQueuedY =
+                    static_cast<int64_t>(pendingMouseY) + pendingPhysicalMouseY;
+                const uint32_t currentQueuedDelta = static_cast<uint32_t>(
+                    std::min<int64_t>(
+                        std::max(std::abs(currentQueuedX), std::abs(currentQueuedY)),
+                        UINT32_MAX));
                 Serial.printf(
                     "METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:"
                     "MAX_ACTIVE_GAP_US=%lu:HOST_REPORTS=%lu:"
-                    "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu\n",
+                    "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu:"
+                    "CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:"
+                    "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1252,7 +1288,12 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(hostReports),
                     static_cast<unsigned long>(hostErrors),
                     static_cast<unsigned long>(hostSaturations),
-                    static_cast<unsigned long>(upstreamDisconnectStops));
+                    static_cast<unsigned long>(upstreamDisconnectStops),
+                    static_cast<unsigned long>(correctionScheduler.delayedFrames),
+                    static_cast<unsigned long>(correctionScheduler.maximumLatenessUs),
+                    static_cast<unsigned long>(currentQueuedDelta),
+                    static_cast<unsigned long>(currentHidReportIntervalUs),
+                    static_cast<unsigned long>(generalIntervalClampCount));
             }
             break;
 
@@ -1393,6 +1434,40 @@ static int8_t report_delta(int64_t value) {
 #else
     return static_cast<int8_t>(std::clamp<int64_t>(value, -100, 100));
 #endif
+}
+
+static int8_t random_delta_noise() {
+    const int8_t magnitude = rng_next() < 0.0f ? 2 : 3;
+    return rng_next() < 0.0f ? static_cast<int8_t>(-magnitude) : magnitude;
+}
+
+static bool has_delta_noise_balance() {
+    return ZeroSenseDeltaNoise::hasBalance(deltaNoiseX) ||
+        ZeroSenseDeltaNoise::hasBalance(deltaNoiseY);
+}
+
+struct PreparedDeltaNoise {
+    int8_t transmitted;
+    int8_t appliedNoise;
+};
+
+static PreparedDeltaNoise prepare_delta_noise(
+    int8_t baseDelta,
+    const ZeroSenseDeltaNoise::AxisState& state,
+    bool introduceNoise) {
+    if (!introduceNoise && !ZeroSenseDeltaNoise::hasBalance(state)) {
+        return {baseDelta, 0};
+    }
+
+    const int8_t requestedNoise = ZeroSenseDeltaNoise::preferredDelta(
+        state,
+        introduceNoise ? random_delta_noise() : 0);
+    const int8_t transmitted = report_delta(
+        static_cast<int16_t>(baseDelta) + requestedNoise);
+    return {
+        transmitted,
+        static_cast<int8_t>(transmitted - baseDelta)
+    };
 }
 
 #ifdef ZEROSENSE_RP2350_USB_C
@@ -1575,62 +1650,32 @@ static void schedule_pattern_correction(
     float requestedDx,
     float requestedDy,
     uint32_t shotIntervalUs) {
-    // If scheduling was delayed, preserve every remaining sub-count by folding
-    // it into the next shot instead of dropping or clipping it.
-    scheduledCorrectionXQ16 += static_cast<int32_t>(std::lround(
-        requestedDx * horizontalSensitivityFactor * 65536.0f));
-    scheduledCorrectionYQ16 += static_cast<int32_t>(std::lround(
-        requestedDy * verticalSensitivityFactor * 65536.0f));
-    const uint32_t availableFrames = std::max<uint32_t>(
-        (shotIntervalUs + 999U) / 1000U,
-        1U);
-    scheduledCorrectionFrames = static_cast<uint16_t>(std::min<uint32_t>(
-        std::max<uint32_t>(scheduledCorrectionFrames, availableFrames),
-        1000U));
-    if (nextCorrectionFrameAtUs == 0) {
-        nextCorrectionFrameAtUs = micros();
-    }
+    // The reusable scheduler owns the fixed-point remainder and absolute
+    // deadlines so native fake-clock tests exercise this exact code path.
+    ZeroSenseCorrection::schedule(
+        correctionScheduler,
+        requestedDx * horizontalSensitivityFactor,
+        requestedDy * verticalSensitivityFactor,
+        shotIntervalUs,
+        micros());
 }
 
 static void service_scheduled_correction() {
-    if (scheduledCorrectionFrames == 0) {
+    if (correctionScheduler.frames == 0) {
         return;
     }
 
     const uint32_t now = micros();
-    uint8_t serviced = 0;
-    while (scheduledCorrectionFrames > 0 &&
-        static_cast<int32_t>(now - nextCorrectionFrameAtUs) >= 0 &&
-        serviced < 4) {
-        const int32_t stepX = scheduledCorrectionXQ16 /
-            static_cast<int32_t>(scheduledCorrectionFrames);
-        const int32_t stepY = scheduledCorrectionYQ16 /
-            static_cast<int32_t>(scheduledCorrectionFrames);
-        scheduledCorrectionXQ16 -= stepX;
-        scheduledCorrectionYQ16 -= stepY;
-        --scheduledCorrectionFrames;
+    const auto result = ZeroSenseCorrection::service(correctionScheduler, now);
+    pendingMouseX += result.queuedX;
+    pendingMouseY += result.queuedY;
 
-        correctionFractionXQ16 += stepX;
-        correctionFractionYQ16 += stepY;
-        const int32_t queuedX = correctionFractionXQ16 / 65536;
-        const int32_t queuedY = correctionFractionYQ16 / 65536;
-        correctionFractionXQ16 -= queuedX * 65536;
-        correctionFractionYQ16 -= queuedY * 65536;
-        pendingMouseX += queuedX;
-        pendingMouseY += queuedY;
-        nextCorrectionFrameAtUs += 1000U;
-        ++serviced;
-    }
-
-    if (scheduledCorrectionFrames == 0) {
-        nextCorrectionFrameAtUs = 0;
+    if (correctionScheduler.frames == 0) {
         if (fireActive && !rapidFireActive &&
             activeMode == MODE_WEAPON_PATTERN &&
             shotsInBurst >= loadedPatternPoints) {
             complete_pattern_output();
         }
-    } else if (static_cast<int32_t>(now - nextCorrectionFrameAtUs) >= 0) {
-        nextCorrectionFrameAtUs = now + 1000U;
     }
 }
 
@@ -1645,7 +1690,8 @@ static void service_hid() {
     if (pendingMouseX == 0 && pendingMouseY == 0 &&
         pendingPhysicalMouseX == 0 && pendingPhysicalMouseY == 0 &&
         pendingPhysicalWheel == 0 && pendingPhysicalPan == 0 &&
-        buttons == lastSentButtons && !hidStateDirty) {
+        buttons == lastSentButtons && !hidStateDirty &&
+        !has_delta_noise_balance()) {
         if (!fireActive && !rapidFireActive) {
             lastHighActivityReportAtUs = 0;
         }
@@ -1666,15 +1712,20 @@ static void service_hid() {
         buttons != lastSentButtons || hidStateDirty;
 #endif
     uint32_t poll_interval_us = POLL_NORMAL_US;
-    const bool is_idle = !fireActive && !rapidFireActive && !physical_activity;
+    const bool noise_balance_pending = has_delta_noise_balance();
+    const bool is_idle = !fireActive && !rapidFireActive && !physical_activity &&
+        !noise_balance_pending;
+    const bool generated_activity = pendingMouseX != 0 || pendingMouseY != 0 ||
+        correctionScheduler.frames > 0 || noise_balance_pending;
     const bool is_high_activity = rapidFireActive || sim.accelerating ||
-        physical_activity;
+        generated_activity || physical_activity;
 
     if (is_idle) {
         poll_interval_us = POLL_IDLE_US; // Reduce packet rate during inactivity
     } else if (is_high_activity) {
         poll_interval_us = POLL_HIGH_US;
     }
+    currentHidReportIntervalUs = poll_interval_us;
 
     const uint32_t now = micros();
     if (static_cast<uint32_t>(now - lastHidReportAtUs) < poll_interval_us ||
@@ -1694,18 +1745,26 @@ static void service_hid() {
         UINT32_MAX));
     maximumQueuedDelta = std::max(maximumQueuedDelta, queuedMagnitude);
 
-    const int8_t dx = report_delta(combinedX);
-    const int8_t dy = report_delta(combinedY);
+    const int8_t baseDx = report_delta(combinedX);
+    const int8_t baseDy = report_delta(combinedY);
+    const bool generatedDeltaReady = pendingMouseX != 0 || pendingMouseY != 0;
+    const bool introduceNoise = deltaNoiseEnabled && generatedDeltaReady;
+    const auto noisyX = prepare_delta_noise(baseDx, deltaNoiseX, introduceNoise);
+    const auto noisyY = prepare_delta_noise(baseDy, deltaNoiseY, introduceNoise);
+    const int8_t dx = noisyX.transmitted;
+    const int8_t dy = noisyY.transmitted;
     const int8_t wheel = report_delta(pendingPhysicalWheel);
     const int8_t pan = report_delta(pendingPhysicalPan);
 
     if (usbHid.mouseReport(0, buttons, dx, dy, wheel, pan)) {
+        ZeroSenseDeltaNoise::recordAppliedDelta(deltaNoiseX, noisyX.appliedNoise);
+        ZeroSenseDeltaNoise::recordAppliedDelta(deltaNoiseY, noisyY.appliedNoise);
 #ifdef ZEROSENSE_RP2350_USB_C
-        consume_axis_delta(pendingMouseX, pendingPhysicalMouseX, dx);
-        consume_axis_delta(pendingMouseY, pendingPhysicalMouseY, dy);
+        consume_axis_delta(pendingMouseX, pendingPhysicalMouseX, baseDx);
+        consume_axis_delta(pendingMouseY, pendingPhysicalMouseY, baseDy);
 #else
-        pendingMouseX -= dx;
-        pendingMouseY -= dy;
+        pendingMouseX -= baseDx;
+        pendingMouseY -= baseDy;
 #endif
         pendingPhysicalWheel -= wheel;
         pendingPhysicalPan -= pan;
@@ -1733,7 +1792,7 @@ static void generate_movement(uint32_t shotIntervalUs) {
 
     if (activeMode == MODE_WEAPON_PATTERN) {
         if (shotsInBurst >= loadedPatternPoints) {
-            if (scheduledCorrectionFrames == 0) {
+            if (correctionScheduler.frames == 0) {
                 complete_pattern_output();
             }
             return;
@@ -1746,11 +1805,21 @@ static void generate_movement(uint32_t shotIntervalUs) {
         horizontal = activeHorizontalCompensation;
     }
 
-    // Burst progression reduction for diminishing recoil over shot sequence
-    if (activeMode == MODE_GENERAL && shotsInBurst > 0 && activeBurstProgression > 0) {
+    // Burst progression is defined per shot. General continuous mode has no
+    // reliable bullet clock, so apply it only when rapid-fire owns that clock.
+    if (activeMode == MODE_GENERAL && rapidFireActive &&
+        shotsInBurst > 0 && activeBurstProgression > 0) {
         const float reduction = 1.0f - (static_cast<float>(shotsInBurst) * activeBurstProgression / 100.0f);
         vertical *= std::max(0.5f, reduction);
         horizontal *= std::max(0.5f, reduction);
+    }
+
+    // General values are velocities in counts per reference 8 ms. Rapid-fire
+    // scheduling needs a total displacement for one complete shot interval.
+    if (activeMode == MODE_GENERAL && rapidFireActive) {
+        const float shotScale = ZeroSenseMotion::shotIntervalScale(shotIntervalUs);
+        horizontal *= shotScale;
+        vertical *= shotScale;
     }
 
     if (activeMode == MODE_WEAPON_PATTERN || rapidFireActive) {
@@ -1779,6 +1848,10 @@ static void service_movement() {
             : std::max<uint32_t>(
                 static_cast<uint32_t>(now - lastMovementIntegrationAtUs),
                 1U);
+        if (activeMode == MODE_GENERAL &&
+            (integrationInterval < 2000U || integrationInterval > 32000U)) {
+            ++generalIntervalClampCount;
+        }
         generate_movement(integrationInterval);
         lastMovementIntegrationAtUs = now;
         if (!fireActive) {
