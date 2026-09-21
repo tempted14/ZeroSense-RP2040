@@ -11,6 +11,12 @@ FIRMWARE = (
 HID_DECODER = (
     ROOT / "RP2040_Firmware" / "rainbow_recoil" / "hid_report_decoder.h"
 ).read_text()
+CORRECTION_SCHEDULER = (
+    ROOT / "RP2040_Firmware" / "rainbow_recoil" / "correction_scheduler.h"
+).read_text()
+DELTA_NOISE = (
+    ROOT / "RP2040_Firmware" / "rainbow_recoil" / "delta_noise.h"
+).read_text()
 CS_PROTOCOL = (ROOT / "WindowsApp" / "SerialProtocol.cs").read_text()
 CS_CONNECTION = (ROOT / "WindowsApp" / "SerialConnection.cs").read_text()
 PLATFORMIO = (ROOT / "RP2040_Firmware" / "platformio.ini").read_text()
@@ -33,7 +39,8 @@ class FirmwareContractTests(unittest.TestCase):
         expected = {
             "ping", "start", "stop", "profile", "sensitivity",
             "pattern", "rapid_fire", "keepalive", "arm_lease",
-            "config_begin", "config_commit", "config_abort", "status", "reset",
+            "config_begin", "config_commit", "config_abort", "status",
+            "general_settings", "reset",
         }
         self.assertEqual(expected, firmware.keys())
         expected_desktop_names = {
@@ -44,6 +51,7 @@ class FirmwareContractTests(unittest.TestCase):
             "config_begin": "configurationbegin",
             "config_commit": "configurationcommit",
             "config_abort": "configurationabort", "status": "status",
+            "general_settings": "generalsettings",
             "reset": "reset",
         }
         self.assertEqual(
@@ -60,7 +68,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("now - lastHidReportAtUs", FIRMWARE)
         self.assertIn("usbHid.setPollInterval(1)", FIRMWARE)
         self.assertIn("METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:", FIRMWARE)
-        self.assertIn("HOST_SATURATIONS=%lu:USB_STOPS=%lu", FIRMWARE)
+        self.assertIn("HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu:", FIRMWARE)
+        self.assertIn("CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:", FIRMWARE)
         self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
         self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
 
@@ -83,8 +92,8 @@ class FirmwareContractTests(unittest.TestCase):
     def test_fractional_movement_reaches_pending_reports(self) -> None:
         self.assertIn("pendingMouseX += queuedX;", FIRMWARE)
         self.assertIn("pendingMouseY += queuedY;", FIRMWARE)
-        self.assertIn("pendingMouseX -= dx;", FIRMWARE)
-        self.assertIn("pendingMouseY -= dy;", FIRMWARE)
+        self.assertIn("pendingMouseX -= baseDx;", FIRMWARE)
+        self.assertIn("pendingMouseY -= baseDy;", FIRMWARE)
 
     def test_rapid_fire_release_does_not_disable_the_mode(self) -> None:
         release = re.search(
@@ -154,7 +163,8 @@ class FirmwareContractTests(unittest.TestCase):
             "schedule_pattern_correction(horizontal, vertical, shotIntervalUs)",
             body,
         )
-        self.assertIn("(shotIntervalUs + 999U) / 1000U", FIRMWARE)
+        self.assertIn("shotIntervalScale(shotIntervalUs)", body)
+        self.assertIn("intervalUs + FrameIntervalUs - 1U", CORRECTION_SCHEDULER)
 
     def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:
         self.assertIn(
@@ -170,7 +180,8 @@ class FirmwareContractTests(unittest.TestCase):
         )
         self.assertIn("nextRapidShotAtUs += shot_interval;", FIRMWARE)
         self.assertIn("remainderAccumulator += 60000000UL % roundsPerMinute", FIRMWARE)
-        self.assertIn("(shotIntervalUs + 999U) / 1000U", FIRMWARE)
+        self.assertIn("framesForInterval(shotIntervalUs)", CORRECTION_SCHEDULER)
+        self.assertNotIn("nextCorrectionFrameAtUs = now + 1000U", FIRMWARE)
 
     def test_pattern_completion_flushes_without_erasing_final_delta(self) -> None:
         completion = re.search(
@@ -180,8 +191,8 @@ class FirmwareContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(completion)
         body = completion.group("body")
-        self.assertIn("round_q16_to_integer(correctionFractionXQ16)", body)
-        self.assertIn("round_q16_to_integer(correctionFractionYQ16)", body)
+        self.assertIn("round_q16_to_integer(correctionScheduler.fractionXQ16)", body)
+        self.assertIn("round_q16_to_integer(correctionScheduler.fractionYQ16)", body)
         self.assertNotIn("reset_movement_state", body)
         self.assertNotIn("pendingMouseX = 0", body)
         self.assertNotIn("pendingMouseY = 0", body)
@@ -202,15 +213,25 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("1.2f,", FIRMWARE)
         self.assertIn("40.0f,", FIRMWARE)
         self.assertIn("0.85f,", FIRMWARE)
-        self.assertIn("GENERAL_TIMING_JITTER_ENABLED = false", FIRMWARE)
+        self.assertIn("generalTimingJitterEnabled = false", FIRMWARE)
         self.assertIn("TIMING_JITTER_PCT = 8.0f", FIRMWARE)
+        self.assertIn("if (!generalTimingJitterEnabled)", FIRMWARE)
+        self.assertIn("CMD_GENERAL_SETTINGS = 0xFD", FIRMWARE)
+        self.assertIn("GENERAL_SETTINGS:TIMING_VARIANCE=%s", FIRMWARE)
+        self.assertIn(":DELTA_NOISE=%s", FIRMWARE)
+        self.assertIn("hash_byte(hash, generalTimingJitterEnabled ? 1 : 0)", FIRMWARE)
+        self.assertIn("hash_byte(hash, deltaNoiseEnabled ? 1 : 0)", FIRMWARE)
+        self.assertIn("pendingMouseX -= baseDx", FIRMWARE)
+        self.assertIn("pendingMouseY -= baseDy", FIRMWARE)
+        self.assertIn("state.balance != 0", DELTA_NOISE)
+        self.assertIn("state.balance + appliedDelta", DELTA_NOISE)
         self.assertIn("now - lastMovementIntegrationAtUs", FIRMWARE)
         self.assertIn("generate_movement(integrationInterval);", FIRMWARE)
         self.assertIn("POLL_IDLE_US   = 4000", FIRMWARE)
         self.assertIn("POLL_NORMAL_US = 2000", FIRMWARE)
         self.assertIn("POLL_HIGH_US   = 1000", FIRMWARE)
         self.assertIn("physical_activity = pendingPhysicalMouseX != 0", FIRMWARE)
-        self.assertIn("sim.accelerating ||\n        physical_activity", FIRMWARE)
+        self.assertIn("generated_activity || physical_activity", FIRMWARE)
         self.assertNotIn("PROXY_POLL_US", FIRMWARE)
         self.assertIn("minSensitivityFactor = 0.05f", FIRMWARE)
         self.assertIn("maxSensitivityFactor = 8.0f", FIRMWARE)
@@ -262,6 +283,8 @@ class FirmwareContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(reset)
         self.assertNotIn("pendingPhysicalMouse", reset.group("body"))
+        self.assertIn("deltaNoiseX = {};", reset.group("body"))
+        self.assertIn("deltaNoiseY = {};", reset.group("body"))
 
     def test_proxy_preserves_buttons_wheel_pan_and_requeues_reports(self) -> None:
         self.assertIn("hostMouseButtons.store(buttons", FIRMWARE)

@@ -49,8 +49,9 @@ public sealed partial class MainPage : UserControl, IDisposable
     private readonly IReadOnlyList<CompensationModeOption> _modeOptions =
     [
         new(CompensationMode.General, "General · constant adjustment"),
-        new(CompensationMode.WeaponPattern, "Weapon pattern · estimated"),
-        new(CompensationMode.Experimental, "Experimental · per-weapon calibrated")
+        new(CompensationMode.WeaponPattern, "Original weapon pattern · estimated"),
+        new(CompensationMode.Experimental, "Experimental · per-weapon calibrated"),
+        new(CompensationMode.ResearchEstimate, "Supplied research profile · Y11S1.3 estimate")
     ];
     private readonly IReadOnlyList<DetectionModeOption> _detectionModeOptions =
     [
@@ -86,6 +87,9 @@ public sealed partial class MainPage : UserControl, IDisposable
     public MainPage()
     {
         InitializeComponent();
+        var appVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version(1, 5, 0);
+        TopVersionText.Text =
+            $"v{appVersion.ToString(3)} · config {SerialProtocol.ConfigurationSchemaVersion}";
         DiagnosticLog.Record("app", "Main page initialized.");
         InitializeSelectors();
         ApplySavedSettings();
@@ -153,6 +157,8 @@ public sealed partial class MainPage : UserControl, IDisposable
 
             CompensationModeSelector.SelectedItem = _modeOptions.First(option =>
                 option.Value == settings.CompensationMode);
+            ResearchProfileToggle.IsOn =
+                settings.CompensationMode == CompensationMode.ResearchEstimate;
             DetectionModeSelector.SelectedItem = _detectionModeOptions.First(option =>
                 option.Value == settings.OperatorDetectionMode);
             AutoApplyDetectionToggle.IsOn = settings.AutoApplyDetectedOperator;
@@ -165,6 +171,8 @@ public sealed partial class MainPage : UserControl, IDisposable
             AutoApplyWeaponDetectionToggle.IsOn = settings.AutoApplyDetectedWeapon;
             WeaponSlotHotkeysToggle.IsOn = settings.WeaponSlotHotkeysEnabled;
             RapidFireToggle.IsOn = settings.RapidFireEnabled;
+            GeneralTimingVarianceToggle.IsOn = settings.GeneralTimingVarianceEnabled;
+            DeltaNoiseToggle.IsOn = settings.DeltaNoiseEnabled;
             WeaponConfidenceSlider.Value = settings.WeaponDetectionConfidence * 100.0;
             WeaponDetectionRegionXBox.Value = settings.WeaponDetectionRegionX;
             WeaponDetectionRegionYBox.Value = settings.WeaponDetectionRegionY;
@@ -305,7 +313,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         try
         {
             var currentVersion = Assembly.GetExecutingAssembly().GetName().Version ??
-                new Version(1, 4, 0);
+                new Version(1, 5, 0);
             var result = await new ReleaseUpdateService().CheckAsync(
                 currentVersion,
                 _lifetimeCancellation.Token);
@@ -635,15 +643,30 @@ public sealed partial class MainPage : UserControl, IDisposable
                 _physicalMouseProductId = 0;
                 break;
             case FirmwareStatusKind.TransportMetrics:
+                var transportWarning = update.CurrentQueuedDelta > 127 ||
+                    update.MaximumActiveReportGapUs > 3000 ||
+                    update.MaximumCorrectionLatenessUs > 5000 ||
+                    update.HostDecodeErrors > 0 ||
+                    update.HostAccumulatorSaturations > 0 ||
+                    update.GeneralIntervalClamps > 0;
                 FirmwareTelemetryText.Text =
-                    $"Transport: {update.HidReportsSent} HID reports · " +
+                    $"{(transportWarning ? "Timing warning" : "Transport healthy")}: " +
+                    $"{update.HidReportsSent} HID reports · " +
                     $"{update.HidBusyDeferrals} busy deferrals · " +
                     $"max queue {update.MaximumQueuedDelta} · " +
                     $"max active gap {update.MaximumActiveReportGapUs} µs · " +
                     $"downstream {update.HostReportsReceived} reports / " +
                     $"{update.HostDecodeErrors} decode errors / " +
                     $"{update.HostAccumulatorSaturations} saturations · " +
-                    $"{update.UpstreamDisconnectStops} upstream safety stops";
+                    $"{update.UpstreamDisconnectStops} upstream safety stops · " +
+                    $"scheduler {update.CorrectionDelayedFrames} delayed / " +
+                    $"{update.MaximumCorrectionLatenessUs} µs max · " +
+                    $"queue now {update.CurrentQueuedDelta} · " +
+                    $"report interval {update.CurrentReportIntervalUs} µs · " +
+                    $"general dt clamps {update.GeneralIntervalClamps}";
+                FirmwareTelemetryText.Foreground = transportWarning
+                    ? WarningBrush
+                    : ConnectedBrush;
                 return;
         }
 
@@ -882,10 +905,32 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         SettingsManager.CompensationMode = selected.Value;
+        var wasInitializing = _isInitializing;
+        _isInitializing = true;
+        ResearchProfileToggle.IsOn = selected.Value == CompensationMode.ResearchEstimate;
+        _isInitializing = wasInitializing;
         UpdateModeDescription();
+        UpdateProfileDescription();
         UpdateExperimentalTuningUi();
         UpdateOverlayContent();
         SaveAndSynchronize();
+    }
+
+    private void ResearchProfileToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        var target = ResearchProfileToggle.IsOn
+            ? CompensationMode.ResearchEstimate
+            : CompensationMode.WeaponPattern;
+        var option = _modeOptions.First(value => value.Value == target);
+        if (!ReferenceEquals(CompensationModeSelector.SelectedItem, option))
+        {
+            CompensationModeSelector.SelectedItem = option;
+        }
     }
 
     private void MagnificationSelector_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -1113,6 +1158,29 @@ public sealed partial class MainPage : UserControl, IDisposable
         SettingsManager.LoadSettings().RapidFireEnabled = RapidFireToggle.IsOn;
         UpdateProfileDescription();
         UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
+    private void GeneralTimingVarianceToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        SettingsManager.LoadSettings().GeneralTimingVarianceEnabled =
+            GeneralTimingVarianceToggle.IsOn;
+        SaveAndSynchronize();
+    }
+
+    private void DeltaNoiseToggle_Toggled(object sender, RoutedEventArgs e)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        SettingsManager.LoadSettings().DeltaNoiseEnabled = DeltaNoiseToggle.IsOn;
         SaveAndSynchronize();
     }
 
@@ -1787,6 +1855,8 @@ public sealed partial class MainPage : UserControl, IDisposable
                   : string.Empty) +
               (settings.CompensationMode == CompensationMode.Experimental
                   ? " · Experimental"
+                  : settings.CompensationMode == CompensationMode.ResearchEstimate
+                      ? " · Research estimate"
                   : string.Empty) +
               (selected.Profile.SupportsRapidFire && settings.RapidFireEnabled
                   ? " · Rapid"
@@ -1870,22 +1940,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
 
         var operatorName = (OperatorSelector.SelectedItem as OperatorViewModel)?.OperatorName;
-        var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
-        var effectiveProfile = selected.Profile
-            .WithAttachmentSetup(setup)
-            .WithOpticSetup(settings.ActiveMagnification, operatorName)
-            .WithOutputStrength(settings.GetWeaponOutputStrength(selected.Name));
-        if (settings.CompensationMode == CompensationMode.Experimental &&
-            effectiveProfile.HasWeaponPattern)
-        {
-            effectiveProfile.Pattern = ExperimentalRecoilModel.Apply(
-                effectiveProfile.Pattern,
-                settings.GetExperimentalRecoilTuning(effectiveProfile.Name));
-            effectiveProfile.PatternDataQuality = PatternDataQuality.VideoDerivedEstimate;
-            effectiveProfile.PatternSource =
-                "Standard estimated pattern with local per-weapon experimental calibration";
-        }
-        return effectiveProfile;
+        return RecoilProfileResolver.Build(selected.Profile, operatorName, settings);
     }
 
     private ConfigurationValidationResult ValidateCurrentConfiguration(
@@ -1981,7 +2036,9 @@ public sealed partial class MainPage : UserControl, IDisposable
                     settings.CompensationMode,
                     settings.CalculateSensitivityScale(),
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
-                    effectiveProfile.RapidFireRoundsPerMinute),
+                    effectiveProfile.RapidFireRoundsPerMinute,
+                    settings.GeneralTimingVarianceEnabled,
+                    settings.DeltaNoiseEnabled),
                 cancellationToken);
             if (!connection.IsSimulator)
             {
@@ -2051,6 +2108,8 @@ public sealed partial class MainPage : UserControl, IDisposable
             WeaponSlotText.Text = "NO ACTIVE SLOT";
             RapidFireStatusText.Text = "Rapid fire unavailable";
             RapidFireToggle.IsEnabled = false;
+            ResearchProfileToggle.IsEnabled = false;
+            ResearchProfileStatusText.Text = "No weapon is selected.";
             AttachmentNoteText.Visibility = Visibility.Collapsed;
             UpdateWeaponStrengthUi();
             return;
@@ -2060,6 +2119,17 @@ public sealed partial class MainPage : UserControl, IDisposable
         var setup = RecoilAttachmentModel.Resolve(selected.Profile, operatorName);
         var settings = SettingsManager.LoadSettings();
         var effectiveProfile = BuildEffectiveSelectedProfile(settings);
+        ResearchProfileToggle.IsEnabled = true;
+        var hasResearchDefinition = ResearchRecoilModel.TryGetDefinition(
+            selected.Name,
+            out var researchDefinition);
+        ResearchProfileStatusText.Text = hasResearchDefinition
+            ? settings.CompensationMode == CompensationMode.ResearchEstimate
+                ? $"ACTIVE · supplied stages · {researchDefinition.SourceRoundsPerMinute} RPM source reference"
+                : "Available · switch on to compare without changing the original profile"
+            : selected.Profile.HasWeaponPattern
+                ? "No supplied row for this weapon · Research uses the unchanged original pattern"
+                : "This weapon has no automatic pattern · General correction is used";
         WeaponSlotText.Text = $"{WeaponSlotCatalog.GetSlot(selected.Profile).ToString().ToUpperInvariant()} SLOT";
         ProfileDescriptionText.Text = selected.Description;
         if (settings.CompensationMode == CompensationMode.General)
@@ -2069,15 +2139,19 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
         else
         {
-            var quality = settings.CompensationMode == CompensationMode.Experimental &&
-                effectiveProfile?.HasWeaponPattern == true
-                    ? "Experimental"
-                    : effectiveProfile?.PatternDataQuality switch
+            var quality = settings.CompensationMode switch
+            {
+                CompensationMode.Experimental when effectiveProfile?.HasWeaponPattern == true =>
+                    "Experimental",
+                CompensationMode.ResearchEstimate when effectiveProfile?.HasWeaponPattern == true =>
+                    "Estimated · research model",
+                _ => effectiveProfile?.PatternDataQuality switch
                     {
                         PatternDataQuality.Measured => "Measured",
                         PatternDataQuality.VideoDerivedEstimate => "Estimated",
                         _ => "Unavailable"
-                    };
+                    }
+            };
             ProfileQualityText.Text = effectiveProfile is null
                 ? $"QUALITY · {quality}"
                 : $"QUALITY · {quality} · {effectiveProfile.PatternSource}";
@@ -2087,7 +2161,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         RapidFireStatusText.Text = rapidAvailable
             ? settings.RapidFireEnabled
                 ? $"ON · {selected.Profile.RapidFireRoundsPerMinute} RPM · recoil applied per shot"
-                : "OFF · manual clicks still receive one recoil correction per shot"
+                : "OFF · physical trigger uses normal General-mode correction while held"
             : "Automatic weapon · rapid fire not applicable";
         AttachmentNoteText.Text = setup.Note ?? string.Empty;
         AttachmentNoteText.Visibility = string.IsNullOrWhiteSpace(setup.Note)
@@ -2104,6 +2178,8 @@ public sealed partial class MainPage : UserControl, IDisposable
                 "Uses an RPM-timed estimate when the weapon supports it; otherwise general mode is sent.",
             CompensationMode.Experimental =>
                 "Uses a separate, per-weapon calibrated copy of the estimated pattern. General and standard Pattern remain unchanged.",
+            CompensationMode.ResearchEstimate =>
+                "Uses the supplied Y11S1.3 model's per-weapon vertical stage ratios, normalized to the original profile's total output. The original profile is unchanged.",
             _ => "Applies the profile's steady horizontal and vertical correction every 8 ms."
         };
     }

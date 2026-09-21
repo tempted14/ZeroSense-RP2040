@@ -19,7 +19,9 @@ internal sealed class DeviceConfigurationSynchronizer
             request.Mode,
             request.Sensitivity,
             request.RapidFireEnabled,
-            request.RapidFireRoundsPerMinute);
+            request.RapidFireRoundsPerMinute,
+            request.GeneralTimingVarianceEnabled,
+            request.DeltaNoiseEnabled);
         var started = Stopwatch.GetTimestamp();
         await connection.SynchronizeConfigurationAsync(
             request.Profile,
@@ -27,6 +29,8 @@ internal sealed class DeviceConfigurationSynchronizer
             request.Sensitivity,
             request.RapidFireEnabled,
             request.RapidFireRoundsPerMinute,
+            request.GeneralTimingVarianceEnabled,
+            request.DeltaNoiseEnabled,
             cancellationToken).ConfigureAwait(false);
         return new ConfigurationSyncResult(
             hash,
@@ -39,6 +43,8 @@ internal sealed record DeviceConfigurationRequest(
     CompensationMode Mode,
     SensitivityScale Sensitivity,
     bool RapidFireEnabled,
-    int RapidFireRoundsPerMinute);
+    int RapidFireRoundsPerMinute,
+    bool GeneralTimingVarianceEnabled,
+    bool DeltaNoiseEnabled);
 
 internal readonly record struct ConfigurationSyncResult(uint Hash, TimeSpan Elapsed);

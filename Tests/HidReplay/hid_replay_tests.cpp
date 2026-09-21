@@ -3,6 +3,8 @@
 #include <iostream>
 
 #include "../../RP2040_Firmware/rainbow_recoil/hid_report_decoder.h"
+#include "../../RP2040_Firmware/rainbow_recoil/correction_scheduler.h"
+#include "../../RP2040_Firmware/rainbow_recoil/delta_noise.h"
 #include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
 
 namespace {
@@ -33,6 +35,51 @@ int main() {
         10.0f * ZeroSenseMotion::intervalScale(8640);
     expect(std::abs(jitteredDistance - 20.0f) < 0.0001f,
         "paired jitter preserves integrated displacement");
+    expect(std::abs(ZeroSenseMotion::shotIntervalScale(120000) - 15.0f) < 0.0001f,
+        "semi-automatic shot scale is not clamped to smoothing limits");
+
+    ZeroSenseDeltaNoise::AxisState noise = {};
+    const auto firstNoise = ZeroSenseDeltaNoise::preferredDelta(noise, 3);
+    ZeroSenseDeltaNoise::recordAppliedDelta(noise, firstNoise);
+    expect(firstNoise == 3 && noise.balance == 3,
+        "delta noise records the emitted offset");
+    const auto repayment = ZeroSenseDeltaNoise::preferredDelta(noise, -2);
+    ZeroSenseDeltaNoise::recordAppliedDelta(noise, repayment);
+    expect(repayment == -3 && noise.balance == 0,
+        "delta noise repays its offset before introducing another");
+    ZeroSenseDeltaNoise::recordAppliedDelta(noise, 1);
+    expect(ZeroSenseDeltaNoise::preferredDelta(noise, 3) == -1,
+        "saturated delta noise repays the exact applied amount");
+
+    // Fake-clock scheduler coverage: output totals survive fractional values,
+    // stalls are counted, and a catch-up batch does not rephase the deadline.
+    ZeroSenseCorrection::State scheduler = {};
+    ZeroSenseCorrection::schedule(scheduler, 10.5f, -3.25f, 8000, 1000);
+    int32_t scheduledX = 0;
+    int32_t scheduledY = 0;
+    for (uint32_t now = 1000; now <= 8000; now += 1000) {
+        const auto result = ZeroSenseCorrection::service(scheduler, now);
+        scheduledX += result.queuedX;
+        scheduledY += result.queuedY;
+    }
+    scheduledX += ZeroSenseCorrection::roundedFraction(scheduler.fractionXQ16);
+    scheduledY += ZeroSenseCorrection::roundedFraction(scheduler.fractionYQ16);
+    expect(scheduler.frames == 0, "fake clock drains scheduled frames");
+    expect(scheduledX == 11 && scheduledY == -3,
+        "fake clock preserves rounded scheduled displacement");
+
+    scheduler = {};
+    ZeroSenseCorrection::schedule(scheduler, 8.0f, 0.0f, 8000, 1000);
+    const auto stalledBatch = ZeroSenseCorrection::service(scheduler, 6000);
+    expect(stalledBatch.servicedFrames == 4 && scheduler.frames == 4,
+        "scheduler bounds one catch-up batch");
+    expect(scheduler.nextFrameAtUs == 5000,
+        "catch-up keeps the original absolute deadline");
+    expect(scheduler.delayedFrames == 4 && scheduler.maximumLatenessUs == 5000,
+        "scheduler exposes delayed-frame telemetry");
+    const auto finalBatch = ZeroSenseCorrection::service(scheduler, 10000);
+    expect(finalBatch.servicedFrames == 4 && scheduler.frames == 0,
+        "later fake-clock service preserves all remaining frames");
 
     const uint8_t bootDescriptor[] = {
         0x05,0x01,0x09,0x02,0xA1,0x01,0x09,0x01,0xA1,0x00,

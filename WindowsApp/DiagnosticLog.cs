@@ -59,6 +59,8 @@ internal static class DiagnosticLog
         builder.AppendLine($"Operator: {selectedOperator ?? "none"}");
         builder.AppendLine($"Weapon: {selectedProfile?.Name ?? "none"}");
         builder.AppendLine($"Mode: {settings.CompensationMode}");
+        builder.AppendLine($"General timing variance: {(settings.GeneralTimingVarianceEnabled ? "enabled" : "disabled")}");
+        builder.AppendLine($"Generated delta noise: {(settings.DeltaNoiseEnabled ? "enabled" : "disabled")}");
         builder.AppendLine($"Sensitivity scale: H {scale.Horizontal:F3}, V {scale.Vertical:F3}");
         builder.AppendLine($"Output state: {(armed ? "armed" : "safe")}");
         builder.AppendLine($"Connection: {(connection is null ? "none" : connection.IsSimulator ? "simulator" : "hardware")}");
