@@ -26,6 +26,8 @@ public interface IRecoilDeviceConnection : IDisposable
         SensitivityScale scale,
         bool rapidFireEnabled,
         int rapidFireRoundsPerMinute,
+        bool generalTimingVarianceEnabled,
+        bool deltaNoiseEnabled,
         CancellationToken cancellationToken);
 
     void SendCommand(string commandType);

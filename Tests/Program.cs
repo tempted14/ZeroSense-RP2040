@@ -14,6 +14,8 @@ var tests = new (string Name, Action Run)[]
     ("pattern rate and attachment math are consistent", PatternMathIsConsistent),
     ("integer shot scheduling has no systematic RPM drift", RpmSchedulingHasNoSystematicDrift),
     ("generated pattern stages transition smoothly", GeneratedPatternStagesAreContinuous),
+    ("research estimate is isolated and normalized", ResearchEstimateIsIsolatedAndNormalized),
+    ("profile source switching preserves optic-specific references", ProfileSourceSwitchingIsExact),
     ("per-weapon output strength is isolated and bounded", WeaponOutputStrengthIsSafe),
     ("experimental tuning is isolated and stage-specific", ExperimentalTuningIsIsolated),
     ("operator attachment overrides are isolated", OperatorOverridesAreIsolated),
@@ -261,6 +263,124 @@ static double MaxHorizontalStepRelativeToVertical(IReadOnlyList<RecoilPatternPoi
     return maximum;
 }
 
+static void ResearchEstimateIsIsolatedAndNormalized()
+{
+    Equal(60, ResearchRecoilModel.DefinitionCount, "research definition count");
+    var coveredProfiles = WeaponProfile.DefaultProfiles
+        .Where(profile => profile.HasWeaponPattern)
+        .Where(profile => ResearchRecoilModel.TryGetDefinition(profile.Name, out _))
+        .ToArray();
+    Equal(60, coveredProfiles.Length, "current automatic profiles covered by research data");
+    Equal(
+        "XK23",
+        WeaponProfile.DefaultProfiles.Single(profile =>
+            profile.HasWeaponPattern &&
+            !ResearchRecoilModel.TryGetDefinition(profile.Name, out _)).Name,
+        "only post-dataset automatic weapon should use fallback");
+
+    var source = WeaponProfile.FindByName("M762")?.Pattern.ToArray() ?? [];
+    var originalSnapshot = source.ToArray();
+    True(
+        ResearchRecoilModel.TryCreatePattern("M762", source, out var research),
+        "M762 should have a research-stage model");
+    True(source.SequenceEqual(originalSnapshot), "research mode must not mutate original points");
+    Equal(source.Length, research.Length, "research pattern length");
+    Near(
+        source.Sum(point => point.Vertical),
+        research.Sum(point => point.Vertical),
+        0.001,
+        "research profile preserves total vertical output");
+    True(
+        source.Select(point => point.Horizontal).SequenceEqual(
+            research.Select(point => point.Horizontal)),
+        "research profile preserves the original horizontal trace");
+
+    True(ResearchRecoilModel.TryGetDefinition("M762", out var definition),
+        "M762 definition lookup");
+    Near(
+        definition.FirstShotKick / definition.StageOneStep,
+        research[0].Vertical / research[1].Vertical,
+        0.0001,
+        "first-shot ratio comes from research data");
+    Near(
+        definition.StageTwoStep / definition.StageOneStep,
+        research[7].Vertical / research[6].Vertical,
+        0.0001,
+        "M762 long-burst transition starts on shot 8");
+
+    var xk23 = WeaponProfile.FindByName("XK23")?.Pattern.ToArray() ?? [];
+    True(
+        !ResearchRecoilModel.TryCreatePattern("XK23", xk23, out var fallback),
+        "post-Y11S1.3 weapon should report a fallback");
+    True(xk23.SequenceEqual(fallback), "fallback must preserve the original estimate");
+}
+
+static void ProfileSourceSwitchingIsExact()
+{
+    var measuredPoints = new[]
+    {
+        new RecoilPatternPoint(0.5f, 10.0f),
+        new RecoilPatternPoint(-0.25f, 20.0f)
+    };
+    var profile = new WeaponProfile(
+        "F2",
+        "Assault Rifle",
+        ["Twitch"],
+        1.0,
+        0.0,
+        0,
+        "Vertical grip",
+        "Flash hider",
+        roundsPerMinute: 980,
+        magazineSize: 26)
+    {
+        Pattern = [new RecoilPatternPoint(0.0f, 1.0f)]
+    };
+    profile.MeasuredPatterns =
+    [
+        new MeasuredPatternVariant(
+            "Vertical grip",
+            "Flash hider",
+            "1.0x",
+            "Twitch",
+            "test-build",
+            980,
+            DateTimeOffset.Parse("2026-09-20T00:00:00Z"),
+            measuredPoints,
+            "controlled optic capture")
+    ];
+
+    var originalSettings = new Settings
+    {
+        ActiveMagnification = "1.0x",
+        CompensationMode = CompensationMode.WeaponPattern
+    };
+    var original = RecoilProfileResolver.Build(profile, "Twitch", originalSettings);
+    Equal(PatternDataQuality.Measured, original.PatternDataQuality,
+        "original source selects exact measured optic");
+    True(original.Pattern.SequenceEqual(measuredPoints),
+        "original source preserves measured points");
+
+    var researchSettings = new Settings
+    {
+        ActiveMagnification = "1.0x",
+        CompensationMode = CompensationMode.ResearchEstimate
+    };
+    var research = RecoilProfileResolver.Build(profile, "Twitch", researchSettings);
+    Equal(PatternDataQuality.VideoDerivedEstimate, research.PatternDataQuality,
+        "research source remains labeled estimated");
+    Equal("1.0x", research.PatternOptic,
+        "research source retains its exact optic reference");
+    Near(measuredPoints.Sum(point => point.Vertical),
+        research.Pattern.Sum(point => point.Vertical),
+        0.001,
+        "research source normalizes to the measured optic total");
+    True(research.PatternSource.Contains("controlled optic capture", StringComparison.Ordinal),
+        "research source discloses its selected reference");
+    True(profile.Pattern.Length == 1 && profile.Pattern[0].Vertical == 1.0f,
+        "source switching never mutates the original profile");
+}
+
 static void WeaponOutputStrengthIsSafe()
 {
     var source = new WeaponProfile
@@ -370,7 +490,9 @@ static void SettingsNormalizationIsSafe()
         {
             [" MP7 "] = 99,
             [" F2 "] = double.NaN
-        }
+        },
+        GeneralTimingVarianceEnabled = true,
+        DeltaNoiseEnabled = true
     };
     settings.Normalize();
     var scale = settings.CalculateSensitivityScale();
@@ -401,6 +523,8 @@ static void SettingsNormalizationIsSafe()
         "experimental per-weapon persistence");
     Equal(RecoilStrengthModel.Maximum, roundTrip.GetWeaponOutputStrength("MP7"),
         "output strength persistence");
+    True(roundTrip.GeneralTimingVarianceEnabled, "timing variance persistence");
+    True(roundTrip.DeltaNoiseEnabled, "delta noise persistence");
 }
 
 static void ProfilePersistenceRoundTrips()
@@ -455,6 +579,8 @@ static void LegacySettingsMigrateSafely()
         VerticalSensitivity = 2.5f,
         MouseDpi = 400,
         EnableRecoilControl = true,
+        GeneralTimingVarianceEnabled = true,
+        DeltaNoiseEnabled = true,
         OperatorDetectionMode = OperatorDetectionMode.Continuous,
         AutoOperatorTrackingEnabled = true
     };
@@ -467,6 +593,8 @@ static void LegacySettingsMigrateSafely()
     Equal(OperatorDetectionMode.Disabled, settings.OperatorDetectionMode, "privacy-safe detection migration");
     True(!settings.AutoOperatorTrackingEnabled, "unfinished tracking flag should be cleared");
     True(settings.AutomaticMagnificationEnabled, "automatic optic migration defaults on");
+    True(!settings.GeneralTimingVarianceEnabled, "timing variance migration defaults off");
+    True(!settings.DeltaNoiseEnabled, "delta noise migration defaults off");
     True(!settings.EnableRecoilControl, "saved armed state must always migrate to safe");
 
     var iconHudSettings = new Settings
@@ -750,6 +878,7 @@ static void SerialProtocolCoverageIsComplete()
         ["CONFIG_COMMIT"] = 0xFA,
         ["CONFIG_ABORT"] = 0xFB,
         ["STATUS"] = 0xFC,
+        ["GENERAL_SETTINGS"] = 0xFD,
         ["RESET"] = 0xFF
     };
     foreach (var (name, identifier) in commands)
@@ -768,6 +897,17 @@ static void SerialProtocolCoverageIsComplete()
     Equal((ushort)480, BinaryPrimitives.ReadUInt16LittleEndian(rapid.AsSpan(8, 2)),
         "rapid-fire RPM");
     Throws<ArgumentOutOfRangeException>(() => SerialProtocol.BuildRapidFireCommand(true, 2000));
+    var generalSettings = SerialProtocol.BuildGeneralSettingsCommand(true, true);
+    Equal((byte)0xFD, generalSettings[5], "general settings command identifier");
+    Equal((byte)2, generalSettings[6], "general settings payload length");
+    Equal((byte)1, generalSettings[7], "timing variance enabled flag");
+    Equal((byte)1, generalSettings[8], "delta noise enabled flag");
+    True(FirmwareContract.GeneralSettingsAcknowledgementMatches(
+        "GENERAL_SETTINGS:TIMING_VARIANCE=ON:DELTA_NOISE=ON", true, true),
+        "general movement readback matches exactly");
+    True(!FirmwareContract.GeneralSettingsAcknowledgementMatches(
+        "GENERAL_SETTINGS:TIMING_VARIANCE=OFF:DELTA_NOISE=ON", true, true),
+        "opposite general movement readback is rejected");
 
     var points = Enumerable.Range(0, 31)
         .Select(index => new RecoilPatternPoint(index == 0 ? 127.0f : index / 10.0f, index / 5.0f))
@@ -787,6 +927,12 @@ static void SerialProtocolCoverageIsComplete()
     Equal((byte)CompensationMode.WeaponPattern, experimentalPacket[8],
         "experimental mode uses firmware-compatible pattern mode");
     Equal((byte)31, experimentalPacket[20], "experimental declared pattern count");
+    var researchPacket = SerialProtocol.BuildProfileCommand(
+        profile,
+        CompensationMode.ResearchEstimate);
+    Equal((byte)CompensationMode.WeaponPattern, researchPacket[8],
+        "research estimate uses firmware-compatible pattern mode");
+    Equal((byte)31, researchPacket[20], "research estimate declared pattern count");
 
     var chunks = SerialProtocol.BuildPatternCommands(profile);
     Equal(3, chunks.Count, "pattern chunk count");
@@ -830,7 +976,7 @@ static void ConfigurationTransactionsAreDeterministic()
         scale,
         true,
         600);
-    Equal(0x2C0171E1u, hash, "independent FNV-1a vector");
+    Equal(0xCD470D73u, hash, "independent FNV-1a vector");
     Equal(hash, SerialProtocol.ComputeConfigurationHash(
         profile, CompensationMode.General, scale, true, 600), "stable hash");
 
@@ -853,6 +999,35 @@ static void ConfigurationTransactionsAreDeterministic()
     True(hash != SerialProtocol.ComputeConfigurationHash(
         profile, CompensationMode.General, scale, true, 600),
         "material configuration change must alter hash");
+    True(hash != SerialProtocol.ComputeConfigurationHash(
+        new WeaponProfile
+        {
+            Name = "A",
+            VerticalCompensation = 1.25,
+            HorizontalCompensation = -0.5,
+            BurstProgression = 7
+        },
+        CompensationMode.General,
+        scale,
+        true,
+        600,
+        true),
+        "timing variance toggle must alter the configuration hash");
+    True(hash != SerialProtocol.ComputeConfigurationHash(
+        new WeaponProfile
+        {
+            Name = "A",
+            VerticalCompensation = 1.25,
+            HorizontalCompensation = -0.5,
+            BurstProgression = 7
+        },
+        CompensationMode.General,
+        scale,
+        true,
+        600,
+        false,
+        true),
+        "delta noise toggle must alter the configuration hash");
 }
 
 static void MeasuredProfilePacksAreExact()
@@ -1093,7 +1268,9 @@ static void FirmwareStatusIsParsed()
         FirmwareStatusParser.TryParse(
             "METRICS:HID_SENT=120:HID_BUSY=3:MAX_QUEUE=18:" +
             "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
-            "HOST_SATURATIONS=1:USB_STOPS=4",
+            "HOST_SATURATIONS=1:USB_STOPS=4:CORRECTION_LATE=7:" +
+            "MAX_CORRECTION_LATE_US=2400:QUEUE=5:REPORT_INTERVAL_US=1000:" +
+            "GENERAL_DT_CLAMPS=2",
             out var metrics),
         "transport metrics should parse");
     Equal(FirmwareStatusKind.TransportMetrics, metrics.Kind, "metrics kind");
@@ -1105,6 +1282,11 @@ static void FirmwareStatusIsParsed()
     Equal(2u, metrics.HostDecodeErrors, "host decode errors");
     Equal(1u, metrics.HostAccumulatorSaturations, "host saturations");
     Equal(4u, metrics.UpstreamDisconnectStops, "upstream safety stops");
+    Equal(7u, metrics.CorrectionDelayedFrames, "delayed correction frames");
+    Equal(2400u, metrics.MaximumCorrectionLatenessUs, "maximum correction lateness");
+    Equal(5u, metrics.CurrentQueuedDelta, "current queue");
+    Equal(1000u, metrics.CurrentReportIntervalUs, "current report interval");
+    Equal(2u, metrics.GeneralIntervalClamps, "general dt clamps");
     True(
         FirmwareStatusParser.TryParse(
             "METRICS:HID_SENT=1:HID_BUSY=0:MAX_QUEUE=0:" +
@@ -1133,12 +1315,16 @@ static void SimulatorExercisesConfigurationPath()
         new SensitivityScale(1.0f, 1.0f),
         false,
         0,
+        true,
+        true,
         CancellationToken.None).GetAwaiter().GetResult();
     simulator.SendCommand("START");
     simulator.SendCommand("STOP");
 
     Equal("F2", simulator.LastProfile?.Name, "simulated profile");
     Equal(CompensationMode.WeaponPattern, simulator.LastMode, "simulated mode");
+    True(simulator.LastGeneralTimingVarianceEnabled, "simulated timing variance setting");
+    True(simulator.LastDeltaNoiseEnabled, "simulated delta noise setting");
     Equal("STOP", simulator.LastCommand, "simulated safety command");
     var metrics = simulator.GetMetrics();
     True(metrics.CommandsSent >= 4, "simulator should count encoded commands");

@@ -18,6 +18,8 @@
     <Compile Include="..\WindowsApp\OpticMagnificationPolicy.cs" Link="Source\OpticMagnificationPolicy.cs" />
     <Compile Include="..\WindowsApp\RecoilAttachmentModel.cs" Link="Source\RecoilAttachmentModel.cs" />
     <Compile Include="..\WindowsApp\RecoilStrengthModel.cs" Link="Source\RecoilStrengthModel.cs" />
+    <Compile Include="..\WindowsApp\RecoilProfileResolver.cs" Link="Source\RecoilProfileResolver.cs" />
+    <Compile Include="..\WindowsApp\ResearchRecoilModel.cs" Link="Source\ResearchRecoilModel.cs" />
     <Compile Include="..\WindowsApp\RapidFireCatalog.cs" Link="Source\RapidFireCatalog.cs" />
     <Compile Include="..\WindowsApp\SerialProtocol.cs" Link="Source\SerialProtocol.cs" />
     <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />

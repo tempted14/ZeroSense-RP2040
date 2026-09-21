@@ -8,7 +8,8 @@ public enum CompensationMode : byte
 {
     General = 0,
     WeaponPattern = 1,
-    Experimental = 2
+    Experimental = 2,
+    ResearchEstimate = 3
 }
 
 public enum PatternDataQuality

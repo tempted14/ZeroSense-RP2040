@@ -237,6 +237,8 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         SensitivityScale scale,
         bool rapidFireEnabled,
         int rapidFireRoundsPerMinute,
+        bool generalTimingVarianceEnabled,
+        bool deltaNoiseEnabled,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -247,7 +249,9 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             mode,
             scale,
             rapidFireEnabled,
-            rapidFireRoundsPerMinute);
+            rapidFireRoundsPerMinute,
+            generalTimingVarianceEnabled,
+            deltaNoiseEnabled);
         var transactionStarted = false;
         try
         {
@@ -320,6 +324,23 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                          rapidFireEnabled,
                          rapidFireRoundsPerMinute)),
                 "rapid-fire",
+                cancellationToken).ConfigureAwait(false);
+
+            await SendAndAwaitAsync(
+                () => Write(SerialProtocol.BuildGeneralSettingsCommand(
+                    generalTimingVarianceEnabled,
+                    deltaNoiseEnabled)),
+                line => FirmwareContract.GeneralSettingsAcknowledgementMatches(
+                    line,
+                    generalTimingVarianceEnabled,
+                    deltaNoiseEnabled),
+                line => line.StartsWith("ERROR:GENERAL_SETTINGS", StringComparison.Ordinal) ||
+                    (line.StartsWith("GENERAL_SETTINGS:", StringComparison.Ordinal) &&
+                     !FirmwareContract.GeneralSettingsAcknowledgementMatches(
+                         line,
+                         generalTimingVarianceEnabled,
+                         deltaNoiseEnabled)),
+                "general movement settings",
                 cancellationToken).ConfigureAwait(false);
 
             try

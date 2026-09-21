@@ -40,6 +40,10 @@
                                VerticalAlignment="Center" />
 
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="9" VerticalAlignment="Center">
+                        <TextBlock x:Name="TopVersionText" Text="v1.5.0 · config 3"
+                                   FontSize="10" Foreground="#666666"
+                                   VerticalAlignment="Center"
+                                   AutomationProperties.Name="Application and firmware configuration version" />
                         <Border Padding="9,5" CornerRadius="6" Background="#101010"
                                 BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1">
                             <StackPanel Orientation="Horizontal" Spacing="7">
@@ -255,13 +259,23 @@
                                 <StackPanel Grid.Column="1" Spacing="14">
                                     <Border Style="{StaticResource CardStyle}">
                                         <StackPanel Spacing="11">
-                                            <TextBlock Text="Output model" Style="{StaticResource SectionTitleStyle}" />
+                                            <TextBlock Text="Recoil profile source" Style="{StaticResource SectionTitleStyle}" />
                                             <ComboBox x:Name="CompensationModeSelector" HorizontalAlignment="Stretch"
                                                       DisplayMemberPath="DisplayName"
-                                                      AutomationProperties.Name="Output model"
+                                                      AutomationProperties.Name="Recoil profile source"
                                                       SelectionChanged="CompensationModeSelector_SelectionChanged" />
                                             <TextBlock x:Name="ModeDescriptionText"
                                                        Style="{StaticResource MutedTextStyle}" />
+                                            <ToggleSwitch x:Name="ResearchProfileToggle"
+                                                          Header="Use supplied research profile"
+                                                          OffContent="Original weapon pattern"
+                                                          OnContent="Research Y11S1.3 pattern"
+                                                          AutomationProperties.Name="Toggle original and supplied research recoil profiles"
+                                                          Toggled="ResearchProfileToggle_Toggled" />
+                                            <TextBlock x:Name="ResearchProfileStatusText"
+                                                       Text="Select a weapon to check research coverage."
+                                                       Foreground="#B9AAFF" FontSize="11"
+                                                       TextWrapping="Wrap" />
                                             <Border Padding="10" CornerRadius="7"
                                                     Background="#0B0B0B"
                                                     BorderBrush="{StaticResource StrokeBrush}"
@@ -341,6 +355,24 @@
                                             <TextBlock x:Name="RapidFireStatusText"
                                                        Text="Select a semi-automatic profile to see its rate."
                                                        Foreground="#B9AAFF" FontSize="11" TextWrapping="Wrap" />
+                                            <ToggleSwitch x:Name="GeneralTimingVarianceToggle"
+                                                          Header="General timing variance (±8%)"
+                                                          OffContent="Off — deterministic"
+                                                          OnContent="On — varied cadence"
+                                                          AutomationProperties.Name="General mode timing variance"
+                                                          Toggled="GeneralTimingVarianceToggle_Toggled" />
+                                            <TextBlock Text="Optional for General mode only. Pattern and rapid-fire shot timing always remain exact."
+                                                       Style="{StaticResource MutedTextStyle}"
+                                                       TextWrapping="Wrap" />
+                                            <ToggleSwitch x:Name="DeltaNoiseToggle"
+                                                          Header="Delta noise (±2–3 counts)"
+                                                          OffContent="Off — exact path"
+                                                          OnContent="On — balanced variation"
+                                                          AutomationProperties.Name="Generated recoil delta noise"
+                                                          Toggled="DeltaNoiseToggle_Toggled" />
+                                            <TextBlock Text="Adds balanced noise only to generated recoil reports. Physical mouse passthrough is never randomized and the offset is repaid to prevent drift."
+                                                       Style="{StaticResource MutedTextStyle}"
+                                                       TextWrapping="Wrap" />
                                         </StackPanel>
                                     </Border>
 

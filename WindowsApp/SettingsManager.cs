@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 10;
+    public const int CurrentCalibrationVersion = 12;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -322,6 +322,12 @@ public sealed class Settings
     [JsonPropertyName("rapidFireEnabled")]
     public bool RapidFireEnabled { get; set; } = true;
 
+    [JsonPropertyName("generalTimingVarianceEnabled")]
+    public bool GeneralTimingVarianceEnabled { get; set; }
+
+    [JsonPropertyName("deltaNoiseEnabled")]
+    public bool DeltaNoiseEnabled { get; set; }
+
     [JsonPropertyName("detectionHotkeyModifier")]
     public string DetectionHotkeyModifier { get; set; } = "Shift";
 
@@ -363,6 +369,20 @@ public sealed class Settings
         if (CalibrationVersion < 8)
         {
             AutomaticMagnificationEnabled = true;
+        }
+
+        if (CalibrationVersion < 11)
+        {
+            // Deterministic cadence remains the safe, repeatable default. Users
+            // must explicitly opt into the ±8% General-mode timing variation.
+            GeneralTimingVarianceEnabled = false;
+        }
+
+        if (CalibrationVersion < 12)
+        {
+            // Delta noise changes the emitted pointer path and therefore
+            // requires a deliberate opt-in after upgrading.
+            DeltaNoiseEnabled = false;
         }
 
         if (CalibrationVersion < 2)

@@ -1,5 +1,26 @@
 # Changelog
 
+## 1.5.0 - 2026-09-20
+
+- Add a separately selectable Y11S1.3 Research profile derived from the supplied
+  per-weapon data while preserving the original profile catalog unchanged.
+- Resolve the Research profile against the exact operator, loadout, optic, and
+  measured-profile source before applying its staged recoil envelope; unsupported
+  XK23 data falls back explicitly instead of inventing measurements.
+- Add an A/B profile-source control and immediately refresh the visible profile
+  quality and provenance when its selection changes.
+- Add a default-off General timing-variance control for the retained ±8% cadence
+  option, including transactional firmware synchronization and exact readback.
+- Add default-off balanced ±2–3 HID-count delta noise to generated compensation
+  only, with repayment of the opposite delta to prevent random-walk drift and no
+  modification of the downstream physical-mouse contribution.
+- Replace update-count-dependent smoothing with elapsed-time scaling and
+  exponential friction, and use absolute fixed-point scheduling for smoother,
+  drift-resistant per-shot compensation.
+- Extend simulator, protocol-contract, recoil-model, native scheduler, and delta-
+  noise regression coverage, and surface the app version and configuration schema
+  in the title area for easier app/firmware compatibility checks.
+
 ## 1.4.0 - 2026-09-20
 
 - Normalize General-mode smoothing and displacement to actual elapsed time and

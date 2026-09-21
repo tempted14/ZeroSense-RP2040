@@ -43,6 +43,8 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
     public SensitivityScale LastSensitivity { get; private set; }
     public bool LastRapidFireEnabled { get; private set; }
     public int LastRapidFireRoundsPerMinute { get; private set; }
+    public bool LastGeneralTimingVarianceEnabled { get; private set; }
+    public bool LastDeltaNoiseEnabled { get; private set; }
     public string? LastCommand { get; private set; }
     public uint LastConfigurationHash { get; private set; }
 
@@ -73,6 +75,8 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
         SensitivityScale scale,
         bool rapidFireEnabled,
         int rapidFireRoundsPerMinute,
+        bool generalTimingVarianceEnabled,
+        bool deltaNoiseEnabled,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -86,7 +90,9 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
                 mode,
                 scale,
                 rapidFireEnabled,
-                rapidFireRoundsPerMinute);
+                rapidFireRoundsPerMinute,
+                generalTimingVarianceEnabled,
+                deltaNoiseEnabled);
             _ = SerialProtocol.BuildConfigurationBeginCommand(transactionId, configurationHash);
             Interlocked.Increment(ref _commandsSent);
             // Build every packet the real transport would send. This catches
@@ -104,6 +110,10 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             Interlocked.Increment(ref _commandsSent);
             _ = SerialProtocol.BuildRapidFireCommand(rapidFireEnabled, rapidFireRoundsPerMinute);
             Interlocked.Increment(ref _commandsSent);
+            _ = SerialProtocol.BuildGeneralSettingsCommand(
+                generalTimingVarianceEnabled,
+                deltaNoiseEnabled);
+            Interlocked.Increment(ref _commandsSent);
             _ = SerialProtocol.BuildConfigurationCommitCommand(transactionId, configurationHash);
             Interlocked.Increment(ref _commandsSent);
 
@@ -113,6 +123,8 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             LastSensitivity = scale;
             LastRapidFireEnabled = rapidFireEnabled;
             LastRapidFireRoundsPerMinute = rapidFireRoundsPerMinute;
+            LastGeneralTimingVarianceEnabled = generalTimingVarianceEnabled;
+            LastDeltaNoiseEnabled = deltaNoiseEnabled;
             LastConfigurationHash = configurationHash;
             RecordAcknowledgement(Stopwatch.GetTimestamp() - started);
             RaiseCommandReceived("SIMULATOR:CONFIGURATION_ACCEPTED");

@@ -225,17 +225,20 @@ active profile.
 
 The app contains 115 individual weapon entries from the current Y11S3 roster, including the previously missing SIX12 SD. Of those, 61 automatic weapons have current rate-of-fire and magazine timing plus a deterministic per-shot estimate. Supported semi-automatic DMRs, pistols, revolvers, and self-loading shotguns have non-zero per-shot compensation and default-on rapid fire; pump shotguns, shields, the hand cannon, and automatic weapons are excluded from rapid fire.
 
-Three modes are available:
+Four modes are available:
 
 - **General (constant adjustment)** keeps the original, steady per-axis correction.
 - **Weapon pattern (video-derived estimate)** sends a staged per-shot trace at the selected weapon's RPM and stops at its magazine length.
 - **Experimental (per-weapon calibrated)** makes a separate copy of the standard pattern and applies saved first-shot, early, middle, late, and horizontal gains. It never edits the General or standard Pattern data and safely falls back to General on weapons without an automatic pattern.
+- **Research stages (Y11S1.3 estimate)** is a separate comparison profile built from the supplied 94-weapon research table. It uses the table's vertical stage ratios for 60 automatic weapons, preserves the original profile's total vertical output and horizontal trace, and falls back to the original estimate for the newer XK23. It is an estimate, not measured current-game data.
 
 The pattern points are useful starting estimates, not extracted game constants. Ubisoft describes a staged recoil system but does not publish numeric per-shot vectors, and normal YouTube recoil footage contains the presenter's mouse input. The app labels the mode accordingly instead of presenting inferred points as exact measurements. Reaper uses Ubisoft's current stage starts at bullets 0/3/10/25, but its stage magnitudes remain estimates.
 
 Experimental tuning starts at `1.00`, which is exactly the standard estimated pattern. Calibrate one weapon in the shooting range, change one gain by `0.05` at a time, and use **Reset weapon** to return only that weapon to `1.00`. **First** affects shot one, **Early** the remainder of the first 25% of the magazine, **Mid** 25–70%, **Late** the final 30%, and **Horizontal** the entire trace. These controls provide a safe path toward measured curves; they do not make an unmeasured estimate “perfect.”
 
-Every weapon with recoil output also has a saved **Per-weapon output strength** control. `1.00×` preserves the profile exactly; values below it reduce correction and values above it increase correction. This multiplier works in General, Pattern, and Experimental modes and also scales semi-automatic per-shot correction, so routine range calibration no longer requires editing profile JSON. Custom automatic profiles now generate their curve from their own RPM and magazine-size overrides instead of silently using the built-in timing.
+Every weapon with recoil output also has a saved **Per-weapon output strength** control. `1.00×` preserves the profile exactly; values below it reduce correction and values above it increase correction. This multiplier works in General, Pattern, Experimental, and Research modes and also scales semi-automatic per-shot correction, so routine range calibration no longer requires editing profile JSON. Custom automatic profiles now generate their curve from their own RPM and magazine-size overrides instead of silently using the built-in timing.
+
+The research profile is intentionally isolated from the original catalog. Plot pixels cannot be converted directly into HID counts without a controlled calibration, so only within-weapon stage ratios are imported. See [`docs/RESEARCH_RECOIL_PROFILE.md`](docs/RESEARCH_RECOIL_PROFILE.md) for provenance, transformation rules, and limitations.
 
 The Calibration page can reset the reference sensitivity, ADS table, automatic
 optic policy, and selected weapon strength together. **Undo reset** restores the
@@ -269,7 +272,9 @@ The app sends the selected profile as a v4 transaction: begin plus expected hash
 
 **Arm output** does not continuously move the pointer. RP2040 activation uses the desktop's foreground-gated M1+M2 monitor plus a 750 ms keepalive. RP2350 activation is different by design: the app grants a short foreground/armed lease, while the board reads raw M1+M2 from the downstream mouse itself. A raw release or mouse/interface disconnect stops output immediately; synthesized rapid-fire reports cannot feed back into this trigger. Physical movement, buttons, wheel, and pan remain additive and live.
 
-Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. On both boards, General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), integrates actual elapsed time, and uses a deterministic 8 ms cadence by default. The retained ±8% timing-jitter path is a source-build option and is disabled in official UF2s. Adaptive HID servicing uses 250/500 Hz idle/normal pacing; high activity uses the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). RP2350 physical movement, wheel, pan, and button transitions are always promoted immediately to that 1 ms path, so adaptive idle pacing does not reduce pass-through responsiveness. Pattern mode instead uses exact RPM deadlines and distributes each shot's correction across 1 ms frames with fixed-point remainder preservation.
+Sensitivity is transferred exactly and read back exactly. The shared `0.05..8.0` range is only a broad finite wire-safety boundary, not the older narrow tuning clamp. On both boards, General mode retains independent-axis velocity smoothing (40-count maximum velocity and 0.85 friction), integrates actual elapsed time, and uses a deterministic 8 ms cadence by default. **General timing variance (±8%)** is an optional, default-off toggle beside the recoil settings; it never alters Pattern or rapid-fire shot timing. **Delta noise (±2–3 counts)** is a separate default-off option that varies only generated recoil reports. It repays each injected offset before introducing another, preventing random-walk drift, and never randomizes RP2350 physical mouse passthrough. Both settings are persisted, transferred transactionally, acknowledged exactly, and included in the firmware configuration hash. Adaptive HID servicing uses 250/500 Hz idle/normal pacing; generated Pattern corrections and physical RP2350 movement, wheel, pan, or button transitions select the USB full-speed 1 ms endpoint (1 kHz target, typically about 900 Hz after host/controller overhead). Pattern and rapid-fire correction uses exact RPM deadlines and distributes each shot across tested 1 ms fixed-point frames. Semi-automatic General values are converted from counts per reference 8 ms into a full per-shot displacement before scheduling, so slow weapons are no longer under-scaled. Delayed frames keep their absolute deadline and are drained in bounded batches rather than silently stretching the remainder into later shots.
+
+Firmware telemetry reports HID busy deferrals, active report gaps, maximum and current queue depth, correction frames delayed, maximum correction lateness, the current report interval, and General-mode `dt` clamps. These counters make USB congestion or scheduler stalls visible on the Device page instead of presenting an apparently healthy connection.
 
 The Device page includes an explicit **Use simulator** option. It exercises the
 same configuration calculation and binary protocol encoders as real firmware,
@@ -277,6 +282,10 @@ records acknowledgement/command metrics, and never emits HID input. **Validate
 now** checks the active settings on demand, while **Copy diagnostic report**
 copies a bounded in-memory report containing connection latency, command counts,
 working-set memory, OCR timing events, and recent errors without screenshots.
+
+The Overview page exposes both the full **Recoil profile source** selector and a
+one-switch Original ↔ Supplied Research comparison. The top bar shows the app
+version and configuration schema so an older executable is immediately visible.
 
 Measured patterns can be added as versioned JSON packs under the app data
 `measured-profile-packs` directory; see
