@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.6.0 - 2026-09-21
+
+- Restore exact floating-point configuration acknowledgements in both firmware
+  targets so the RP2350 and RP2040 UF2s synchronize with the desktop client.
+- Add a visible 0.50-4.00 master recoil gain with a 3.50 default based on the
+  first physical RP2350 calibration, while preserving the original pattern
+  shape and a separate per-weapon fine trim.
+- Normalize default ADS calibration against each optic's own reference value so
+  2.5x, 3.5x, and 8.0x are not incorrectly weakened relative to 1.0x.
+- Retry a lost configuration acknowledgement, tolerate isolated transient CDC
+  read errors, and automatically attempt to reconnect a genuinely lost device.
+- Keep reconnect fail-safe: generated movement stops immediately and output
+  remains disarmed until the user explicitly arms it again.
+- Retain optional timing variance, balanced delta noise, device-local RP2350
+  M1+M2 activation, and additive physical mouse pass-through.
+
 ## 1.5.0 - 2026-09-20
 
 - Add a separately selectable Y11S1.3 Research profile derived from the supplied

@@ -62,6 +62,11 @@ class FirmwareContractTests(unittest.TestCase):
     def test_exact_profile_readback_uses_utf8(self) -> None:
         self.assertIn("Encoding = new UTF8Encoding(false, true)", CS_CONNECTION)
 
+    def test_firmware_build_retains_float_readback_support(self) -> None:
+        self.assertEqual(2, PLATFORMIO.count("-Wl,-u,_printf_float"))
+        self.assertIn("PROFILE:%s:MODE=%s:V=%.3f:H=%.3f", FIRMWARE)
+        self.assertIn("SENSITIVITY:H=%.3f:V=%.3f", FIRMWARE)
+
     def test_hid_service_is_reached_and_rate_limited(self) -> None:
         loop_position = FIRMWARE.index("void loop()")
         self.assertGreater(FIRMWARE.index("service_hid();", loop_position), loop_position)

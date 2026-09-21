@@ -62,6 +62,12 @@ internal static class DiagnosticLog
         builder.AppendLine($"General timing variance: {(settings.GeneralTimingVarianceEnabled ? "enabled" : "disabled")}");
         builder.AppendLine($"Generated delta noise: {(settings.DeltaNoiseEnabled ? "enabled" : "disabled")}");
         builder.AppendLine($"Sensitivity scale: H {scale.Horizontal:F3}, V {scale.Vertical:F3}");
+        builder.AppendLine($"Master recoil gain: {settings.MasterRecoilGain:F2}x");
+        if (!string.IsNullOrWhiteSpace(selectedProfile?.Name))
+        {
+            builder.AppendLine(
+                $"Effective recoil gain: {settings.GetEffectiveOutputGain(selectedProfile.Name):F2}x");
+        }
         builder.AppendLine($"Output state: {(armed ? "armed" : "safe")}");
         builder.AppendLine($"Connection: {(connection is null ? "none" : connection.IsSimulator ? "simulator" : "hardware")}");
         builder.AppendLine($"Commands: {metrics.CommandsSent} sent, {metrics.FailedCommands} failed");
