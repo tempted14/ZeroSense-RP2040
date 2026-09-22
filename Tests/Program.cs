@@ -365,6 +365,9 @@ static void ProfileSourceSwitchingIsExact()
         "original source selects exact measured optic");
     True(original.Pattern.SequenceEqual(measuredPoints),
         "original source preserves measured points");
+    Equal(1.0f, originalSettings.CalculateSensitivityScale(
+        original, CompensationMode.WeaponPattern).Vertical,
+        "measured optic source does not receive the estimated-pattern multiplier");
 
     var researchSettings = new Settings
     {
