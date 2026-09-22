@@ -10,9 +10,9 @@ namespace RainbowRecoil;
 internal static class FirmwareContract
 {
     public const float MinimumVerticalCompensation = 0.0f;
-    public const float MaximumVerticalCompensation = 20.0f;
-    public const float MinimumHorizontalCompensation = -20.0f;
-    public const float MaximumHorizontalCompensation = 20.0f;
+    public const float MaximumVerticalCompensation = 127.0f;
+    public const float MinimumHorizontalCompensation = -127.0f;
+    public const float MaximumHorizontalCompensation = 127.0f;
     // Broad wire-safety bounds, not tuning clamps. Values are transferred
     // exactly and acknowledged; the UI calibration determines the actual scale.
     public const float MinimumSensitivityFactor = 0.05f;

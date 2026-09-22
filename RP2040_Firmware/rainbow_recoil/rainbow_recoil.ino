@@ -18,6 +18,7 @@
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
 #include "hid_report_decoder.h"
+#include "host_receive_recovery.h"
 #endif
 
 #ifndef USE_TINYUSB
@@ -45,8 +46,12 @@ enum CommandId : uint8_t {
 static constexpr uint16_t maxCommandPayload = 63;
 static constexpr uint16_t maxPatternPoints = 160;
 static constexpr uint16_t maxPatternRoundsPerMinute = 2000;
-static constexpr float minCompensation = -20.0f;
-static constexpr float maxCompensation = 20.0f;
+// Q8.8 pattern points and the upstream relative-mouse report both top out at
+// roughly one signed byte per axis. Keep the profile wire contract aligned
+// with that real device limit instead of imposing the old tuning-only 20-unit
+// ceiling.
+static constexpr float minCompensation = -127.0f;
+static constexpr float maxCompensation = 127.0f;
 static constexpr float minVerticalCompensation = 0.0f;
 static constexpr float minSensitivityFactor = 0.05f;
 static constexpr float maxSensitivityFactor = 8.0f;
@@ -230,6 +235,7 @@ static Adafruit_USBD_HID usbHid;
 #ifdef ZEROSENSE_RP2350_USB_C
 static constexpr uint8_t hostMouseDpPin = 12;
 static constexpr uint8_t maxHostMouseInterfaces = 4;
+static constexpr uint8_t maxHostReceiveQueueFailures = 8;
 static constexpr int32_t maxHostAccumulator = 32767;
 
 struct HostMouseInterface {
@@ -239,6 +245,7 @@ struct HostMouseInterface {
     uint8_t deviceAddress;
     uint8_t instance;
     uint8_t buttons;
+    ZeroSenseHostRecovery::QueueState receiveQueue;
     uint16_t vid;
     uint16_t pid;
     ZeroSenseHid::Decoder decoder;
@@ -269,6 +276,7 @@ static std::atomic<bool> hostMouseFaultPending{false};
 static std::atomic<uint32_t> hostReportsReceived{0};
 static std::atomic<uint32_t> hostDecodeErrors{0};
 static std::atomic<uint32_t> hostAccumulatorSaturations{0};
+static std::atomic<uint32_t> hostReceiveRecoveries{0};
 
 // Parse the standard HID short-item format so report-ID, 16-bit movement, and
 // ordinary gaming-mouse descriptors work without assuming a fixed byte layout.
@@ -420,6 +428,55 @@ static void connect_host_mouse_interface(HostMouseInterface& mouseInterface) {
     mouseProxyEvent.store(MouseProxyEvent::Connected, std::memory_order_release);
 }
 
+// A completed interrupt transfer must always be followed by another queued
+// receive. PIO-USB can briefly reject that queue request while it finishes an
+// endpoint transition; retaining the mounted interface and retrying from the
+// bounded host loop avoids the "COM still connected, mouse frozen" state.
+static ZeroSenseHostRecovery::QueueOutcome queue_host_mouse_report(
+    HostMouseInterface& mouseInterface) {
+    if (!mouseInterface.used || !mouseInterface.connected) {
+        return ZeroSenseHostRecovery::QueueOutcome::Exhausted;
+    }
+    const bool queued = tuh_hid_receive_report(
+        mouseInterface.deviceAddress,
+        mouseInterface.instance);
+    const auto outcome = ZeroSenseHostRecovery::recordQueueAttempt(
+        mouseInterface.receiveQueue,
+        queued,
+        maxHostReceiveQueueFailures);
+    if (outcome == ZeroSenseHostRecovery::QueueOutcome::Recovered) {
+        hostReceiveRecoveries.fetch_add(1, std::memory_order_relaxed);
+    }
+    return outcome;
+}
+
+static void service_host_mouse_receive_recovery() {
+    for (auto& mouseInterface : hostMouseInterfaces) {
+        if (!mouseInterface.used || !mouseInterface.connected) {
+            continue;
+        }
+
+        // A busy endpoint already has the next report queued. An unexpectedly
+        // ready endpoint has no outstanding transfer and must be re-armed.
+        // Do not re-check tuh_mounted() here: TinyUSB invokes the HID mount
+        // callback before the device-wide mounted flag is finalized. The
+        // authoritative unmount callback clears this interface when needed.
+        if (!tuh_hid_receive_ready(
+                mouseInterface.deviceAddress,
+                mouseInterface.instance)) {
+            continue;
+        }
+        const auto outcome = queue_host_mouse_report(mouseInterface);
+        if (outcome == ZeroSenseHostRecovery::QueueOutcome::Queued ||
+            outcome == ZeroSenseHostRecovery::QueueOutcome::Recovered ||
+            outcome == ZeroSenseHostRecovery::QueueOutcome::Retry) {
+            continue;
+        }
+        clear_host_mouse_interface(mouseInterface);
+        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
+    }
+}
+
 extern "C" {
 void tuh_hid_mount_cb(
     uint8_t deviceAddress,
@@ -457,10 +514,7 @@ void tuh_hid_mount_cb(
     }
 
     connect_host_mouse_interface(*mouseInterface);
-    if (!tuh_hid_receive_report(deviceAddress, instance)) {
-        clear_host_mouse_interface(*mouseInterface);
-        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
-    }
+    queue_host_mouse_report(*mouseInterface);
 }
 
 void tuh_hid_set_protocol_complete_cb(
@@ -477,10 +531,7 @@ void tuh_hid_set_protocol_complete_cb(
 
     configure_boot_mouse_layout(*mouseInterface);
     connect_host_mouse_interface(*mouseInterface);
-    if (!tuh_hid_receive_report(deviceAddress, instance)) {
-        clear_host_mouse_interface(*mouseInterface);
-        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
-    }
+    queue_host_mouse_report(*mouseInterface);
 }
 
 void tuh_hid_umount_cb(uint8_t deviceAddress, uint8_t instance) {
@@ -510,10 +561,7 @@ void tuh_hid_report_received_cb(
         if (!decode_host_mouse_report(*mouseInterface, report, length)) {
             hostDecodeErrors.fetch_add(1, std::memory_order_relaxed);
         }
-        if (!tuh_hid_receive_report(deviceAddress, instance)) {
-            clear_host_mouse_interface(*mouseInterface);
-            mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
-        }
+        queue_host_mouse_report(*mouseInterface);
     }
 }
 } // extern "C"
@@ -1258,14 +1306,21 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(current_configuration_hash()),
                     configurationTransactionActive ? "ACTIVE" : "IDLE",
                     fireActive ? "ON" : "OFF");
+                // The startup identity lines may be emitted before the desktop
+                // read loop begins. Repeat both board and downstream-mouse
+                // state on every status request so Arm Output can recover
+                // without requiring a physical unplug/replug event.
+                print_hardware_identity();
                 uint32_t hostReports = 0;
                 uint32_t hostErrors = 0;
                 uint32_t hostSaturations = 0;
+                uint32_t hostRecoveries = 0;
 #ifdef ZEROSENSE_RP2350_USB_C
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
                 hostSaturations =
                     hostAccumulatorSaturations.load(std::memory_order_relaxed);
+                hostRecoveries = hostReceiveRecoveries.load(std::memory_order_relaxed);
 #endif
                 const int64_t currentQueuedX =
                     static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
@@ -1280,7 +1335,8 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     "MAX_ACTIVE_GAP_US=%lu:HOST_REPORTS=%lu:"
                     "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu:"
                     "CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:"
-                    "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu\n",
+                    "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu:"
+                    "HOST_RECOVERIES=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1293,7 +1349,8 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(correctionScheduler.maximumLatenessUs),
                     static_cast<unsigned long>(currentQueuedDelta),
                     static_cast<unsigned long>(currentHidReportIntervalUs),
-                    static_cast<unsigned long>(generalIntervalClampCount));
+                    static_cast<unsigned long>(generalIntervalClampCount),
+                    static_cast<unsigned long>(hostRecoveries));
             }
             break;
 
@@ -2025,7 +2082,10 @@ void setup1() {
 
 void loop1() {
     if (hostStackStarted) {
-        usbHost.task();
+        // Never wait forever here: a lost interrupt request otherwise leaves
+        // CDC alive on core 0 while core 1 can no longer recover mouse input.
+        usbHost.task(1);
+        service_host_mouse_receive_recovery();
     } else {
         delay(1);
     }

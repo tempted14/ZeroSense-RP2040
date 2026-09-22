@@ -78,6 +78,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private bool _configurationSyncPending;
     private int _configurationRevision;
     private int _automaticReconnectGeneration;
+    private int _deviceStatusPollTicks;
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
     private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
@@ -724,7 +725,8 @@ public sealed partial class MainPage : UserControl, IDisposable
                     $"max active gap {update.MaximumActiveReportGapUs} µs · " +
                     $"downstream {update.HostReportsReceived} reports / " +
                     $"{update.HostDecodeErrors} decode errors / " +
-                    $"{update.HostAccumulatorSaturations} saturations · " +
+                    $"{update.HostAccumulatorSaturations} saturations / " +
+                    $"{update.HostReceiveRecoveries} receive recoveries · " +
                     $"{update.UpstreamDisconnectStops} upstream safety stops · " +
                     $"scheduler {update.CorrectionDelayedFrames} delayed / " +
                     $"{update.MaximumCorrectionLatenessUs} µs max · " +
@@ -741,8 +743,24 @@ public sealed partial class MainPage : UserControl, IDisposable
         {
             var canArm = CanArmConnectedHardware();
             SetArmControls(canArm && _isArmed, canArm);
-            DeviceMessageText.Text = BuildConnectedHardwareDetail();
-            DevicePageConnectionDetail.Text = DeviceMessageText.Text;
+            var detail = BuildConnectedHardwareDetail();
+            if (_firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy &&
+                update.Kind is FirmwareStatusKind.MouseConnected or
+                    FirmwareStatusKind.MouseDisconnected or
+                    FirmwareStatusKind.MouseUnsupported or
+                    FirmwareStatusKind.MouseHostError)
+            {
+                SetConnectionStatus(
+                    canArm ? $"Connected on {_connection.PortName}" :
+                        "Board online — mouse unavailable",
+                    detail,
+                    canArm ? ConnectedBrush : WarningBrush);
+            }
+            else
+            {
+                DeviceMessageText.Text = detail;
+                DevicePageConnectionDetail.Text = detail;
+            }
         }
         UpdateHardwareStatusPresentation();
     }
@@ -1392,8 +1410,22 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
     }
 
-    private void Rp2350ArmLeaseTimer_Tick(object? sender, object e) =>
+    private void Rp2350ArmLeaseTimer_Tick(object? sender, object e)
+    {
         RefreshRp2350ArmLease();
+        if (++_deviceStatusPollTicks < 10)
+        {
+            return;
+        }
+        _deviceStatusPollTicks = 0;
+
+        var connection = _connection;
+        if (!_isDisposed && !_isConnecting && !_isSynchronizingConfiguration &&
+            connection?.IsConnected == true && !connection.IsSimulator)
+        {
+            TrySendCommand("STATUS");
+        }
+    }
 
     private void RefreshRp2350ArmLease()
     {

@@ -77,6 +77,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:", FIRMWARE)
         self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
         self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
+        self.assertIn("HOST_RECOVERIES=%lu", FIRMWARE)
 
     def test_upstream_disconnect_immediately_clears_generated_output(self) -> None:
         fail_safe = re.search(
@@ -305,7 +306,19 @@ class FirmwareContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(callback)
         self.assertIn("decode_host_mouse_report", callback.group("body"))
-        self.assertIn("tuh_hid_receive_report", callback.group("body"))
+        self.assertIn("queue_host_mouse_report", callback.group("body"))
+        self.assertIn("usbHost.task(1)", FIRMWARE)
+        self.assertNotIn("usbHost.task();", FIRMWARE)
+        self.assertIn("service_host_mouse_receive_recovery();", FIRMWARE)
+        self.assertIn("tuh_hid_receive_ready", FIRMWARE)
+        recovery = re.search(
+            r"static void service_host_mouse_receive_recovery\(\)\s*"
+            r"\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(recovery)
+        self.assertNotIn("!tuh_mounted", recovery.group("body"))
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
         self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
@@ -313,6 +326,13 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("MOUSE:DISCONNECTED", FIRMWARE)
         self.assertIn("MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR", FIRMWARE)
         self.assertIn("MOUSE:HOST_ERROR", FIRMWARE)
+        status_case = re.search(
+            r"case CMD_STATUS:(?P<body>.*?)\n\s*break;",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(status_case)
+        self.assertIn("print_hardware_identity();", status_case.group("body"))
 
     def test_build_flash_and_ci_routes_keep_targets_distinct(self) -> None:
         self.assertIn('if /i "%TARGET%"=="rp2040"', FLASH_HELPER)

@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 14;
+    public const int CurrentCalibrationVersion = 15;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -400,6 +400,14 @@ public sealed class Settings
         {
             // First physical RP2350 calibration established that the preserved
             // profile shapes need about 3-4x output on the reference setup.
+            MasterRecoilGain = RecoilStrengthModel.MasterDefault;
+        }
+
+        if (CalibrationVersion < 15)
+        {
+            // Physical follow-up testing found the 3.5x calibration still
+            // roughly 3-4x too weak. Move existing installations to the new
+            // 12x baseline while keeping both controls fully editable.
             MasterRecoilGain = RecoilStrengthModel.MasterDefault;
         }
 

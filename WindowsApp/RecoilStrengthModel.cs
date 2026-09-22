@@ -9,21 +9,24 @@ namespace RainbowRecoil;
 /// </summary>
 public static class RecoilStrengthModel
 {
-    public const double Minimum = 0.25;
-    public const double Maximum = 2.0;
+    // User-facing output controls span the full signed relative-HID/Q8.8
+    // magnitude supported by the firmware. Zero is useful for disabling one
+    // layer without deleting a profile; values above 1 are explicit gain.
+    public const double Minimum = 0.0;
+    public const double Maximum = 127.0;
     public const double Default = 1.0;
 
     // The source profiles intentionally preserve their measured/estimated shape.
     // This master calibration converts those relative values into the stronger
     // physical HID output required by the shipping RP2040/RP2350 path.
-    public const double MasterMinimum = 0.5;
-    public const double MasterMaximum = 4.0;
-    public const double MasterDefault = 3.5;
+    public const double MasterMinimum = 0.0;
+    public const double MasterMaximum = 127.0;
+    public const double MasterDefault = 12.0;
 
     // A user can combine the master calibration with the existing per-weapon
     // trim. Keep the final product bounded before it reaches profile clamping.
-    public const double EffectiveMinimum = MasterMinimum * Minimum;
-    public const double EffectiveMaximum = MasterMaximum * Maximum;
+    public const double EffectiveMinimum = 0.0;
+    public const double EffectiveMaximum = 127.0;
 
     public static double Normalize(double value) => double.IsFinite(value)
         ? Math.Clamp(value, Minimum, Maximum)
