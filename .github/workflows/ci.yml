@@ -21,7 +21,9 @@ jobs:
       - name: Restore
         run: |
           dotnet restore Tests/RainbowRecoil.CoreTests.csproj --configfile NuGet.Config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet restore WindowsApp/RainbowRecoil.csproj --runtime win-x64 --configfile NuGet.Config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run core tests
         run: dotnet run --project Tests/RainbowRecoil.CoreTests.csproj --configuration Release --no-restore
       - name: Run Python tests

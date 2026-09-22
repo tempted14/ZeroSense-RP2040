@@ -103,7 +103,7 @@ internal static class ConfigurationValidator
             errors.Add("The recoil pattern contains an invalid or unrepresentable point.");
         }
 
-        var scale = settings.CalculateSensitivityScale();
+        var scale = settings.CalculateSensitivityScale(profile);
         if (!float.IsFinite(scale.Horizontal) || !float.IsFinite(scale.Vertical) ||
             scale.Horizontal is < FirmwareContract.MinimumSensitivityFactor or
                 > FirmwareContract.MaximumSensitivityFactor ||

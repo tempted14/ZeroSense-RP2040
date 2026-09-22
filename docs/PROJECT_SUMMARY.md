@@ -166,6 +166,14 @@ These are starting estimates, not authoritative recoil vectors. Ubisoft describe
 
 The opt-in Experimental mode stores independent first-shot, early, middle, late, and horizontal gains per weapon. Its `1.00` defaults reproduce the standard pattern exactly, reset removes only the selected weapon's tuning, and General/standard Pattern sources are never mutated. This isolates iterative shooting-range calibration from the known-stable modes while preserving a General fallback for profiles without automatic patterns.
 
+Independent per-weapon horizontal tuning is available in every recoil mode.
+The neutral default retains the resolved X trace; users may disable it, mirror
+it, or replace it with deterministic left-pull, right-pull, or alternating
+shapes and a `0..10` lateral-only gain. These settings are persisted separately
+from master and per-weapon total output and are applied only to the cloned
+effective profile. Direction labels are explicitly estimates unless an exact
+measured loadout supplies the X/Y trace.
+
 Research mode is a fourth, isolated host-side pattern builder based on the supplied Y11S1.3 estimate table. It reshapes vertical output with per-weapon first-shot and stage ratios for 60 automatic weapons, normalizes each magazine back to the original total vertical HID output, retains the original horizontal trace, and leaves all original profile objects unchanged. The post-dataset XK23 uses the original estimate and the UI identifies the fallback.
 
 A `12.00×` master calibration and a separate neutral-default per-weapon output

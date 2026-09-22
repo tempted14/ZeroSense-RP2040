@@ -17,9 +17,11 @@ var tests = new (string Name, Action Run)[]
     ("research estimate is isolated and normalized", ResearchEstimateIsIsolatedAndNormalized),
     ("profile source switching preserves optic-specific references", ProfileSourceSwitchingIsExact),
     ("per-weapon output strength is isolated and bounded", WeaponOutputStrengthIsSafe),
+    ("horizontal recoil overrides are isolated and customizable", HorizontalRecoilOverridesAreSafe),
     ("experimental tuning is isolated and stage-specific", ExperimentalTuningIsIsolated),
     ("operator attachment overrides are isolated", OperatorOverridesAreIsolated),
     ("settings normalization and scaling are safe", SettingsNormalizationIsSafe),
+    ("2.5x automatic boost survives the 127-point profile limit", TwoPointFiveBoostIsScoped),
     ("operator OCR matching tolerates realistic noise", OperatorOcrMatchingIsRobust),
     ("detection settings normalize safely", DetectionSettingsNormalizeSafely),
     ("weapon slots and defaults are deterministic", WeaponSlotsAndDefaultsAreDeterministic),
@@ -485,6 +487,76 @@ static void ExperimentalTuningIsIsolated()
         "horizontal lower clamp");
 }
 
+static void HorizontalRecoilOverridesAreSafe()
+{
+    var source = WeaponProfile.FindByName("R4-C")
+        ?? throw new InvalidOperationException("R4-C profile is missing.");
+    var originalPattern = source.Pattern.ToArray();
+    var settings = new Settings
+    {
+        ActiveMagnification = "1.0x",
+        CompensationMode = CompensationMode.WeaponPattern,
+        MasterRecoilGain = 1.0
+    };
+    settings.SetWeaponHorizontalTuning("R4-C", new HorizontalRecoilTuning
+    {
+        Mode = HorizontalPatternMode.WeaponPullRight,
+        Strength = 2.0
+    });
+
+    var rightPull = RecoilProfileResolver.Build(source, "Ash", settings);
+    True(rightPull.Pattern.All(point => point.Horizontal <= 0),
+        "right weapon pull produces leftward compensation");
+    True(rightPull.Pattern.Any(point => point.Horizontal < 0),
+        "right pull override produces horizontal output");
+    True(source.Pattern.SequenceEqual(originalPattern),
+        "custom horizontal tuning never mutates the source profile");
+
+    settings.SetWeaponHorizontalTuning("R4-C", new HorizontalRecoilTuning
+    {
+        Mode = HorizontalPatternMode.WeaponPullLeft,
+        Strength = 2.0
+    });
+    var leftPull = RecoilProfileResolver.Build(source, "Ash", settings);
+    True(leftPull.Pattern.All(point => point.Horizontal >= 0),
+        "left weapon pull produces rightward compensation");
+
+    settings.SetWeaponHorizontalTuning("R4-C", new HorizontalRecoilTuning
+    {
+        Mode = HorizontalPatternMode.Alternating,
+        Strength = 1.0
+    });
+    var alternating = RecoilProfileResolver.Build(source, "Ash", settings);
+    True(alternating.Pattern.Any(point => point.Horizontal < 0) &&
+         alternating.Pattern.Any(point => point.Horizontal > 0),
+        "alternating override moves in both horizontal directions");
+
+    settings.SetWeaponHorizontalTuning("R4-C", new HorizontalRecoilTuning
+    {
+        Enabled = false,
+        Mode = HorizontalPatternMode.Profile,
+        Strength = 1.0
+    });
+    var verticalOnly = RecoilProfileResolver.Build(source, "Ash", settings);
+    True(verticalOnly.Pattern.All(point => point.Horizontal == 0),
+        "disabled horizontal output preserves vertical-only compensation");
+    True(verticalOnly.Pattern.Select(point => point.Vertical)
+            .SequenceEqual(rightPull.Pattern.Select(point => point.Vertical)),
+        "horizontal controls do not change vertical output");
+
+    var normalized = HorizontalRecoilModel.Normalize(new HorizontalRecoilTuning
+    {
+        Mode = (HorizontalPatternMode)999,
+        Strength = double.PositiveInfinity
+    });
+    Equal(HorizontalPatternMode.Profile, normalized.Mode, "invalid horizontal mode fallback");
+    Equal(HorizontalRecoilModel.DefaultStrength, normalized.Strength,
+        "non-finite horizontal strength fallback");
+    True(HorizontalRecoilModel.DescribeCatalogDirection("R4-C")
+            .Contains("right", StringComparison.OrdinalIgnoreCase),
+        "catalog direction is exposed for the UI");
+}
+
 static void OperatorOverridesAreIsolated()
 {
     var profile = WeaponProfile.FindByName("Mk 14 EBR")
@@ -520,6 +592,15 @@ static void SettingsNormalizationIsSafe()
             [" MP7 "] = 999,
             [" F2 "] = double.NaN
         },
+        WeaponHorizontalTunings = new Dictionary<string, HorizontalRecoilTuning>
+        {
+            [" R4-C "] = new()
+            {
+                Enabled = true,
+                Mode = HorizontalPatternMode.WeaponPullRight,
+                Strength = 99
+            }
+        },
         MasterRecoilGain = 999,
         GeneralTimingVarianceEnabled = true,
         DeltaNoiseEnabled = true
@@ -549,6 +630,11 @@ static void SettingsNormalizationIsSafe()
         "master and per-weapon output are bounded together");
     True(!settings.WeaponOutputStrengths.ContainsKey("F2"),
         "neutral per-weapon strengths should not be persisted");
+    var horizontal = settings.GetWeaponHorizontalTuning("R4-C");
+    Equal(HorizontalPatternMode.WeaponPullRight, horizontal.Mode,
+        "horizontal pattern mode normalization");
+    Equal(HorizontalRecoilModel.MaximumStrength, horizontal.Strength,
+        "horizontal strength upper clamp");
 
     var roundTrip = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))
         ?? throw new InvalidOperationException("settings round-trip returned null");
@@ -559,6 +645,12 @@ static void SettingsNormalizationIsSafe()
         "output strength persistence");
     Equal(RecoilStrengthModel.MasterMaximum, roundTrip.MasterRecoilGain,
         "master recoil gain persistence");
+    Equal(HorizontalPatternMode.WeaponPullRight,
+        roundTrip.GetWeaponHorizontalTuning("R4-C").Mode,
+        "horizontal pattern mode persistence");
+    Equal(HorizontalRecoilModel.MaximumStrength,
+        roundTrip.GetWeaponHorizontalTuning("R4-C").Strength,
+        "horizontal strength persistence");
     True(roundTrip.GeneralTimingVarianceEnabled, "timing variance persistence");
     True(roundTrip.DeltaNoiseEnabled, "delta noise persistence");
 
@@ -572,6 +664,51 @@ static void SettingsNormalizationIsSafe()
         Equal(1.0f, defaultScale.Vertical,
             $"{magnification} default vertical ADS calibration");
     }
+}
+
+static void TwoPointFiveBoostIsScoped()
+{
+    var automatic = new WeaponProfile
+    {
+        Name = "Boost test",
+        WeaponType = "Assault Rifle",
+        VerticalCompensation = 2.0,
+        Pattern = [new RecoilPatternPoint(0.0f, 2.0f)]
+    };
+    var saturated = automatic.WithCombinedOutputStrength(127.0, 1.0);
+    Equal(127.0, saturated.VerticalCompensation, "master gain reaches profile wire limit");
+    var settings = new Settings
+    {
+        ActiveMagnification = "2.5x",
+        TwoPointFiveAutoVerticalBoost = 4.0
+    };
+    settings.Normalize();
+    var boosted = settings.CalculateSensitivityScale(saturated);
+    Equal(1.0f, boosted.Horizontal, "boost does not change horizontal output");
+    Equal(4.0f, boosted.Vertical, "boost applies after saturated profile");
+    var sensitivityPacket = SerialProtocol.BuildSensitivityCommand(boosted);
+    Equal(4.0f, BinaryPrimitives.ReadSingleLittleEndian(sensitivityPacket.AsSpan(11, 4)),
+        "boosted vertical scale reaches the firmware command exactly");
+    Equal(1.0f, settings.CalculateSensitivityScale().Vertical,
+        "unscoped calibration remains unchanged");
+    Equal(1.0f, settings.CalculateSensitivityScale(new WeaponProfile
+    {
+        WeaponType = "Marksman Rifle"
+    }).Vertical, "semi-automatic weapons are unchanged");
+    settings.ActiveMagnification = "1.0x";
+    Equal(1.0f, settings.CalculateSensitivityScale(saturated).Vertical,
+        "other optics are unchanged");
+
+    settings.TwoPointFiveAutoVerticalBoost = 999.0;
+    settings.Normalize();
+    Equal(4.0, settings.TwoPointFiveAutoVerticalBoost, "boost upper clamp");
+    var roundTrip = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))
+        ?? throw new InvalidOperationException("boost settings round-trip returned null");
+    roundTrip.Normalize();
+    Equal(4.0, roundTrip.TwoPointFiveAutoVerticalBoost, "boost persists");
+    settings.TwoPointFiveAutoVerticalBoost = double.NaN;
+    settings.Normalize();
+    Equal(1.0, settings.TwoPointFiveAutoVerticalBoost, "invalid boost defaults to neutral");
 }
 
 static void ProfilePersistenceRoundTrips()
@@ -1373,6 +1510,29 @@ static void FirmwareStatusIsParsed()
     Equal(1000u, metrics.CurrentReportIntervalUs, "current report interval");
     Equal(2u, metrics.GeneralIntervalClamps, "general dt clamps");
     Equal(6u, metrics.HostReceiveRecoveries, "host receive recoveries");
+    const string recoveryMetrics =
+        "METRICS:HID_SENT=120:HID_BUSY=3:MAX_QUEUE=18:" +
+        "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
+        "HOST_SATURATIONS=1:USB_STOPS=4:CORRECTION_LATE=7:" +
+        "MAX_CORRECTION_LATE_US=2400:QUEUE=5:REPORT_INTERVAL_US=1000:" +
+        "GENERAL_DT_CLAMPS=2:HOST_RECOVERIES=6:HOST_QUEUE_FAILURES=9:" +
+        "HOST_UNMOUNTS=2:HOST_TASK_AGE_MS=150:CDC_DROPPED=3";
+    True(FirmwareStatusParser.TryParse(recoveryMetrics, out var recovery),
+        "expanded recovery telemetry parses");
+    Equal(9u, recovery.HostReceiveQueueFailures, "host queue failures");
+    Equal(2u, recovery.HostMouseUnmounts, "host unmounts");
+    Equal(150u, recovery.HostTaskAgeMs, "host task age");
+    Equal(3u, recovery.CdcDroppedMessages, "dropped CDC replies");
+    True(!FirmwareStatusParser.TryParse(
+        recoveryMetrics.Replace("HOST_TASK_AGE_MS=150", "HOST_TASK_AGE_MS=-1"), out _),
+        "negative host task age rejected");
+    True(!FirmwareStatusParser.TryParse(
+        recoveryMetrics.Replace(":CDC_DROPPED=3", ""), out _),
+        "incomplete recovery telemetry rejected");
+    DiagnosticLog.Record("firmware", recoveryMetrics);
+    True(DiagnosticLog.BuildReport(new Settings(), null, null, null, false)
+        .Contains(recoveryMetrics, StringComparison.Ordinal),
+        "diagnostic export preserves complete recovery telemetry");
     True(
         FirmwareStatusParser.TryParse(
             "METRICS:HID_SENT=1:HID_BUSY=0:MAX_QUEUE=0:" +

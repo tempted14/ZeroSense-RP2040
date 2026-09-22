@@ -20,7 +20,7 @@ internal static class DiagnosticLog
         var entry = new DiagnosticEntry(
             DateTimeOffset.UtcNow,
             Clean(category, 32),
-            Clean(message, 300));
+            Clean(message, 1024));
         lock (Sync)
         {
             Entries.Enqueue(entry);
@@ -47,9 +47,10 @@ internal static class DiagnosticLog
 
         using var process = Process.GetCurrentProcess();
         var metrics = connection?.GetMetrics() ?? default;
-        var scale = settings.CalculateSensitivityScale();
+        var scale = settings.CalculateSensitivityScale(selectedProfile);
         var builder = new StringBuilder();
         builder.AppendLine("ZeroSense diagnostic report");
+        builder.AppendLine($"App version: {typeof(DiagnosticLog).Assembly.GetName().Version}");
         builder.AppendLine($"Generated UTC: {DateTimeOffset.UtcNow:O}");
         builder.AppendLine($"App uptime: {DateTimeOffset.UtcNow - StartedAt:g}");
         builder.AppendLine($"OS: {Environment.OSVersion.VersionString}");
@@ -63,10 +64,15 @@ internal static class DiagnosticLog
         builder.AppendLine($"Generated delta noise: {(settings.DeltaNoiseEnabled ? "enabled" : "disabled")}");
         builder.AppendLine($"Sensitivity scale: H {scale.Horizontal:F3}, V {scale.Vertical:F3}");
         builder.AppendLine($"Master recoil gain: {settings.MasterRecoilGain:F2}x");
+        builder.AppendLine($"2.5x automatic vertical boost: {settings.TwoPointFiveAutoVerticalBoost:F2}x");
         if (!string.IsNullOrWhiteSpace(selectedProfile?.Name))
         {
             builder.AppendLine(
                 $"Effective recoil gain: {settings.GetEffectiveOutputGain(selectedProfile.Name):F2}x");
+            var horizontal = settings.GetWeaponHorizontalTuning(selectedProfile.Name);
+            builder.AppendLine(
+                $"Horizontal pattern: {(horizontal.Enabled ? HorizontalRecoilModel.DescribeMode(horizontal.Mode) : "Disabled")}, " +
+                $"{horizontal.Strength:F2}x");
         }
         builder.AppendLine($"Output state: {(armed ? "armed" : "safe")}");
         builder.AppendLine($"Connection: {(connection is null ? "none" : connection.IsSimulator ? "simulator" : "hardware")}");
