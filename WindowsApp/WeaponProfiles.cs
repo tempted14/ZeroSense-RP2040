@@ -385,12 +385,12 @@ public sealed class WeaponProfile
         var effective = Clone(this);
         effective.VerticalCompensation = Math.Clamp(
             effective.VerticalCompensation * strength,
-            0.0,
-            20.0);
+            FirmwareContract.MinimumVerticalCompensation,
+            FirmwareContract.MaximumVerticalCompensation);
         effective.HorizontalCompensation = Math.Clamp(
             effective.HorizontalCompensation * strength,
-            -20.0,
-            20.0);
+            FirmwareContract.MinimumHorizontalCompensation,
+            FirmwareContract.MaximumHorizontalCompensation);
         effective.Pattern = effective.Pattern
             .Select(point => new RecoilPatternPoint(
                 (float)Math.Clamp(point.Horizontal * strength, -127.0, 127.0),
@@ -480,10 +480,16 @@ public sealed class WeaponProfile
         profile.Grip = profile.Grip?.Trim() ?? "Not applicable";
         profile.Barrel = profile.Barrel?.Trim() ?? "Not applicable";
         profile.VerticalCompensation = double.IsFinite(profile.VerticalCompensation)
-            ? Math.Clamp(profile.VerticalCompensation, 0.0, 20.0)
+            ? Math.Clamp(
+                profile.VerticalCompensation,
+                FirmwareContract.MinimumVerticalCompensation,
+                FirmwareContract.MaximumVerticalCompensation)
             : 0.0;
         profile.HorizontalCompensation = double.IsFinite(profile.HorizontalCompensation)
-            ? Math.Clamp(profile.HorizontalCompensation, -20.0, 20.0)
+            ? Math.Clamp(
+                profile.HorizontalCompensation,
+                FirmwareContract.MinimumHorizontalCompensation,
+                FirmwareContract.MaximumHorizontalCompensation)
             : 0.0;
         profile.BurstProgression = Math.Clamp(profile.BurstProgression, 0, 100);
         profile.RoundsPerMinute = Math.Clamp(

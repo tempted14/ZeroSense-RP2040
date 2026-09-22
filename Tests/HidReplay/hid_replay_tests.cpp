@@ -1,11 +1,16 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <string>
 
 #include "../../RP2040_Firmware/rainbow_recoil/hid_report_decoder.h"
 #include "../../RP2040_Firmware/rainbow_recoil/correction_scheduler.h"
 #include "../../RP2040_Firmware/rainbow_recoil/delta_noise.h"
+#include "../../RP2040_Firmware/rainbow_recoil/host_receive_recovery.h"
 #include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
+#include "../../RP2040_Firmware/rainbow_recoil/protocol_output.h"
+#include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_timing.h"
+#include "../../RP2040_Firmware/rainbow_recoil/host_core_health.h"
 
 namespace {
 int failures = 0;
@@ -21,6 +26,20 @@ void expect(bool condition, const char* name) {
 int main() {
     using namespace ZeroSenseHid;
 
+    expect(pio_usb_host_bit_cycles(2, 128) == 10,
+        "120 MHz full-speed PIO bit timing includes half-cycle divider");
+    expect(pio_usb_host_bit_cycles(5, 0) == 20,
+        "integer PIO divider timing remains exact");
+    expect(pio_usb_host_bit_cycles(2, 1) == 9,
+        "fractional PIO timing rounds up before EOP wait");
+    expect(!ZeroSenseHostHealth::stalled(0, 100000, 500),
+        "host watchdog does not trip before the first heartbeat");
+    expect(!ZeroSenseHostHealth::stalled(2000, 2500, 500) &&
+        ZeroSenseHostHealth::stalled(2000, 2501, 500),
+        "host watchdog distinguishes a delayed task from a stalled one");
+    expect(ZeroSenseHostHealth::stalled(UINT32_MAX - 200, 400, 500),
+        "host watchdog timeout survives millis wrap");
+
     expect(std::abs(ZeroSenseMotion::intervalScale(7360) - 0.92f) < 0.0001f,
         "negative timing jitter scale");
     expect(std::abs(ZeroSenseMotion::intervalScale(8640) - 1.08f) < 0.0001f,
@@ -30,6 +49,31 @@ int main() {
         "friction is time normalized");
     expect(std::abs(ZeroSenseMotion::approach(0.0f, 5.0f, 1.2f) - 1.2f) < 0.0001f,
         "acceleration remains bounded");
+    expect(std::abs(ZeroSenseMotion::calibratedLimit(40.0f, 4.0f) - 160.0f) < 0.0001f,
+        "2.5x vertical boost raises the general-mode velocity cap");
+    expect(std::abs(ZeroSenseMotion::calibratedLimit(1.2f, 4.0f) - 4.8f) < 0.0001f,
+        "2.5x vertical boost raises acceleration proportionally");
+    float baseVelocity = 0.0f;
+    float boostedVelocity = 0.0f;
+    for (int tick = 0; tick < 40; ++tick) {
+        baseVelocity = ZeroSenseMotion::approach(baseVelocity, 40.0f, 1.2f);
+        boostedVelocity = ZeroSenseMotion::approach(boostedVelocity, 160.0f, 4.8f);
+    }
+    expect(std::abs(boostedVelocity - 4.0f * baseVelocity) < 0.0001f,
+        "2.5x general-mode smoothing preserves fourfold output after ramp");
+    ZeroSenseCorrection::State boostedScheduler = {};
+    ZeroSenseCorrection::schedule(boostedScheduler, 0.0f, 127.0f * 4.0f,
+        75000, 1000);
+    int32_t boostedTotal = 0;
+    int32_t largestBoostedFrame = 0;
+    for (uint32_t frame = 0; frame < 75; ++frame) {
+        const auto result = ZeroSenseCorrection::service(
+            boostedScheduler, 1000 + frame * 1000);
+        boostedTotal += result.queuedY;
+        largestBoostedFrame = std::max(largestBoostedFrame, result.queuedY);
+    }
+    expect(boostedTotal == 508 && largestBoostedFrame <= 127,
+        "capped 127-point pattern delivers boosted correction across HID frames");
     const float jitteredDistance =
         10.0f * ZeroSenseMotion::intervalScale(7360) +
         10.0f * ZeroSenseMotion::intervalScale(8640);
@@ -164,6 +208,74 @@ int main() {
     expect(!parseDescriptor(
         decoder, splitDescriptor, sizeof(splitDescriptor) - 1, mouseApplication),
         "truncated descriptor rejected");
+
+    ZeroSenseHostRecovery::QueueState receiveState = {};
+    expect(
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3) ==
+            ZeroSenseHostRecovery::QueueOutcome::Retry,
+        "first receive queue failure is retryable");
+    expect(
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, true, 3) ==
+            ZeroSenseHostRecovery::QueueOutcome::Recovered,
+        "successful requeue reports recovery");
+    expect(receiveState.consecutiveFailures == 0 && !receiveState.recoveryPending,
+        "successful requeue clears recovery state");
+    ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3);
+    ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3);
+    expect(
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3) ==
+            ZeroSenseHostRecovery::QueueOutcome::Exhausted,
+        "bounded receive failures eventually fail closed");
+    expect(!ZeroSenseHostRecovery::retryDue(receiveState, 99, 3),
+        "sustained receive failures use a bounded slow retry");
+    expect(ZeroSenseHostRecovery::retryDue(receiveState, 100, 3),
+        "quarantined interface remains eligible for recovery");
+    expect(ZeroSenseHostRecovery::recordQueueAttempt(receiveState, true, 3, 100) ==
+        ZeroSenseHostRecovery::QueueOutcome::Recovered,
+        "receive submission recovers even after the failure threshold");
+    ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3, UINT32_MAX - 2);
+    expect(!ZeroSenseHostRecovery::retryDue(receiveState, 1, 3) &&
+        ZeroSenseHostRecovery::retryDue(receiveState, 2, 3),
+        "receive retry backoff survives clock wrap");
+    for (int i = 0; i < 300; ++i) {
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3, 200);
+    }
+    expect(receiveState.consecutiveFailures == 255 &&
+        !ZeroSenseHostRecovery::retryDue(receiveState, 299, 3),
+        "sustained failure counter saturates without bypassing backoff");
+
+    // A full CDC FIFO must never prevent the firmware loop from advancing.
+    ZeroSenseProtocol::OutputQueue<8> output;
+    std::string delivered;
+    int writes = 0;
+    auto writer = [&](const uint8_t* bytes, size_t length) -> size_t {
+        ++writes;
+        delivered.append(reinterpret_cast<const char*>(bytes), length);
+        return length;
+    };
+    expect(output.enqueue("ACK\n", 4), "CDC queues complete reply");
+    int hidServices = 0;
+    for (int i = 0; i < 1000; ++i) {
+        expect(output.drain(0, 128, writer) == 0, "full CDC FIFO returns immediately");
+        ++hidServices;
+    }
+    expect(writes == 0 && output.size() == 4 && hidServices == 1000,
+        "blocked CDC writer leaves all HID loop opportunities available");
+    expect(!output.enqueue("ERROR\n", 6) && output.droppedMessages == 1 &&
+        output.size() == 4, "overflow drops whole reply without corrupting prior data");
+    expect(output.drain(8, 2, writer) == 2 && output.size() == 2,
+        "CDC per-loop write budget is respected");
+    expect(output.enqueue("STAT\n", 5), "CDC ring wraps on enqueue");
+    while (output.size()) output.drain(8, 3, writer);
+    expect(delivered == "ACK\nSTAT\n", "CDC wrap preserves complete reply order");
+    output.enqueue("ABC", 3);
+    expect(output.drain(8, 8, [](const uint8_t*, size_t) -> size_t { return 0; }) == 0 &&
+        output.size() == 3, "zero-byte write retains pending data");
+    expect(output.drain(8, 8, [](const uint8_t*, size_t) -> size_t { return 1; }) == 1 &&
+        output.size() == 2, "short write consumes only accepted bytes");
+    output.clear();
+    expect(output.size() == 0 && output.droppedMessages == 1,
+        "CDC disconnect clears stale replies but preserves diagnostic counter");
 
     if (failures == 0) {
         std::cout << "HID replay: all fixtures passed\n";

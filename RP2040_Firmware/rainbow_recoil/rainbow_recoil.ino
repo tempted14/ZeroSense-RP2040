@@ -10,6 +10,9 @@
 #include <atomic>
 #include <cmath>
 #include <cstring>
+#include <cstdarg>
+#include <cstdio>
+#include "protocol_output.h"
 #include "pico/bootrom.h"
 #include "correction_scheduler.h"
 #include "delta_noise.h"
@@ -18,7 +21,44 @@
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
 #include "hid_report_decoder.h"
+#include "host_receive_recovery.h"
+#include "host_core_health.h"
 #endif
+
+static ZeroSenseProtocol::OutputQueue<4096> protocolOutput;
+
+static void protocol_printf(const char* format, ...) {
+    if (!tud_cdc_connected()) {
+        protocolOutput.clear();
+        return;
+    }
+    char line[768];
+    va_list args;
+    va_start(args, format);
+    const int length = vsnprintf(line, sizeof(line), format, args);
+    va_end(args);
+    if (length < 0 || static_cast<size_t>(length) >= sizeof(line)) {
+        ++protocolOutput.droppedMessages;
+        return;
+    }
+    protocolOutput.enqueue(line, static_cast<size_t>(length));
+}
+
+static void protocol_println(const char* line) {
+    protocol_printf("%s\n", line);
+}
+
+static void service_protocol_output() {
+    if (!tud_cdc_connected()) {
+        protocolOutput.clear();
+        return;
+    }
+    protocolOutput.drain(tud_cdc_write_available(), 128,
+        [](const uint8_t* data, size_t length) -> size_t {
+            return tud_cdc_write(data, static_cast<uint32_t>(length));
+        });
+    tud_cdc_write_flush();
+}
 
 #ifndef USE_TINYUSB
 #error "Select Tools > USB Stack > Adafruit TinyUSB (or build with -DUSE_TINYUSB)."
@@ -45,8 +85,12 @@ enum CommandId : uint8_t {
 static constexpr uint16_t maxCommandPayload = 63;
 static constexpr uint16_t maxPatternPoints = 160;
 static constexpr uint16_t maxPatternRoundsPerMinute = 2000;
-static constexpr float minCompensation = -20.0f;
-static constexpr float maxCompensation = 20.0f;
+// Q8.8 pattern points and the upstream relative-mouse report both top out at
+// roughly one signed byte per axis. Keep the profile wire contract aligned
+// with that real device limit instead of imposing the old tuning-only 20-unit
+// ceiling.
+static constexpr float minCompensation = -127.0f;
+static constexpr float maxCompensation = 127.0f;
 static constexpr float minVerticalCompensation = 0.0f;
 static constexpr float minSensitivityFactor = 0.05f;
 static constexpr float maxSensitivityFactor = 8.0f;
@@ -230,6 +274,7 @@ static Adafruit_USBD_HID usbHid;
 #ifdef ZEROSENSE_RP2350_USB_C
 static constexpr uint8_t hostMouseDpPin = 12;
 static constexpr uint8_t maxHostMouseInterfaces = 4;
+static constexpr uint8_t maxHostReceiveQueueFailures = 8;
 static constexpr int32_t maxHostAccumulator = 32767;
 
 struct HostMouseInterface {
@@ -239,6 +284,7 @@ struct HostMouseInterface {
     uint8_t deviceAddress;
     uint8_t instance;
     uint8_t buttons;
+    ZeroSenseHostRecovery::QueueState receiveQueue;
     uint16_t vid;
     uint16_t pid;
     ZeroSenseHid::Decoder decoder;
@@ -269,6 +315,11 @@ static std::atomic<bool> hostMouseFaultPending{false};
 static std::atomic<uint32_t> hostReportsReceived{0};
 static std::atomic<uint32_t> hostDecodeErrors{0};
 static std::atomic<uint32_t> hostAccumulatorSaturations{0};
+static std::atomic<uint32_t> hostReceiveRecoveries{0};
+static std::atomic<uint32_t> hostReceiveQueueFailures{0};
+static std::atomic<uint32_t> hostMouseUnmounts{0};
+static std::atomic<uint32_t> hostTaskLastAtMs{0};
+static std::atomic<bool> hostCoreStalled{false};
 
 // Parse the standard HID short-item format so report-ID, 16-bit movement, and
 // ordinary gaming-mouse descriptors work without assuming a fixed byte layout.
@@ -420,6 +471,70 @@ static void connect_host_mouse_interface(HostMouseInterface& mouseInterface) {
     mouseProxyEvent.store(MouseProxyEvent::Connected, std::memory_order_release);
 }
 
+// A completed interrupt transfer must always be followed by another queued
+// receive. PIO-USB can briefly reject that queue request while it finishes an
+// endpoint transition; retaining the mounted interface and retrying from the
+// bounded host loop avoids the "COM still connected, mouse frozen" state.
+static ZeroSenseHostRecovery::QueueOutcome queue_host_mouse_report(
+    HostMouseInterface& mouseInterface) {
+    if (!mouseInterface.used || mouseInterface.bootProtocolPending) {
+        return ZeroSenseHostRecovery::QueueOutcome::Exhausted;
+    }
+    const bool queued = tuh_hid_receive_report(
+        mouseInterface.deviceAddress,
+        mouseInterface.instance);
+    const auto outcome = ZeroSenseHostRecovery::recordQueueAttempt(
+        mouseInterface.receiveQueue,
+        queued,
+        maxHostReceiveQueueFailures,
+        millis());
+    if (!queued) {
+        hostReceiveQueueFailures.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (outcome == ZeroSenseHostRecovery::QueueOutcome::Recovered) {
+        hostReceiveRecoveries.fetch_add(1, std::memory_order_relaxed);
+    }
+    return outcome;
+}
+
+static void service_host_mouse_receive_recovery() {
+    for (auto& mouseInterface : hostMouseInterfaces) {
+        if (!mouseInterface.used || mouseInterface.bootProtocolPending ||
+            !ZeroSenseHostRecovery::retryDue(
+                mouseInterface.receiveQueue, millis(), maxHostReceiveQueueFailures)) {
+            continue;
+        }
+
+        // A busy endpoint already has the next report queued. An unexpectedly
+        // ready endpoint has no outstanding transfer and must be re-armed.
+        // Do not re-check tuh_mounted() here: TinyUSB invokes the HID mount
+        // callback before the device-wide mounted flag is finalized. The
+        // authoritative unmount callback clears this interface when needed.
+        if (!tuh_hid_receive_ready(
+                mouseInterface.deviceAddress,
+                mouseInterface.instance)) {
+            continue;
+        }
+        mouseInterface.receiveQueue.recoveryPending = true;
+        const auto outcome = queue_host_mouse_report(mouseInterface);
+        if (outcome == ZeroSenseHostRecovery::QueueOutcome::Queued ||
+            outcome == ZeroSenseHostRecovery::QueueOutcome::Recovered ||
+            outcome == ZeroSenseHostRecovery::QueueOutcome::Retry) {
+            continue;
+        }
+        // Retain the descriptor and address until the authoritative unmount.
+        // Release stale buttons and revoke arming once, but keep retrying with
+        // backoff. Only an actual decoded report marks this interface healthy.
+        if (mouseInterface.connected) {
+            mouseInterface.connected = false;
+            mouseInterface.buttons = 0;
+            publish_aggregate_host_mouse_state();
+            hostMouseFaultPending.store(true, std::memory_order_release);
+            mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
+        }
+    }
+}
+
 extern "C" {
 void tuh_hid_mount_cb(
     uint8_t deviceAddress,
@@ -457,10 +572,7 @@ void tuh_hid_mount_cb(
     }
 
     connect_host_mouse_interface(*mouseInterface);
-    if (!tuh_hid_receive_report(deviceAddress, instance)) {
-        clear_host_mouse_interface(*mouseInterface);
-        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
-    }
+    queue_host_mouse_report(*mouseInterface);
 }
 
 void tuh_hid_set_protocol_complete_cb(
@@ -477,10 +589,7 @@ void tuh_hid_set_protocol_complete_cb(
 
     configure_boot_mouse_layout(*mouseInterface);
     connect_host_mouse_interface(*mouseInterface);
-    if (!tuh_hid_receive_report(deviceAddress, instance)) {
-        clear_host_mouse_interface(*mouseInterface);
-        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
-    }
+    queue_host_mouse_report(*mouseInterface);
 }
 
 void tuh_hid_umount_cb(uint8_t deviceAddress, uint8_t instance) {
@@ -488,6 +597,7 @@ void tuh_hid_umount_cb(uint8_t deviceAddress, uint8_t instance) {
         deviceAddress,
         instance);
     if (mouseInterface != nullptr) {
+        hostMouseUnmounts.fetch_add(1, std::memory_order_relaxed);
         clear_host_mouse_interface(*mouseInterface);
         mouseProxyEvent.store(
             hostMouseConnected.load(std::memory_order_acquire)
@@ -505,15 +615,21 @@ void tuh_hid_report_received_cb(
     HostMouseInterface* mouseInterface = find_host_mouse_interface(
         deviceAddress,
         instance);
-    if (mouseInterface != nullptr && mouseInterface->connected) {
+    if (mouseInterface != nullptr && !mouseInterface->bootProtocolPending) {
         hostReportsReceived.fetch_add(1, std::memory_order_relaxed);
         if (!decode_host_mouse_report(*mouseInterface, report, length)) {
             hostDecodeErrors.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            hostTaskLastAtMs.store(millis(), std::memory_order_release);
+            const bool wasStalled =
+                hostCoreStalled.exchange(false, std::memory_order_acq_rel);
+            if (!mouseInterface->connected) {
+                connect_host_mouse_interface(*mouseInterface);
+            } else if (wasStalled) {
+                mouseProxyEvent.store(MouseProxyEvent::Connected, std::memory_order_release);
+            }
         }
-        if (!tuh_hid_receive_report(deviceAddress, instance)) {
-            clear_host_mouse_interface(*mouseInterface);
-            mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
-        }
+        queue_host_mouse_report(*mouseInterface);
     }
 }
 } // extern "C"
@@ -671,7 +787,7 @@ static void complete_pattern_output() {
     fireActive = false;
     rapidFireActive = false;
     set_rapid_button(false);
-    Serial.println("STOP:PATTERN_COMPLETE");
+    protocol_println("STOP:PATTERN_COMPLETE");
 }
 
 static void capture_configuration(ConfigurationSnapshot& snapshot) {
@@ -784,7 +900,7 @@ static bool start_output() {
     if (activeMode == MODE_WEAPON_PATTERN &&
         loadedPatternPoints != expectedPatternPoints) {
         fireActive = false;
-        Serial.println("ERROR:PATTERN:INCOMPLETE");
+        protocol_println("ERROR:PATTERN:INCOMPLETE");
         return false;
     }
 
@@ -799,7 +915,7 @@ static bool start_output() {
     // Subsequent updates integrate the actual elapsed time between executions.
     lastMovementIntegrationAtUs = nextMovementAtUs - 8000UL;
     nextRapidShotAtUs = nextMovementAtUs;
-    Serial.printf("START:%s\n", activeProfileName);
+    protocol_printf("START:%s\n", activeProfileName);
     return true;
 }
 
@@ -832,31 +948,34 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
+    protocol_println("BUILD:HOST-FIX-OPTIC-20260922");
 #ifdef ZEROSENSE_RP2350_USB_C
-    Serial.println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
-    if (hostMouseConnected.load(std::memory_order_acquire)) {
-        Serial.printf(
+    protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
+    if (hostCoreStalled.load(std::memory_order_acquire)) {
+        protocol_println("MOUSE:HOST_ERROR");
+    } else if (hostMouseConnected.load(std::memory_order_acquire)) {
+        protocol_printf(
             "MOUSE:CONNECTED:VID=%04X:PID=%04X\n",
             hostMouseVid.load(std::memory_order_acquire),
             hostMousePid.load(std::memory_order_acquire));
     } else {
-        Serial.println("MOUSE:DISCONNECTED");
+        protocol_println("MOUSE:DISCONNECTED");
     }
 #else
-    Serial.println("DEVICE:RP2040-ZERO:CDC+HID");
+    protocol_println("DEVICE:RP2040-ZERO:CDC+HID");
 #endif
 }
 
 // Validate and apply a complete host profile.
 static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
     if (length < 10 || (payload[0] != 1 && payload[0] != 2)) {
-        Serial.println("ERROR:PROFILE:FORMAT");
+        protocol_println("ERROR:PROFILE:FORMAT");
         return false;
     }
 
     const bool is_version2 = payload[0] == 2;
     if (is_version2 && length < 14) {
-        Serial.println("ERROR:PROFILE:FORMAT");
+        protocol_println("ERROR:PROFILE:FORMAT");
         return false;
     }
 
@@ -867,16 +986,16 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
     const float vertical = readFloatLittleEndian(payload + verticalOffset);
     const float horizontal = readFloatLittleEndian(payload + horizontalOffset);
     if (!std::isfinite(vertical) || !std::isfinite(horizontal)) {
-        Serial.println("ERROR:PROFILE:VALUE");
+        protocol_println("ERROR:PROFILE:VALUE");
         return false;
     }
     if (vertical < minVerticalCompensation || vertical > maxCompensation ||
         horizontal < minCompensation || horizontal > maxCompensation) {
-        Serial.println("ERROR:PROFILE:RANGE");
+        protocol_println("ERROR:PROFILE:RANGE");
         return false;
     }
     if (payload[burstOffset] > 100) {
-        Serial.println("ERROR:PROFILE:BURST_RANGE");
+        protocol_println("ERROR:PROFILE:BURST_RANGE");
         return false;
     }
 
@@ -894,7 +1013,7 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
               requestedPoints > maxPatternPoints)) ||
             (requestedMode == MODE_GENERAL &&
              (requestedRpm != 0 || requestedPoints != 0))) {
-            Serial.println("ERROR:PROFILE:MODE_RANGE");
+            protocol_println("ERROR:PROFILE:MODE_RANGE");
             return false;
         }
     }
@@ -903,7 +1022,7 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
     for (uint16_t index = 0; index < sourceNameLength; ++index) {
         const uint8_t value = payload[nameOffset + index];
         if (value < 0x20 || value == 0x7F) {
-            Serial.println("ERROR:PROFILE:NAME");
+            protocol_println("ERROR:PROFILE:NAME");
             return false;
         }
     }
@@ -935,7 +1054,7 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
     }
 
     reset_movement_state();
-    Serial.printf(
+    protocol_printf(
         "PROFILE:%s:MODE=%s:V=%.3f:H=%.3f:RPM=%u:POINTS=%u\n",
         activeProfileName,
         activeMode == MODE_WEAPON_PATTERN ? "PATTERN" : "GENERAL",
@@ -949,7 +1068,7 @@ static bool apply_profile_payload(const uint8_t* payload, uint16_t length) {
 // Mitigation: apply pattern payload with validation
 static bool apply_pattern_payload(const uint8_t* payload, uint16_t length) {
     if (length < 3 || payload[0] != 1) {
-        Serial.println("ERROR:PATTERN:FORMAT");
+        protocol_println("ERROR:PATTERN:FORMAT");
         return false;
     }
 
@@ -960,7 +1079,7 @@ static bool apply_pattern_payload(const uint8_t* payload, uint16_t length) {
         offset != loadedPatternPoints ||
         offset + count > expectedPatternPoints ||
         offset + count > maxPatternPoints) {
-        Serial.println("ERROR:PATTERN:RANGE");
+        protocol_println("ERROR:PATTERN:RANGE");
         return false;
     }
 
@@ -972,7 +1091,7 @@ static bool apply_pattern_payload(const uint8_t* payload, uint16_t length) {
         const int16_t vertical = readInt16LittleEndian(payload + sourceOffset + 2);
         if (horizontal < minimumHorizontalQ8_8 || horizontal > maximumPatternQ8_8 ||
             vertical < 0 || vertical > maximumPatternQ8_8) {
-            Serial.println("ERROR:PATTERN:VALUE");
+            protocol_println("ERROR:PATTERN:VALUE");
             return false;
         }
     }
@@ -983,7 +1102,7 @@ static bool apply_pattern_payload(const uint8_t* payload, uint16_t length) {
     }
     loadedPatternPoints = offset + count;
     if (loadedPatternPoints == expectedPatternPoints) {
-        Serial.printf("PATTERN:READY:%u\n", loadedPatternPoints);
+        protocol_printf("PATTERN:READY:%u\n", loadedPatternPoints);
     }
     return true;
 }
@@ -998,7 +1117,7 @@ static void apply_sensitivity_payload(const uint8_t* payload, uint16_t length) {
             vertical >= minSensitivityFactor && vertical <= maxSensitivityFactor) {
             horizontalSensitivityFactor = horizontal;
             verticalSensitivityFactor = vertical;
-            Serial.printf("SENSITIVITY:H=%.3f:V=%.3f\n", horizontalSensitivityFactor, verticalSensitivityFactor);
+            protocol_printf("SENSITIVITY:H=%.3f:V=%.3f\n", horizontalSensitivityFactor, verticalSensitivityFactor);
             return;
         }
     }
@@ -1009,7 +1128,7 @@ static void apply_sensitivity_payload(const uint8_t* payload, uint16_t length) {
             value <= maxSensitivityFactor) {
             horizontalSensitivityFactor = value;
             verticalSensitivityFactor = horizontalSensitivityFactor;
-            Serial.printf(
+            protocol_printf(
                 "SENSITIVITY:H=%.3f:V=%.3f\n",
                 horizontalSensitivityFactor,
                 verticalSensitivityFactor);
@@ -1017,23 +1136,23 @@ static void apply_sensitivity_payload(const uint8_t* payload, uint16_t length) {
         }
     }
 
-    Serial.println("ERROR:SENSITIVITY:FORMAT");
+    protocol_println("ERROR:SENSITIVITY:FORMAT");
 }
 
 static void apply_rapid_fire_payload(const uint8_t* payload, uint16_t length) {
     if (length != 3 || payload[0] > 1) {
-        Serial.println("ERROR:RAPID_FIRE:FORMAT");
+        protocol_println("ERROR:RAPID_FIRE:FORMAT");
         return;
     }
 
     const bool enabled = payload[0] == 1;
     const uint16_t roundsPerMinute = readUint16LittleEndian(payload + 1);
     if (enabled && (roundsPerMinute < 60 || roundsPerMinute > 1200)) {
-        Serial.println("ERROR:RAPID_FIRE:RATE");
+        protocol_println("ERROR:RAPID_FIRE:RATE");
         return;
     }
     if (enabled && activeMode == MODE_WEAPON_PATTERN) {
-        Serial.println("ERROR:RAPID_FIRE:MODE");
+        protocol_println("ERROR:RAPID_FIRE:MODE");
         return;
     }
 
@@ -1042,18 +1161,18 @@ static void apply_rapid_fire_payload(const uint8_t* payload, uint16_t length) {
     rapidFireRoundsPerMinute = enabled ? roundsPerMinute : 0;
     set_rapid_button(false);
     reset_movement_state();
-    Serial.printf("RAPID_FIRE:%s:RPM=%u\n", enabled ? "ON" : "OFF", rapidFireRoundsPerMinute);
+    protocol_printf("RAPID_FIRE:%s:RPM=%u\n", enabled ? "ON" : "OFF", rapidFireRoundsPerMinute);
 }
 
 static void apply_general_settings_payload(const uint8_t* payload, uint16_t length) {
     if (length != 2 || payload[0] > 1 || payload[1] > 1) {
-        Serial.println("ERROR:GENERAL_SETTINGS:FORMAT");
+        protocol_println("ERROR:GENERAL_SETTINGS:FORMAT");
         return;
     }
 
     generalTimingJitterEnabled = payload[0] == 1;
     deltaNoiseEnabled = payload[1] == 1;
-    Serial.printf(
+    protocol_printf(
         "GENERAL_SETTINGS:TIMING_VARIANCE=%s:DELTA_NOISE=%s\n",
         generalTimingJitterEnabled ? "ON" : "OFF",
         deltaNoiseEnabled ? "ON" : "OFF");
@@ -1062,20 +1181,20 @@ static void apply_general_settings_payload(const uint8_t* payload, uint16_t leng
 static void process_command(uint8_t command, const uint8_t* payload, uint16_t length) {
     switch (command) {
         case CMD_PING:
-            Serial.println("PONG:RAINBOW-RECOIL:4");
+            protocol_println("PONG:RAINBOW-RECOIL:4");
             print_hardware_identity();
             break;
 
         case CMD_START:
             if (configurationTransactionActive) {
-                Serial.println("ERROR:START:CONFIGURATION_ACTIVE");
+                protocol_println("ERROR:START:CONFIGURATION_ACTIVE");
                 break;
             }
 #ifdef ZEROSENSE_RP2350_USB_C
             // RP2350 firing is gated locally from the raw downstream mouse.
             // Accepting host START here would reintroduce the synthesized-HID
             // feedback loop that local activation is designed to remove.
-            Serial.println("ERROR:START:LOCAL_TRIGGER_REQUIRED");
+            protocol_println("ERROR:START:LOCAL_TRIGGER_REQUIRED");
 #else
             start_output();
 #endif
@@ -1083,12 +1202,12 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_STOP:
             stop_output();
-            Serial.println("STOP");
+            protocol_println("STOP");
             break;
 
         case CMD_PROFILE:
             if (!configurationTransactionActive) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
                 break;
             }
             configurationTransactionTouchedAtMs = millis();
@@ -1097,7 +1216,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_SENSITIVITY:
             if (!configurationTransactionActive) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
                 break;
             }
             configurationTransactionTouchedAtMs = millis();
@@ -1106,7 +1225,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_PATTERN:
             if (!configurationTransactionActive) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
                 break;
             }
             configurationTransactionTouchedAtMs = millis();
@@ -1115,7 +1234,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_RAPID_FIRE:
             if (!configurationTransactionActive) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
                 break;
             }
             configurationTransactionTouchedAtMs = millis();
@@ -1124,7 +1243,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_GENERAL_SETTINGS:
             if (!configurationTransactionActive) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
                 break;
             }
             configurationTransactionTouchedAtMs = millis();
@@ -1133,7 +1252,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_KEEPALIVE:
             if (length != 0) {
-                Serial.println("ERROR:KEEPALIVE:FORMAT");
+                protocol_println("ERROR:KEEPALIVE:FORMAT");
             } else if (fireActive) {
                 lastHostKeepAliveAtMs = millis();
             }
@@ -1142,37 +1261,38 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
         case CMD_ARM_LEASE:
 #ifdef ZEROSENSE_RP2350_USB_C
             if (length != 1 || payload[0] > 1) {
-                Serial.println("ERROR:ARM_LEASE:FORMAT");
+                protocol_println("ERROR:ARM_LEASE:FORMAT");
             } else if (configurationTransactionActive && payload[0] != 0) {
-                Serial.println("ERROR:ARM_LEASE:CONFIGURATION_ACTIVE");
+                protocol_println("ERROR:ARM_LEASE:CONFIGURATION_ACTIVE");
             } else if (payload[0] == 0) {
                 const bool wasEnabled = rp2350ArmLeaseEnabled;
                 rp2350ArmLeaseEnabled = false;
                 stop_output();
                 if (wasEnabled) {
-                    Serial.println("ARM_LEASE:OFF");
+                    protocol_println("ARM_LEASE:OFF");
                 }
-            } else if (!hostMouseConnected.load(std::memory_order_acquire)) {
+            } else if (hostCoreStalled.load(std::memory_order_acquire) ||
+                       !hostMouseConnected.load(std::memory_order_acquire)) {
                 rp2350ArmLeaseEnabled = false;
                 stop_output();
-                Serial.println("ERROR:ARM_LEASE:MOUSE_DISCONNECTED");
+                protocol_println("ERROR:ARM_LEASE:MOUSE_DISCONNECTED");
             } else {
                 const bool wasEnabled = rp2350ArmLeaseEnabled;
                 rp2350ArmLeaseEnabled = true;
                 lastRp2350ArmLeaseAtMs = millis();
                 lastHostKeepAliveAtMs = lastRp2350ArmLeaseAtMs;
                 if (!wasEnabled) {
-                    Serial.println("ARM_LEASE:ON");
+                    protocol_println("ARM_LEASE:ON");
                 }
             }
 #else
-            Serial.println("ERROR:ARM_LEASE:UNSUPPORTED");
+            protocol_println("ERROR:ARM_LEASE:UNSUPPORTED");
 #endif
             break;
 
         case CMD_CONFIG_BEGIN: {
             if (length != 9 || payload[0] != configurationSchemaVersion) {
-                Serial.println("ERROR:CONFIG:BEGIN_FORMAT");
+                protocol_println("ERROR:CONFIG:BEGIN_FORMAT");
                 break;
             }
             if (configurationTransactionActive) {
@@ -1187,7 +1307,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             configurationExpectedHash = readUint32LittleEndian(payload + 5);
             configurationTransactionTouchedAtMs = millis();
             configurationTransactionActive = true;
-            Serial.printf(
+            protocol_printf(
                 "CONFIG:BEGIN:TX=%08lX:HASH=%08lX\n",
                 static_cast<unsigned long>(configurationTransactionId),
                 static_cast<unsigned long>(configurationExpectedHash));
@@ -1196,19 +1316,19 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_CONFIG_COMMIT: {
             if (length != 8) {
-                Serial.println("ERROR:CONFIG:COMMIT_FORMAT");
+                protocol_println("ERROR:CONFIG:COMMIT_FORMAT");
                 break;
             }
             const uint32_t transactionId = readUint32LittleEndian(payload);
             const uint32_t requestedHash = readUint32LittleEndian(payload + 4);
             if (!configurationTransactionActive || transactionId != configurationTransactionId) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_ID");
+                protocol_println("ERROR:CONFIG:TRANSACTION_ID");
                 break;
             }
             if (activeMode == MODE_WEAPON_PATTERN &&
                 loadedPatternPoints != expectedPatternPoints) {
                 rollback_configuration_transaction();
-                Serial.println("ERROR:CONFIG:PATTERN_INCOMPLETE");
+                protocol_println("ERROR:CONFIG:PATTERN_INCOMPLETE");
                 break;
             }
             const uint32_t actualHash = current_configuration_hash();
@@ -1216,7 +1336,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 actualHash != configurationExpectedHash) {
                 const uint32_t expectedHash = configurationExpectedHash;
                 rollback_configuration_transaction();
-                Serial.printf(
+                protocol_printf(
                     "ERROR:CONFIG:HASH:EXPECTED=%08lX:ACTUAL=%08lX\n",
                     static_cast<unsigned long>(expectedHash),
                     static_cast<unsigned long>(actualHash));
@@ -1225,7 +1345,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             configurationTransactionActive = false;
             configurationTransactionId = 0;
             configurationExpectedHash = 0;
-            Serial.printf(
+            protocol_printf(
                 "CONFIG:COMMIT:TX=%08lX:HASH=%08lX\n",
                 static_cast<unsigned long>(transactionId),
                 static_cast<unsigned long>(actualHash));
@@ -1234,16 +1354,16 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_CONFIG_ABORT: {
             if (length != 4) {
-                Serial.println("ERROR:CONFIG:ABORT_FORMAT");
+                protocol_println("ERROR:CONFIG:ABORT_FORMAT");
                 break;
             }
             const uint32_t transactionId = readUint32LittleEndian(payload);
             if (!configurationTransactionActive || transactionId != configurationTransactionId) {
-                Serial.println("ERROR:CONFIG:TRANSACTION_ID");
+                protocol_println("ERROR:CONFIG:TRANSACTION_ID");
                 break;
             }
             rollback_configuration_transaction();
-            Serial.printf(
+            protocol_printf(
                 "CONFIG:ABORT:TX=%08lX\n",
                 static_cast<unsigned long>(transactionId));
             break;
@@ -1251,21 +1371,36 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
 
         case CMD_STATUS:
             if (length != 0) {
-                Serial.println("ERROR:STATUS:FORMAT");
+                protocol_println("ERROR:STATUS:FORMAT");
             } else {
-                Serial.printf(
+                protocol_printf(
                     "STATUS:HASH=%08lX:TX=%s:FIRE=%s\n",
                     static_cast<unsigned long>(current_configuration_hash()),
                     configurationTransactionActive ? "ACTIVE" : "IDLE",
                     fireActive ? "ON" : "OFF");
+                // The startup identity lines may be emitted before the desktop
+                // read loop begins. Repeat both board and downstream-mouse
+                // state on every status request so Arm Output can recover
+                // without requiring a physical unplug/replug event.
+                print_hardware_identity();
                 uint32_t hostReports = 0;
                 uint32_t hostErrors = 0;
                 uint32_t hostSaturations = 0;
+                uint32_t hostRecoveries = 0;
+                uint32_t hostQueueFailures = 0;
+                uint32_t hostUnmounts = 0;
+                uint32_t hostTaskAgeMs = 0;
 #ifdef ZEROSENSE_RP2350_USB_C
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
                 hostSaturations =
                     hostAccumulatorSaturations.load(std::memory_order_relaxed);
+                hostRecoveries = hostReceiveRecoveries.load(std::memory_order_relaxed);
+                hostQueueFailures = hostReceiveQueueFailures.load(std::memory_order_relaxed);
+                hostUnmounts = hostMouseUnmounts.load(std::memory_order_relaxed);
+                // Sample the heartbeat before the clock to avoid a future timestamp.
+                const uint32_t hostTaskAt = hostTaskLastAtMs.load(std::memory_order_relaxed);
+                hostTaskAgeMs = millis() - hostTaskAt;
 #endif
                 const int64_t currentQueuedX =
                     static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
@@ -1275,12 +1410,14 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     std::min<int64_t>(
                         std::max(std::abs(currentQueuedX), std::abs(currentQueuedY)),
                         UINT32_MAX));
-                Serial.printf(
+                protocol_printf(
                     "METRICS:HID_SENT=%lu:HID_BUSY=%lu:MAX_QUEUE=%lu:"
                     "MAX_ACTIVE_GAP_US=%lu:HOST_REPORTS=%lu:"
                     "HOST_DECODE_ERRORS=%lu:HOST_SATURATIONS=%lu:USB_STOPS=%lu:"
                     "CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:"
-                    "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu\n",
+                    "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu:"
+                    "HOST_RECOVERIES=%lu:HOST_QUEUE_FAILURES=%lu:HOST_UNMOUNTS=%lu:"
+                    "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1293,19 +1430,24 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(correctionScheduler.maximumLatenessUs),
                     static_cast<unsigned long>(currentQueuedDelta),
                     static_cast<unsigned long>(currentHidReportIntervalUs),
-                    static_cast<unsigned long>(generalIntervalClampCount));
+                    static_cast<unsigned long>(generalIntervalClampCount),
+                    static_cast<unsigned long>(hostRecoveries),
+                    static_cast<unsigned long>(hostQueueFailures),
+                    static_cast<unsigned long>(hostUnmounts),
+                    static_cast<unsigned long>(hostTaskAgeMs),
+                    static_cast<unsigned long>(protocolOutput.droppedMessages));
             }
             break;
 
         case CMD_RESET:
-            Serial.println("BOOTSEL");
-            Serial.flush();
+            protocol_println("BOOTSEL");
+            service_protocol_output();
             delay(20);
             reset_usb_boot(0, 0);
             break;
 
         default:
-            Serial.printf("ERROR:COMMAND:%02X\n", command);
+            protocol_printf("ERROR:COMMAND:%02X\n", command);
             break;
     }
 }
@@ -1316,7 +1458,7 @@ static void service_configuration_transaction() {
             configurationTransactionTimeoutMs) {
         const uint32_t transactionId = configurationTransactionId;
         rollback_configuration_transaction();
-        Serial.printf(
+        protocol_printf(
             "CONFIG:ROLLBACK:TIMEOUT:TX=%08lX\n",
             static_cast<unsigned long>(transactionId));
     }
@@ -1326,10 +1468,12 @@ static void service_serial() {
     if (parserState != ParserState::MagicFirst && parserFrameStartedAtMs != 0 &&
         static_cast<uint32_t>(millis() - parserFrameStartedAtMs) > parserTimeoutMs) {
         reset_parser();
-        Serial.println("ERROR:FRAME:TIMEOUT");
+        protocol_println("ERROR:FRAME:TIMEOUT");
     }
 
-    while (Serial.available() > 0) {
+    // Host traffic must yield to the HID/watchdog services every iteration.
+    uint16_t budget = 128;
+    while (budget-- > 0 && Serial.available() > 0) {
         const int value = Serial.read();
         if (value < 0) { return; }
         const uint8_t byte = static_cast<uint8_t>(value);
@@ -1358,7 +1502,7 @@ static void service_serial() {
             case ParserState::Version:
                 if (byte != frameVersion) {
                     reset_parser_preserving_magic(byte);
-                    Serial.println("ERROR:FRAME:VERSION");
+                    protocol_println("ERROR:FRAME:VERSION");
                     break;
                 }
                 parser_crc_byte(byte);
@@ -1389,7 +1533,7 @@ static void service_serial() {
                 parser_crc_byte(byte);
                 if (parserLength > maxCommandPayload) {
                     reset_parser_preserving_magic(byte);
-                    Serial.println("ERROR:FRAME:TOO_LARGE");
+                    protocol_println("ERROR:FRAME:TOO_LARGE");
                 } else if (parserLength == 0) {
                     parserState = ParserState::CrcLow;
                 } else {
@@ -1420,7 +1564,7 @@ static void service_serial() {
                     process_command(command, parserPayload, length);
                 } else {
                     reset_parser_preserving_magic(byte);
-                    Serial.println("ERROR:FRAME:CRC");
+                    protocol_println("ERROR:FRAME:CRC");
                 }
                 break;
             }
@@ -1534,6 +1678,30 @@ static uint8_t current_output_buttons() {
         (rapidButtonDown ? MOUSE_BUTTON_LEFT : 0));
 }
 
+static void service_host_core_watchdog() {
+    const uint32_t last = hostTaskLastAtMs.load(std::memory_order_acquire);
+    if (!ZeroSenseHostHealth::stalled(last, millis(), 500) ||
+        hostCoreStalled.exchange(true, std::memory_order_acq_rel)) {
+        return;
+    }
+
+    // Core 1 is no longer servicing the mouse. Release any cached physical
+    // inputs so the PC does not retain a stuck click, and disarm output.
+    // Restarting core 1 here could interrupt PIO IRQ/DMA in an unknown state.
+    hostMouseButtons.store(0, std::memory_order_release);
+    hostMouseX.store(0, std::memory_order_release);
+    hostMouseY.store(0, std::memory_order_release);
+    hostMouseWheel.store(0, std::memory_order_release);
+    hostMousePan.store(0, std::memory_order_release);
+    pendingPhysicalMouseX = 0;
+    pendingPhysicalMouseY = 0;
+    pendingPhysicalWheel = 0;
+    pendingPhysicalPan = 0;
+    hidStateDirty = true;
+    hostMouseFaultPending.store(true, std::memory_order_release);
+    mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
+}
+
 static void service_mouse_proxy_status() {
     if (hostMouseFaultPending.exchange(false, std::memory_order_acq_rel)) {
         rp2350ArmLeaseEnabled = false;
@@ -1542,19 +1710,19 @@ static void service_mouse_proxy_status() {
 
     switch (mouseProxyEvent.exchange(MouseProxyEvent::None, std::memory_order_acq_rel)) {
         case MouseProxyEvent::Connected:
-            Serial.printf(
+            protocol_printf(
                 "MOUSE:CONNECTED:VID=%04X:PID=%04X\n",
                 hostMouseVid.load(std::memory_order_acquire),
                 hostMousePid.load(std::memory_order_acquire));
             break;
         case MouseProxyEvent::Disconnected:
-            Serial.println("MOUSE:DISCONNECTED");
+            protocol_println("MOUSE:DISCONNECTED");
             break;
         case MouseProxyEvent::Unsupported:
-            Serial.println("MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR");
+            protocol_println("MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR");
             break;
         case MouseProxyEvent::HostError:
-            Serial.println("MOUSE:HOST_ERROR");
+            protocol_println("MOUSE:HOST_ERROR");
             break;
         case MouseProxyEvent::None:
             break;
@@ -1572,7 +1740,8 @@ static void service_rp2350_local_activation() {
     }
 
     const uint32_t now = millis();
-    const bool mouseReady = hostMouseConnected.load(std::memory_order_acquire);
+    const bool mouseReady = hostMouseConnected.load(std::memory_order_acquire) &&
+        !hostCoreStalled.load(std::memory_order_acquire);
     const bool leaseFresh = rp2350ArmLeaseEnabled &&
         static_cast<uint32_t>(now - lastRp2350ArmLeaseAtMs) <=
             rp2350ArmLeaseTimeoutMs;
@@ -1580,11 +1749,11 @@ static void service_rp2350_local_activation() {
     if (!mouseReady || !leaseFresh) {
         if (rp2350ArmLeaseEnabled && !leaseFresh) {
             rp2350ArmLeaseEnabled = false;
-            Serial.println("ARM_LEASE:EXPIRED");
+            protocol_println("ARM_LEASE:EXPIRED");
         }
         if (fireActive) {
             stop_output();
-            Serial.println(mouseReady ? "STOP:ARM_LEASE" : "STOP:MOUSE_DISCONNECTED");
+            protocol_println(mouseReady ? "STOP:ARM_LEASE" : "STOP:MOUSE_DISCONNECTED");
         }
         return;
     }
@@ -1594,7 +1763,7 @@ static void service_rp2350_local_activation() {
         start_output();
     } else if (!rawAimAndFire && fireActive) {
         stop_output();
-        Serial.println("STOP:PHYSICAL_RELEASE");
+        protocol_println("STOP:PHYSICAL_RELEASE");
     }
 }
 #else
@@ -1616,18 +1785,25 @@ static void queue_mouse_movement(
     const float timeScale = ZeroSenseMotion::intervalScale(intervalUs);
 
     if (apply_smoothing) {
-        const float targetX = std::clamp(scaledX, -sim.maxVelocity, sim.maxVelocity);
-        const float targetY = std::clamp(scaledY, -sim.maxVelocity, sim.maxVelocity);
-        const float maximumStep = sim.acceleration * timeScale;
+        const float maxX = ZeroSenseMotion::calibratedLimit(
+            sim.maxVelocity, horizontalSensitivityFactor);
+        const float maxY = ZeroSenseMotion::calibratedLimit(
+            sim.maxVelocity, verticalSensitivityFactor);
+        const float targetX = std::clamp(scaledX, -maxX, maxX);
+        const float targetY = std::clamp(scaledY, -maxY, maxY);
+        const float maximumStepX = ZeroSenseMotion::calibratedLimit(
+            sim.acceleration, horizontalSensitivityFactor) * timeScale;
+        const float maximumStepY = ZeroSenseMotion::calibratedLimit(
+            sim.acceleration, verticalSensitivityFactor) * timeScale;
         const float friction = ZeroSenseMotion::frictionForInterval(
             sim.friction,
             timeScale);
         sim.velocityX = targetX == 0.0f
             ? sim.velocityX * friction
-            : ZeroSenseMotion::approach(sim.velocityX, targetX, maximumStep);
+            : ZeroSenseMotion::approach(sim.velocityX, targetX, maximumStepX);
         sim.velocityY = targetY == 0.0f
             ? sim.velocityY * friction
-            : ZeroSenseMotion::approach(sim.velocityY, targetY, maximumStep);
+            : ZeroSenseMotion::approach(sim.velocityY, targetY, maximumStepY);
     } else {
         sim.velocityX = scaledX;
         sim.velocityY = scaledY;
@@ -1904,7 +2080,7 @@ static void service_rapid_fire() {
 static void service_host_watchdog() {
     if (fireActive && millis() - lastHostKeepAliveAtMs > hostWatchdogTimeoutMs) {
         stop_output();
-        Serial.println("STOP:WATCHDOG");
+        protocol_println("STOP:WATCHDOG");
     }
 }
 
@@ -1961,9 +2137,9 @@ void setup() {
     }
 
 #ifdef ZEROSENSE_RP2350_USB_C
-    Serial.println("READY:RP2350-USB-C:MOUSE-PROXY");
+    protocol_println("READY:RP2350-USB-C:MOUSE-PROXY");
 #else
-    Serial.println("READY:RP2040-ZERO:CDC+HID");
+    protocol_println("READY:RP2040-ZERO:CDC+HID");
 #endif
     print_hardware_identity();
 }
@@ -1976,6 +2152,7 @@ void loop() {
     service_configuration_transaction();
     service_upstream_usb_fail_safe();
 #ifdef ZEROSENSE_RP2350_USB_C
+    service_host_core_watchdog();
     service_mouse_proxy_status();
     service_rp2350_local_activation();
 #endif
@@ -1984,6 +2161,7 @@ void loop() {
     service_movement();
     service_scheduled_correction();
     service_hid();
+    service_protocol_output();
     // Send a zero-delta heartbeat while active but stationary. Never synthesize
     // movement or alter a pressed rapid-fire button state in this path.
     if (pendingMouseX == 0 && pendingMouseY == 0 && !hidStateDirty &&
@@ -2025,7 +2203,11 @@ void setup1() {
 
 void loop1() {
     if (hostStackStarted) {
-        usbHost.task();
+        // Never wait forever here: a lost interrupt request otherwise leaves
+        // CDC alive on core 0 while core 1 can no longer recover mouse input.
+        usbHost.task(1);
+        service_host_mouse_receive_recovery();
+        hostTaskLastAtMs.store(millis(), std::memory_order_relaxed);
     } else {
         delay(1);
     }

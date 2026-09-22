@@ -54,6 +54,10 @@ internal static class RecoilProfileResolver
                 "Standard estimated pattern with local per-weapon experimental calibration";
         }
 
+        effective = HorizontalRecoilModel.Apply(
+            effective,
+            settings.GetWeaponHorizontalTuning(effective.Name));
+
         return effective;
     }
 }

@@ -54,13 +54,19 @@ internal static class ConfigurationValidator
             profile.VerticalCompensation is < FirmwareContract.MinimumVerticalCompensation or
                 > FirmwareContract.MaximumVerticalCompensation)
         {
-            errors.Add("Vertical compensation must be finite and between 0 and 20.");
+            errors.Add(
+                $"Vertical compensation must be finite and between " +
+                $"{FirmwareContract.MinimumVerticalCompensation:0} and " +
+                $"{FirmwareContract.MaximumVerticalCompensation:0}.");
         }
         if (!double.IsFinite(profile.HorizontalCompensation) ||
             profile.HorizontalCompensation is < FirmwareContract.MinimumHorizontalCompensation or
                 > FirmwareContract.MaximumHorizontalCompensation)
         {
-            errors.Add("Horizontal compensation must be finite and between -20 and 20.");
+            errors.Add(
+                $"Horizontal compensation must be finite and between " +
+                $"{FirmwareContract.MinimumHorizontalCompensation:0} and " +
+                $"{FirmwareContract.MaximumHorizontalCompensation:0}.");
         }
         if (profile.BurstProgression is < 0 or > 100)
         {
@@ -97,7 +103,7 @@ internal static class ConfigurationValidator
             errors.Add("The recoil pattern contains an invalid or unrepresentable point.");
         }
 
-        var scale = settings.CalculateSensitivityScale();
+        var scale = settings.CalculateSensitivityScale(profile);
         if (!float.IsFinite(scale.Horizontal) || !float.IsFinite(scale.Vertical) ||
             scale.Horizontal is < FirmwareContract.MinimumSensitivityFactor or
                 > FirmwareContract.MaximumSensitivityFactor ||

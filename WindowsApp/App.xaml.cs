@@ -34,6 +34,7 @@ public partial class App : Application
         };
         ConfigureWindowChrome(_window.AppWindow);
         SetWindowIcon(_window.AppWindow);
+        _window.AppWindow.Closing += AppWindow_Closing;
         _window.AppWindow.Resize(new SizeInt32(1180, 800));
         _window.Activate();
 
@@ -43,6 +44,13 @@ public partial class App : Application
         {
             SetOverlayMode(true);
         }
+    }
+
+    private void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        // Number boxes use a short debounce while the user is editing. Flush any
+        // pending master, per-weapon, or horizontal change before process exit.
+        _mainPage?.Dispose();
     }
 
     public void ToggleOverlay() => SetOverlayMode(!_isOverlayMode);

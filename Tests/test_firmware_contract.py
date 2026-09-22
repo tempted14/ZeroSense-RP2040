@@ -20,6 +20,8 @@ DELTA_NOISE = (
 CS_PROTOCOL = (ROOT / "WindowsApp" / "SerialProtocol.cs").read_text()
 CS_CONNECTION = (ROOT / "WindowsApp" / "SerialConnection.cs").read_text()
 PLATFORMIO = (ROOT / "RP2040_Firmware" / "platformio.ini").read_text()
+PIO_HOST = (ROOT / "RP2040_Firmware" / "lib" / "PicoPIOUSB" / "src" / "pio_usb.c").read_text()
+PIO_PROVENANCE = (ROOT / "RP2040_Firmware" / "lib" / "README.md").read_text()
 RP2350_BOARD = json.loads((
     ROOT / "RP2040_Firmware" / "boards" / "waveshare_rp2350_usb_c.json"
 ).read_text())
@@ -77,6 +79,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:", FIRMWARE)
         self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
         self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
+        self.assertIn("HOST_RECOVERIES=%lu", FIRMWARE)
 
     def test_upstream_disconnect_immediately_clears_generated_output(self) -> None:
         fail_safe = re.search(
@@ -130,7 +133,10 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("sim.velocityY = scaledY;", FIRMWARE)
         self.assertIn("fractionalMouseX += sim.velocityX * timeScale;", FIRMWARE)
         self.assertIn("fractionalMouseY += sim.velocityY * timeScale;", FIRMWARE)
-        self.assertIn("sim.acceleration * timeScale", FIRMWARE)
+        self.assertIn("sim.maxVelocity, horizontalSensitivityFactor", FIRMWARE)
+        self.assertIn("sim.maxVelocity, verticalSensitivityFactor", FIRMWARE)
+        self.assertIn("sim.acceleration, horizontalSensitivityFactor) * timeScale", FIRMWARE)
+        self.assertIn("sim.acceleration, verticalSensitivityFactor) * timeScale", FIRMWARE)
         self.assertIn("frictionForInterval", FIRMWARE)
         self.assertNotIn("raw_dx / 256.0f", FIRMWARE)
         self.assertNotIn("raw_dy / 256.0f", FIRMWARE)
@@ -258,7 +264,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("[env:waveshare_rp2350_usb_c]", PLATFORMIO)
         self.assertIn("-DZEROSENSE_RP2350_USB_C", PLATFORMIO)
         self.assertIn("board_build.f_cpu = 120000000L", PLATFORMIO)
-        self.assertIn("Pico-PIO-USB.git#5a37a66", PLATFORMIO)
+        self.assertIn("lib_ignore = Pico PIO USB", PLATFORMIO)
+        self.assertIn("5a37a66dc5d3fbe0ef3cdbeda923a757440f984f", PIO_PROVENANCE)
         self.assertEqual("rp2350", RP2350_BOARD["build"]["mcu"])
         self.assertEqual(2_097_152, RP2350_BOARD["upload"]["maximum_size"])
 
@@ -267,6 +274,13 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("configuration.pin_dp = hostMouseDpPin;", FIRMWARE)
         self.assertIn("configuration.pinout = PIO_USB_PINOUT_DPDM;", FIRMWARE)
         self.assertIn("F_CPU == 120000000L || F_CPU == 240000000L", FIRMWARE)
+
+    def test_pio_host_eop_wait_has_no_program_counter_spin(self) -> None:
+        transfer = PIO_HOST.split("void __not_in_flash_func(pio_usb_bus_usb_transfer)", 1)[1]
+        transfer = transfer.split("void __no_inline_not_in_flash_func(pio_usb_bus_send_token)", 1)[0]
+        self.assertNotIn("*pc < PIO_USB_TX_ENCODED_DATA_COMP", transfer)
+        self.assertNotIn("*pc <= PIO_USB_TX_ENCODED_DATA_COMP", transfer)
+        self.assertIn("busy_wait_at_least_cycles(4u * bit_cycles)", transfer)
 
     def test_physical_input_is_additive_and_not_cleared_by_stop(self) -> None:
         self.assertIn(
@@ -305,7 +319,36 @@ class FirmwareContractTests(unittest.TestCase):
         )
         self.assertIsNotNone(callback)
         self.assertIn("decode_host_mouse_report", callback.group("body"))
-        self.assertIn("tuh_hid_receive_report", callback.group("body"))
+        self.assertIn("queue_host_mouse_report", callback.group("body"))
+        self.assertIn("usbHost.task(1)", FIRMWARE)
+        self.assertNotIn("usbHost.task();", FIRMWARE)
+        self.assertIn("service_host_mouse_receive_recovery();", FIRMWARE)
+        self.assertIn("tuh_hid_receive_ready", FIRMWARE)
+        recovery = re.search(
+            r"static void service_host_mouse_receive_recovery\(\)\s*"
+            r"\{(?P<body>.*?)\n\}",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(recovery)
+        self.assertNotIn("!tuh_mounted", recovery.group("body"))
+        self.assertNotIn("clear_host_mouse_interface", recovery.group("body"))
+        self.assertNotIn("memset", recovery.group("body"))
+        self.assertIn("retryDue", recovery.group("body"))
+        self.assertIn("mouseInterface.connected = false", recovery.group("body"))
+        self.assertIn("hostMouseFaultPending.store(true", recovery.group("body"))
+
+    def test_serial_backpressure_cannot_block_hid_loop(self) -> None:
+        self.assertNotRegex(FIRMWARE, r"Serial\.(?:print|printf|println|write|flush)\(")
+        self.assertIn("protocolOutput.drain(tud_cdc_write_available(), 128,", FIRMWARE)
+        self.assertIn("while (budget-- > 0 && Serial.available() > 0)", FIRMWARE)
+        self.assertIn("service_hid();\n    service_protocol_output();", FIRMWARE)
+
+    def test_host_diagnostics_distinguish_loop_and_report_stalls(self) -> None:
+        for metric in ("HOST_QUEUE_FAILURES", "HOST_UNMOUNTS", "HOST_TASK_AGE_MS",
+                       "CDC_DROPPED"):
+            self.assertIn(metric + "=%lu", FIRMWARE)
+        self.assertIn("hostTaskLastAtMs.store(millis()", FIRMWARE)
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
         self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
@@ -313,6 +356,13 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("MOUSE:DISCONNECTED", FIRMWARE)
         self.assertIn("MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR", FIRMWARE)
         self.assertIn("MOUSE:HOST_ERROR", FIRMWARE)
+        status_case = re.search(
+            r"case CMD_STATUS:(?P<body>.*?)\n\s*break;",
+            FIRMWARE,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(status_case)
+        self.assertIn("print_hardware_identity();", status_case.group("body"))
 
     def test_build_flash_and_ci_routes_keep_targets_distinct(self) -> None:
         self.assertIn('if /i "%TARGET%"=="rp2040"', FLASH_HELPER)
