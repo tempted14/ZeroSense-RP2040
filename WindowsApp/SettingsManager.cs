@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 15;
+    public const int CurrentCalibrationVersion = 16;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -269,8 +269,17 @@ public sealed class Settings
     public Dictionary<string, double> WeaponOutputStrengths { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
+    [JsonPropertyName("weaponHorizontalTunings")]
+    public Dictionary<string, HorizontalRecoilTuning> WeaponHorizontalTunings { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     [JsonPropertyName("masterRecoilGain")]
     public double MasterRecoilGain { get; set; } = RecoilStrengthModel.MasterDefault;
+
+    // Applied by the firmware after the per-shot Q8.8 pattern has been decoded.
+    // This remains separate from master gain, whose pattern values cap at 127.
+    [JsonPropertyName("twoPointFiveAutoVerticalBoost")]
+    public double TwoPointFiveAutoVerticalBoost { get; set; } = 1.0;
 
     // Kept for backward-compatible deserialization of the unfinished v4 setting.
     [JsonPropertyName("autoOperatorTrackingEnabled")]
@@ -498,7 +507,20 @@ public sealed class Settings
                 RecoilStrengthModel.Normalize(group.Last().Value)))
             .Where(pair => Math.Abs(pair.Value - RecoilStrengthModel.Default) > 0.0001)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        WeaponHorizontalTunings ??= new Dictionary<string, HorizontalRecoilTuning>(
+            StringComparer.OrdinalIgnoreCase);
+        WeaponHorizontalTunings = WeaponHorizontalTunings
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && pair.Value is not null)
+            .GroupBy(pair => pair.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new KeyValuePair<string, HorizontalRecoilTuning>(
+                group.Key,
+                HorizontalRecoilModel.Normalize(group.Last().Value)))
+            .Where(pair => !HorizontalRecoilModel.IsDefault(pair.Value))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         MasterRecoilGain = RecoilStrengthModel.NormalizeMaster(MasterRecoilGain);
+        TwoPointFiveAutoVerticalBoost = double.IsFinite(TwoPointFiveAutoVerticalBoost)
+            ? Math.Clamp(TwoPointFiveAutoVerticalBoost, 1.0, 4.0)
+            : 1.0;
 
         OperatorDetectionConfidence = double.IsFinite(OperatorDetectionConfidence)
             ? Math.Clamp(OperatorDetectionConfidence, 0.55, 1.0)
@@ -563,7 +585,42 @@ public sealed class Settings
     public double GetEffectiveOutputGain(string weaponName) =>
         RecoilStrengthModel.Combine(MasterRecoilGain, GetWeaponOutputStrength(weaponName));
 
-    public SensitivityScale CalculateSensitivityScale()
+    public HorizontalRecoilTuning GetWeaponHorizontalTuning(string weaponName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        return WeaponHorizontalTunings.TryGetValue(weaponName, out var tuning)
+            ? HorizontalRecoilModel.Normalize(new HorizontalRecoilTuning
+            {
+                Enabled = tuning.Enabled,
+                Mode = tuning.Mode,
+                Strength = tuning.Strength
+            })
+            : new HorizontalRecoilTuning();
+    }
+
+    public void SetWeaponHorizontalTuning(
+        string weaponName,
+        HorizontalRecoilTuning requestedTuning)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        ArgumentNullException.ThrowIfNull(requestedTuning);
+        var tuning = HorizontalRecoilModel.Normalize(new HorizontalRecoilTuning
+        {
+            Enabled = requestedTuning.Enabled,
+            Mode = requestedTuning.Mode,
+            Strength = requestedTuning.Strength
+        });
+        if (HorizontalRecoilModel.IsDefault(tuning))
+        {
+            WeaponHorizontalTunings.Remove(weaponName);
+        }
+        else
+        {
+            WeaponHorizontalTunings[weaponName] = tuning;
+        }
+    }
+
+    public SensitivityScale CalculateSensitivityScale(WeaponProfile? profile = null)
     {
         const float referenceHipGain = 55.0f * 0.001f;
 
@@ -574,10 +631,14 @@ public sealed class Settings
         var ads = Math.Max(1.0f, GetActiveAdsSensitivity());
         var referenceAds = GetReferenceAdsSensitivity(ActiveMagnification);
         var adsScale = referenceAds / ads;
+        var verticalBoost = profile?.SupportsContinuousCompensation == true &&
+            ActiveMagnification.Equals("2.5x", StringComparison.OrdinalIgnoreCase)
+            ? TwoPointFiveAutoVerticalBoost
+            : 1.0;
 
         return new SensitivityScale(
             referenceHipGain / horizontalGain * adsScale,
-            referenceHipGain / verticalGain * adsScale);
+            (float)(referenceHipGain / verticalGain * adsScale * verticalBoost));
     }
 
     [JsonIgnore]

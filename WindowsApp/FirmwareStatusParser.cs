@@ -31,7 +31,11 @@ public readonly record struct FirmwareStatusUpdate(
     uint CurrentQueuedDelta = 0,
     uint CurrentReportIntervalUs = 0,
     uint GeneralIntervalClamps = 0,
-    uint HostReceiveRecoveries = 0);
+    uint HostReceiveRecoveries = 0,
+    uint HostReceiveQueueFailures = 0,
+    uint HostMouseUnmounts = 0,
+    uint HostTaskAgeMs = 0,
+    uint CdcDroppedMessages = 0);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -112,7 +116,11 @@ public static class FirmwareStatusParser
         var currentReportIntervalUs = 0u;
         var generalIntervalClamps = 0u;
         var hostReceiveRecoveries = 0u;
-        if (fields.Length is not (8 or 9 or 14 or 15) || fields[0] != "METRICS" ||
+        var hostReceiveQueueFailures = 0u;
+        var hostMouseUnmounts = 0u;
+        var hostTaskAgeMs = 0u;
+        var cdcDroppedMessages = 0u;
+        if (fields.Length is not (8 or 9 or 14 or 15 or 19) || fields[0] != "METRICS" ||
             !TryParseMetric(fields[1], "HID_SENT", out var hidReportsSent) ||
             !TryParseMetric(fields[2], "HID_BUSY", out var hidBusyDeferrals) ||
             !TryParseMetric(fields[3], "MAX_QUEUE", out var maximumQueuedDelta) ||
@@ -131,8 +139,13 @@ public static class FirmwareStatusParser
               !TryParseMetric(fields[11], "QUEUE", out currentQueuedDelta) ||
               !TryParseMetric(fields[12], "REPORT_INTERVAL_US", out currentReportIntervalUs) ||
               !TryParseMetric(fields[13], "GENERAL_DT_CLAMPS", out generalIntervalClamps))) ||
-            (fields.Length == 15 &&
-             !TryParseMetric(fields[14], "HOST_RECOVERIES", out hostReceiveRecoveries)))
+            (fields.Length >= 15 &&
+             !TryParseMetric(fields[14], "HOST_RECOVERIES", out hostReceiveRecoveries)) ||
+            (fields.Length == 19 &&
+             (!TryParseMetric(fields[15], "HOST_QUEUE_FAILURES", out hostReceiveQueueFailures) ||
+              !TryParseMetric(fields[16], "HOST_UNMOUNTS", out hostMouseUnmounts) ||
+              !TryParseMetric(fields[17], "HOST_TASK_AGE_MS", out hostTaskAgeMs) ||
+              !TryParseMetric(fields[18], "CDC_DROPPED", out cdcDroppedMessages))))
         {
             return false;
         }
@@ -152,7 +165,11 @@ public static class FirmwareStatusParser
             CurrentQueuedDelta: currentQueuedDelta,
             CurrentReportIntervalUs: currentReportIntervalUs,
             GeneralIntervalClamps: generalIntervalClamps,
-            HostReceiveRecoveries: hostReceiveRecoveries);
+            HostReceiveRecoveries: hostReceiveRecoveries,
+            HostReceiveQueueFailures: hostReceiveQueueFailures,
+            HostMouseUnmounts: hostMouseUnmounts,
+            HostTaskAgeMs: hostTaskAgeMs,
+            CdcDroppedMessages: cdcDroppedMessages);
         return true;
     }
 

@@ -102,6 +102,15 @@ Research mode is also labeled Estimated. The supplied table ends at Y11S1.3 and 
 
 Use **Per-weapon output strength** for the quickest adjustment: leave it at `1.00×` to preserve the profile, increase it when the group still climbs, or decrease it when correction pulls downward. It is saved independently for each weapon and also works for semi-automatic per-shot recoil. Use Experimental stage gains only after the overall strength is close.
 
+Use **Horizontal recoil pattern** to tune lateral movement independently for
+the selected weapon. **Profile pattern** keeps the resolved source trace;
+**Mirror profile**, **Gun pulls left**, **Gun pulls right**, and **Alternating
+sway** are deterministic overrides. The left/right choices describe the gun's
+recoil, so ZeroSense emits the opposite correction. Turn the switch off for
+vertical-only output. Strength, mode, and enabled state are saved per weapon;
+the original source profile is never edited. Catalog directions are estimates
+unless the selected loadout has an exact measured X/Y profile.
+
 The recoil settings also include **General timing variance (±8%)**. It is off by default for repeatable compensation. Turning it on varies only the General-mode update cadence; Pattern and rapid-fire RPM timing stay exact. The app saves the choice and requires an exact firmware acknowledgement when synchronizing it.
 
 **Delta noise (±2–3 counts)** is also off by default. When enabled, firmware adds small paired offsets only to generated recoil reports and repays the offset before adding a new one. This avoids cumulative cursor drift and leaves the RP2350's physical mouse deltas unchanged. HID counts are device input units and are not guaranteed to equal Windows screen pixels.
@@ -123,10 +132,31 @@ manual detection still applies immediately.
 
 The Calibration page's **Reset calibration** action resets the reference values
 and active weapon strength together. **Undo reset** restores the previous values.
+In the weapon controls, **2.5× auto vertical boost** adds 1–4× extra downward
+output only for automatic weapons when the active optic is 2.5×. It is applied
+after the profile's 127-point limit, so it can still strengthen an already
+maxed master gain. The default is 1×; start with 1.5× or 2× and calibrate in
+the shooting range. Other optics and semi-automatic weapons are unchanged.
+This control needs both the updated app and UF2; the old executable will not
+show it, and the old UF2's General-mode smoothing can suppress it.
 
 The 115 weapon entries are a complete selection catalog; 61 automatic entries include current RPM/magazine timing and deterministic video-derived pattern estimates. Supported semi-automatic weapons default to rapid fire with per-shot recoil, while automatic weapons and manually cycled weapons are excluded. Every automatic profile applies Vertical Grip. Automatic profiles use Flash Hider instead of Compensator, except Ela's SCORPION EVO 3 A1, which uses Vertical Grip plus Compensator. The F2 entry uses vertical grip plus flash hider. Operator selection also applies side-specific Y11S3 restrictions: Aruni's Mk 14 EBR and Tubarão's AR-15.50 do not inherit the attacker version's muzzle brake. These curves are starting estimates, not raw Ubisoft data, so validate one weapon at a time in the shooting range.
 
 ## Fast diagnostics
+
+If the RP2350 stays connected but the mouse freezes even with ZeroSense closed,
+leave both USB connections in place. Close ZeroSense if it was open, then run
+`.\tools\read_usb_status.ps1 -Port COM4` from the repository root, replacing
+`COM4` with the port shown below. Move and click the mouse during its three
+STATUS samples. The command does not arm or configure output. Save the output,
+and note whether unplugging only the mouse restores movement or the board needs
+a reset. `docs/AUDIT_2026-09-22.md` explains the counters. The extended fields
+require the diagnostic firmware build and cannot diagnose freezes retroactively.
+The current RP2350 host-fix and optic-boost build identifies itself as
+`BUILD:HOST-FIX-OPTIC-20260922`.
+If this build still freezes, capture STATUS before unplugging anything: the
+status should report `MOUSE:HOST_ERROR`, and the host task age will distinguish
+another stalled host loop from a different failure.
 
 ```powershell
 Get-Volume -FileSystemLabel RPI-RP2 -ErrorAction SilentlyContinue

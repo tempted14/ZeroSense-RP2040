@@ -10,6 +10,7 @@
   <ItemGroup>
     <Compile Remove="OcrProbe\**\*.cs" />
     <Compile Include="..\WindowsApp\HotkeyChord.cs" Link="Source\HotkeyChord.cs" />
+    <Compile Include="..\WindowsApp\HorizontalRecoilModel.cs" Link="Source\HorizontalRecoilModel.cs" />
     <Compile Include="..\WindowsApp\ExperimentalRecoilModel.cs" Link="Source\ExperimentalRecoilModel.cs" />
     <Compile Include="..\WindowsApp\ConfigurationValidator.cs" Link="Source\ConfigurationValidator.cs" />
     <Compile Include="..\WindowsApp\DetectionDebouncer.cs" Link="Source\DetectionDebouncer.cs" />
