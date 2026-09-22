@@ -2422,11 +2422,11 @@ public sealed partial class MainPage : UserControl, IDisposable
         var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
         var effective = selected is null ? null : BuildEffectiveSelectedProfile(settings);
         var applies = settings.CompensationMode == CompensationMode.WeaponPattern &&
-            effective is { HasWeaponPattern: true,
+            effective is { IsBaseline: true, HasWeaponPattern: true,
                 PatternDataQuality: PatternDataQuality.VideoDerivedEstimate };
         OriginalPatternMultiplierStatusText.Text = applies
             ? $"Active for {selected!.Name}: {settings.OriginalPatternOutputMultiplier:0.00}× X/Y output after the profile limit."
-            : "Only applies to supplied estimated automatic patterns in Original mode; measured profiles are unchanged.";
+            : "Only applies to stock estimated automatic patterns in Original mode; modified and measured profiles are unchanged.";
     }
 
     private void OriginalPatternMultiplier_ValueChanged(

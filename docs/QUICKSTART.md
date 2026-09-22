@@ -140,9 +140,9 @@ the shooting range. Other optics and semi-automatic weapons are unchanged.
 This control needs both the updated app and UF2; the old executable will not
 show it, and the old UF2's General-mode smoothing can suppress it.
 In the unreleased next build, **Original pattern output** starts at 2× and
-can be adjusted from 1–4×. It scales both axes of the supplied estimated
-automatic patterns only in Original weapon pattern mode; measured profiles
-and General, Experimental, and Research modes remain unchanged by this
+can be adjusted from 1–4×. It scales both axes of stock estimated automatic
+patterns only in Original weapon pattern mode; modified and measured profiles
+plus General, Experimental, and Research modes remain unchanged by this
 control. The setting stacks with the 2.5× vertical boost, so high combined
 settings require the matching next-build firmware rather than the v1.7 UF2.
 

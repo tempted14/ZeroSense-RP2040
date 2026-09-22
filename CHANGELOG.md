@@ -3,10 +3,10 @@
 ## Unreleased (1.8.0 candidate)
 
 - Add a persistent, adjustable 1–4× Original weapon pattern output multiplier,
-  defaulting to 2×. It scales both X and Y of supplied estimated patterns after
+  defaulting to 2×. It scales both X and Y of stock estimated patterns after
   the firmware profile's 127-point transfer limit while leaving the stored
-  pattern and timing intact. Measured profiles and General, Experimental, and
-  Research modes do not receive this multiplier.
+  pattern and timing intact. Modified and measured profiles, plus General,
+  Experimental, and Research modes, do not receive this multiplier.
 - Raise the exact app/firmware sensitivity-factor contract to 16× so the
   maximum original-pattern gain can combine with the existing 2.5× vertical
   optic boost. Keep configuration validation and exact readback fail-closed.

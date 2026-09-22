@@ -308,7 +308,7 @@
                                                         <TextBlock Text="ORIGINAL PATTERN OUTPUT"
                                                                    Style="{StaticResource LabelStyle}" />
                                                         <TextBlock x:Name="OriginalPatternMultiplierStatusText"
-                                                                   Text="Supplied estimated automatic patterns start at 2×; source data remains unchanged."
+                                                                   Text="Stock estimated automatic patterns start at 2×; source data remains unchanged."
                                                                    TextWrapping="Wrap"
                                                                    Style="{StaticResource MutedTextStyle}" />
                                                     </StackPanel>
