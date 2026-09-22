@@ -1,10 +1,10 @@
 # ZeroSense v1.8.0 candidate — not released
 
 The original automatic-weapon pattern mode has a saved, adjustable 1–4×
-output multiplier with a 2× default. It scales X and Y of the supplied
+output multiplier with a 2× default. It scales X and Y of the stock
 estimated patterns after the per-point profile transfer limit, preserving the
-source pattern and shot timing. Measured profiles and General, Experimental,
-and Research modes do not use this multiplier.
+source pattern and shot timing. Modified and measured profiles, plus General,
+Experimental, and Research modes, do not use this multiplier.
 
 The existing 2.5× vertical boost still applies independently. The matching
 RP2040/RP2350 firmware increases the validated sensitivity-factor ceiling to

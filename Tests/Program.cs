@@ -769,6 +769,11 @@ static void OriginalPatternMultiplierIsScoped()
         saturated, CompensationMode.WeaponPattern).Vertical,
         "measured profiles remain at their calibrated output");
     saturated.PatternDataQuality = PatternDataQuality.VideoDerivedEstimate;
+    saturated.IsBaseline = false;
+    Equal(1.0f, settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern).Vertical,
+        "user-modified estimates remain at their chosen output");
+    saturated.IsBaseline = true;
 
     settings.ActiveMagnification = "2.5x";
     settings.TwoPointFiveAutoVerticalBoost = 4.0;

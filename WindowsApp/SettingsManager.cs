@@ -281,8 +281,8 @@ public sealed class Settings
     [JsonPropertyName("twoPointFiveAutoVerticalBoost")]
     public double TwoPointFiveAutoVerticalBoost { get; set; } = 1.0;
 
-    // Scales both axes of the supplied estimated pattern in Original mode after
-    // the Q8.8 profile has been decoded. Measured profiles and other modes are neutral.
+    // Scales both axes of stock estimated patterns in Original mode after the
+    // Q8.8 profile has been decoded. Modified/measured profiles remain neutral.
     [JsonPropertyName("originalPatternOutputMultiplier")]
     public double OriginalPatternOutputMultiplier { get; set; } = 2.0;
 
@@ -646,7 +646,7 @@ public sealed class Settings
             ? TwoPointFiveAutoVerticalBoost
             : 1.0;
         var patternMultiplier = mode == RainbowRecoil.CompensationMode.WeaponPattern &&
-            profile is { HasWeaponPattern: true,
+            profile is { IsBaseline: true, HasWeaponPattern: true,
                 PatternDataQuality: PatternDataQuality.VideoDerivedEstimate }
             ? OriginalPatternOutputMultiplier
             : 1.0;
