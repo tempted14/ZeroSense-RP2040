@@ -305,6 +305,27 @@
                                                     BorderThickness="1">
                                                 <Grid ColumnDefinitions="*,110" ColumnSpacing="9">
                                                     <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                        <TextBlock Text="ORIGINAL PATTERN OUTPUT"
+                                                                   Style="{StaticResource LabelStyle}" />
+                                                        <TextBlock x:Name="OriginalPatternMultiplierStatusText"
+                                                                   Text="Supplied estimated automatic patterns start at 2×; source data remains unchanged."
+                                                                   TextWrapping="Wrap"
+                                                                   Style="{StaticResource MutedTextStyle}" />
+                                                    </StackPanel>
+                                                    <NumberBox x:Name="OriginalPatternMultiplierBox" Grid.Column="1"
+                                                               Minimum="1" Maximum="4" Value="2"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
+                                                               VerticalAlignment="Center"
+                                                               AutomationProperties.Name="Original automatic recoil pattern output multiplier"
+                                                               ValueChanged="OriginalPatternMultiplier_ValueChanged" />
+                                                </Grid>
+                                            </Border>
+                                            <Border Padding="10" CornerRadius="7"
+                                                    Background="#0B0B0B"
+                                                    BorderBrush="{StaticResource StrokeBrush}"
+                                                    BorderThickness="1">
+                                                <Grid ColumnDefinitions="*,110" ColumnSpacing="9">
+                                                    <StackPanel Spacing="2" VerticalAlignment="Center">
                                                         <TextBlock Text="2.5× AUTO VERTICAL BOOST"
                                                                    Style="{StaticResource LabelStyle}" />
                                                         <TextBlock x:Name="TwoPointFiveBoostStatusText"

@@ -93,7 +93,7 @@ static constexpr float minCompensation = -127.0f;
 static constexpr float maxCompensation = 127.0f;
 static constexpr float minVerticalCompensation = 0.0f;
 static constexpr float minSensitivityFactor = 0.05f;
-static constexpr float maxSensitivityFactor = 8.0f;
+static constexpr float maxSensitivityFactor = 16.0f;
 // Adaptive standalone polling intervals in microseconds.
 static constexpr uint32_t POLL_IDLE_US   = 4000; // 250 Hz during idle
 static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
@@ -948,7 +948,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:HOST-FIX-OPTIC-20260922");
+    protocol_println("BUILD:ORIGINAL-PATTERN-X2-20260922");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (hostCoreStalled.load(std::memory_order_acquire)) {

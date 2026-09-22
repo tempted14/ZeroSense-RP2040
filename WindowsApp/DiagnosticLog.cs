@@ -47,7 +47,8 @@ internal static class DiagnosticLog
 
         using var process = Process.GetCurrentProcess();
         var metrics = connection?.GetMetrics() ?? default;
-        var scale = settings.CalculateSensitivityScale(selectedProfile);
+        var scale = settings.CalculateSensitivityScale(
+            selectedProfile, settings.CompensationMode);
         var builder = new StringBuilder();
         builder.AppendLine("ZeroSense diagnostic report");
         builder.AppendLine($"App version: {typeof(DiagnosticLog).Assembly.GetName().Version}");
@@ -65,6 +66,7 @@ internal static class DiagnosticLog
         builder.AppendLine($"Sensitivity scale: H {scale.Horizontal:F3}, V {scale.Vertical:F3}");
         builder.AppendLine($"Master recoil gain: {settings.MasterRecoilGain:F2}x");
         builder.AppendLine($"2.5x automatic vertical boost: {settings.TwoPointFiveAutoVerticalBoost:F2}x");
+        builder.AppendLine($"Original pattern output multiplier: {settings.OriginalPatternOutputMultiplier:F2}x");
         if (!string.IsNullOrWhiteSpace(selectedProfile?.Name))
         {
             builder.AppendLine(

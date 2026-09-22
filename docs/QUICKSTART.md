@@ -139,6 +139,12 @@ maxed master gain. The default is 1×; start with 1.5× or 2× and calibrate in
 the shooting range. Other optics and semi-automatic weapons are unchanged.
 This control needs both the updated app and UF2; the old executable will not
 show it, and the old UF2's General-mode smoothing can suppress it.
+In the unreleased next build, **Original pattern output** starts at 2× and
+can be adjusted from 1–4×. It scales both axes of the supplied estimated
+automatic patterns only in Original weapon pattern mode; measured profiles
+and General, Experimental, and Research modes remain unchanged by this
+control. The setting stacks with the 2.5× vertical boost, so high combined
+settings require the matching next-build firmware rather than the v1.7 UF2.
 
 The 115 weapon entries are a complete selection catalog; 61 automatic entries include current RPM/magazine timing and deterministic video-derived pattern estimates. Supported semi-automatic weapons default to rapid fire with per-shot recoil, while automatic weapons and manually cycled weapons are excluded. Every automatic profile applies Vertical Grip. Automatic profiles use Flash Hider instead of Compensator, except Ela's SCORPION EVO 3 A1, which uses Vertical Grip plus Compensator. The F2 entry uses vertical grip plus flash hider. Operator selection also applies side-specific Y11S3 restrictions: Aruni's Mk 14 EBR and Tubarão's AR-15.50 do not inherit the attacker version's muzzle brake. These curves are starting estimates, not raw Ubisoft data, so validate one weapon at a time in the shooting range.
 
@@ -154,6 +160,8 @@ a reset. `docs/AUDIT_2026-09-22.md` explains the counters. The extended fields
 require the diagnostic firmware build and cannot diagnose freezes retroactively.
 The current RP2350 host-fix and optic-boost build identifies itself as
 `BUILD:HOST-FIX-OPTIC-20260922`.
+The separate unreleased original-pattern test build reports
+`BUILD:ORIGINAL-PATTERN-X2-20260922`.
 If this build still freezes, capture STATUS before unplugging anything: the
 status should report `MOUSE:HOST_ERROR`, and the host task age will distinguish
 another stalled host loop from a different failure.

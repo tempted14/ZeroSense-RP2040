@@ -281,6 +281,11 @@ public sealed class Settings
     [JsonPropertyName("twoPointFiveAutoVerticalBoost")]
     public double TwoPointFiveAutoVerticalBoost { get; set; } = 1.0;
 
+    // Scales both axes of the supplied estimated pattern in Original mode after
+    // the Q8.8 profile has been decoded. Measured profiles and other modes are neutral.
+    [JsonPropertyName("originalPatternOutputMultiplier")]
+    public double OriginalPatternOutputMultiplier { get; set; } = 2.0;
+
     // Kept for backward-compatible deserialization of the unfinished v4 setting.
     [JsonPropertyName("autoOperatorTrackingEnabled")]
     public bool AutoOperatorTrackingEnabled { get; set; }
@@ -521,6 +526,9 @@ public sealed class Settings
         TwoPointFiveAutoVerticalBoost = double.IsFinite(TwoPointFiveAutoVerticalBoost)
             ? Math.Clamp(TwoPointFiveAutoVerticalBoost, 1.0, 4.0)
             : 1.0;
+        OriginalPatternOutputMultiplier = double.IsFinite(OriginalPatternOutputMultiplier)
+            ? Math.Clamp(OriginalPatternOutputMultiplier, 1.0, 4.0)
+            : 2.0;
 
         OperatorDetectionConfidence = double.IsFinite(OperatorDetectionConfidence)
             ? Math.Clamp(OperatorDetectionConfidence, 0.55, 1.0)
@@ -620,7 +628,9 @@ public sealed class Settings
         }
     }
 
-    public SensitivityScale CalculateSensitivityScale(WeaponProfile? profile = null)
+    public SensitivityScale CalculateSensitivityScale(
+        WeaponProfile? profile = null,
+        CompensationMode? mode = null)
     {
         const float referenceHipGain = 55.0f * 0.001f;
 
@@ -635,10 +645,16 @@ public sealed class Settings
             ActiveMagnification.Equals("2.5x", StringComparison.OrdinalIgnoreCase)
             ? TwoPointFiveAutoVerticalBoost
             : 1.0;
+        var patternMultiplier = mode == RainbowRecoil.CompensationMode.WeaponPattern &&
+            profile is { HasWeaponPattern: true,
+                PatternDataQuality: PatternDataQuality.VideoDerivedEstimate }
+            ? OriginalPatternOutputMultiplier
+            : 1.0;
 
         return new SensitivityScale(
-            referenceHipGain / horizontalGain * adsScale,
-            (float)(referenceHipGain / verticalGain * adsScale * verticalBoost));
+            (float)(referenceHipGain / horizontalGain * adsScale * patternMultiplier),
+            (float)(referenceHipGain / verticalGain * adsScale *
+                patternMultiplier * verticalBoost));
     }
 
     [JsonIgnore]

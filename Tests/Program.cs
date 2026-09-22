@@ -22,6 +22,7 @@ var tests = new (string Name, Action Run)[]
     ("operator attachment overrides are isolated", OperatorOverridesAreIsolated),
     ("settings normalization and scaling are safe", SettingsNormalizationIsSafe),
     ("2.5x automatic boost survives the 127-point profile limit", TwoPointFiveBoostIsScoped),
+    ("original pattern output multiplier is scoped and combines safely", OriginalPatternMultiplierIsScoped),
     ("operator OCR matching tolerates realistic noise", OperatorOcrMatchingIsRobust),
     ("detection settings normalize safely", DetectionSettingsNormalizeSafely),
     ("weapon slots and defaults are deterministic", WeaponSlotsAndDefaultsAreDeterministic),
@@ -709,6 +710,87 @@ static void TwoPointFiveBoostIsScoped()
     settings.TwoPointFiveAutoVerticalBoost = double.NaN;
     settings.Normalize();
     Equal(1.0, settings.TwoPointFiveAutoVerticalBoost, "invalid boost defaults to neutral");
+}
+
+static void OriginalPatternMultiplierIsScoped()
+{
+    var source = new WeaponProfile
+    {
+        Name = "Original test",
+        WeaponType = "Assault Rifle",
+        VerticalCompensation = 2.0,
+        HorizontalCompensation = -2.0,
+        RoundsPerMinute = 800,
+        MagazineSize = 30,
+        PatternDataQuality = PatternDataQuality.VideoDerivedEstimate,
+        Pattern = [new RecoilPatternPoint(-2.0f, 2.0f)]
+    };
+    var saturated = source.WithCombinedOutputStrength(127.0, 1.0);
+    Equal(new RecoilPatternPoint(-127.0f, 127.0f), saturated.Pattern[0],
+        "the original source saturates at the Q8.8 profile limit");
+    Equal(new RecoilPatternPoint(-2.0f, 2.0f), source.Pattern[0],
+        "the source pattern remains unchanged");
+
+    var settings = new Settings { ActiveMagnification = "1.0x" };
+    settings.Normalize();
+    Equal(2.0, settings.OriginalPatternOutputMultiplier,
+        "new and migrated settings default to double output");
+    var originalScale = settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern);
+    Equal(2.0f, originalScale.Horizontal, "original pattern doubles horizontal output");
+    Equal(2.0f, originalScale.Vertical, "original pattern doubles vertical output");
+    var packet = SerialProtocol.BuildSensitivityCommand(originalScale);
+    Equal(2.0f, BinaryPrimitives.ReadSingleLittleEndian(packet.AsSpan(7, 4)),
+        "horizontal multiplier reaches the firmware command");
+    Equal(2.0f, BinaryPrimitives.ReadSingleLittleEndian(packet.AsSpan(11, 4)),
+        "vertical multiplier reaches the firmware command");
+
+    foreach (var mode in new[]
+    {
+        CompensationMode.General,
+        CompensationMode.Experimental,
+        CompensationMode.ResearchEstimate
+    })
+    {
+        var neutral = settings.CalculateSensitivityScale(saturated, mode);
+        Equal(1.0f, neutral.Horizontal, $"{mode} horizontal remains neutral");
+        Equal(1.0f, neutral.Vertical, $"{mode} vertical remains neutral");
+    }
+    Equal(1.0f, settings.CalculateSensitivityScale(new WeaponProfile
+    {
+        WeaponType = "Marksman Rifle"
+    }, CompensationMode.WeaponPattern).Vertical,
+        "semi-automatic profiles do not receive original-pattern gain");
+    saturated.PatternDataQuality = PatternDataQuality.Measured;
+    Equal(1.0f, settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern).Vertical,
+        "measured profiles remain at their calibrated output");
+    saturated.PatternDataQuality = PatternDataQuality.VideoDerivedEstimate;
+
+    settings.ActiveMagnification = "2.5x";
+    settings.TwoPointFiveAutoVerticalBoost = 4.0;
+    settings.OriginalPatternOutputMultiplier = 4.0;
+    settings.Normalize();
+    var combined = settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern);
+    Equal(4.0f, combined.Horizontal, "independent optic boost leaves pattern X alone");
+    Equal(16.0f, combined.Vertical, "pattern and optic multipliers combine");
+    True(ConfigurationValidator.Validate(
+        settings, saturated, CompensationMode.WeaponPattern, false).IsValid,
+        "maximum combined scale fits the updated firmware contract");
+    _ = SerialProtocol.BuildSensitivityCommand(combined);
+
+    settings.OriginalPatternOutputMultiplier = 999.0;
+    settings.Normalize();
+    Equal(4.0, settings.OriginalPatternOutputMultiplier, "pattern multiplier upper clamp");
+    var restored = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))
+        ?? throw new InvalidOperationException("pattern settings round-trip returned null");
+    restored.Normalize();
+    Equal(4.0, restored.OriginalPatternOutputMultiplier, "pattern multiplier persists");
+    settings.OriginalPatternOutputMultiplier = double.NaN;
+    settings.Normalize();
+    Equal(2.0, settings.OriginalPatternOutputMultiplier,
+        "invalid pattern multiplier returns to the default");
 }
 
 static void ProfilePersistenceRoundTrips()

@@ -186,6 +186,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             DeltaNoiseToggle.IsOn = settings.DeltaNoiseEnabled;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
+            OriginalPatternMultiplierBox.Value = settings.OriginalPatternOutputMultiplier;
             WeaponConfidenceSlider.Value = settings.WeaponDetectionConfidence * 100.0;
             WeaponDetectionRegionXBox.Value = settings.WeaponDetectionRegionX;
             WeaponDetectionRegionYBox.Value = settings.WeaponDetectionRegionY;
@@ -871,6 +872,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
         UpdateHorizontalTuningUi();
+        UpdateOriginalPatternMultiplierStatus(SettingsManager.LoadSettings());
+        UpdateCalibrationSummary(SettingsManager.LoadSettings());
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -1020,6 +1023,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
         UpdateHorizontalTuningUi();
+        UpdateOriginalPatternMultiplierStatus(SettingsManager.LoadSettings());
+        UpdateCalibrationSummary(SettingsManager.LoadSettings());
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -1196,6 +1201,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.MouseSensitivityMultiplierUnit = 0.001f;
         settings.MasterRecoilGain = RecoilStrengthModel.MasterDefault;
         settings.TwoPointFiveAutoVerticalBoost = 1.0;
+        settings.OriginalPatternOutputMultiplier = 2.0;
         settings.AdsSensitivity = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
         {
             ["1.0x"] = 38.0f,
@@ -1248,6 +1254,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             SensitivityMultiplierBox.Value = settings.MouseSensitivityMultiplierUnit;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
+            OriginalPatternMultiplierBox.Value = settings.OriginalPatternOutputMultiplier;
             AutomaticMagnificationToggle.IsOn = settings.AutomaticMagnificationEnabled;
             MagnificationSelector.SelectedItem = settings.ActiveMagnification;
             AdsSensitivityBox.Value = settings.GetActiveAdsSensitivity();
@@ -2158,7 +2165,7 @@ public sealed partial class MainPage : UserControl, IDisposable
                 new DeviceConfigurationRequest(
                     effectiveProfile,
                     settings.CompensationMode,
-                    settings.CalculateSensitivityScale(effectiveProfile),
+                    settings.CalculateSensitivityScale(effectiveProfile, settings.CompensationMode),
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
                     effectiveProfile.RapidFireRoundsPerMinute,
                     settings.GeneralTimingVarianceEnabled,
@@ -2406,7 +2413,38 @@ public sealed partial class MainPage : UserControl, IDisposable
                 : $"{selected.Name} has no automatic recoil output to scale.";
         MasterRecoilGainStatusText.Text =
             $"{settings.MasterRecoilGain:0.00}× · profile points cap at 127; high values can flatten their shape";
+        UpdateOriginalPatternMultiplierStatus(settings);
         UpdateTwoPointFiveBoostStatus(settings);
+    }
+
+    private void UpdateOriginalPatternMultiplierStatus(Settings settings)
+    {
+        var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
+        var effective = selected is null ? null : BuildEffectiveSelectedProfile(settings);
+        var applies = settings.CompensationMode == CompensationMode.WeaponPattern &&
+            effective is { HasWeaponPattern: true,
+                PatternDataQuality: PatternDataQuality.VideoDerivedEstimate };
+        OriginalPatternMultiplierStatusText.Text = applies
+            ? $"Active for {selected!.Name}: {settings.OriginalPatternOutputMultiplier:0.00}× X/Y output after the profile limit."
+            : "Only applies to supplied estimated automatic patterns in Original mode; measured profiles are unchanged.";
+    }
+
+    private void OriginalPatternMultiplier_ValueChanged(
+        NumberBox sender,
+        NumberBoxValueChangedEventArgs args)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        var settings = SettingsManager.LoadSettings();
+        settings.OriginalPatternOutputMultiplier = double.IsFinite(sender.Value)
+            ? Math.Clamp(sender.Value, 1.0, 4.0)
+            : 2.0;
+        UpdateOriginalPatternMultiplierStatus(settings);
+        UpdateCalibrationSummary(settings);
+        SaveAndSynchronize();
     }
 
     private void UpdateTwoPointFiveBoostStatus(Settings settings)
@@ -2641,7 +2679,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private void UpdateCalibrationSummary(Settings settings)
     {
         var profile = BuildEffectiveSelectedProfile(settings);
-        var scale = settings.CalculateSensitivityScale(profile);
+        var scale = settings.CalculateSensitivityScale(profile, settings.CompensationMode);
         CalibrationSummaryText.Text =
             $"Scale H {scale.Horizontal:0.000} / V {scale.Vertical:0.000}  ·  " +
             $"master gain {settings.MasterRecoilGain:0.00}×  ·  " +
@@ -2777,6 +2815,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         bool AutomaticMagnification,
         double MasterRecoilGain,
         double TwoPointFiveAutoVerticalBoost,
+        double OriginalPatternOutputMultiplier,
         string? WeaponName,
         double WeaponStrength)
     {
@@ -2790,6 +2829,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.AutomaticMagnificationEnabled,
             settings.MasterRecoilGain,
             settings.TwoPointFiveAutoVerticalBoost,
+            settings.OriginalPatternOutputMultiplier,
             weaponName,
             string.IsNullOrWhiteSpace(weaponName)
                 ? RecoilStrengthModel.Default
@@ -2808,6 +2848,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.AutomaticMagnificationEnabled = AutomaticMagnification;
             settings.MasterRecoilGain = MasterRecoilGain;
             settings.TwoPointFiveAutoVerticalBoost = TwoPointFiveAutoVerticalBoost;
+            settings.OriginalPatternOutputMultiplier = OriginalPatternOutputMultiplier;
             if (!string.IsNullOrWhiteSpace(WeaponName))
             {
                 settings.SetWeaponOutputStrength(WeaponName, WeaponStrength);

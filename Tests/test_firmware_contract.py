@@ -245,7 +245,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("generated_activity || physical_activity", FIRMWARE)
         self.assertNotIn("PROXY_POLL_US", FIRMWARE)
         self.assertIn("minSensitivityFactor = 0.05f", FIRMWARE)
-        self.assertIn("maxSensitivityFactor = 8.0f", FIRMWARE)
+        self.assertIn("maxSensitivityFactor = 16.0f", FIRMWARE)
         self.assertIn("maxPatternRoundsPerMinute = 2000", FIRMWARE)
         self.assertNotIn("std::clamp(horizontal, minSensitivityFactor", FIRMWARE)
 
