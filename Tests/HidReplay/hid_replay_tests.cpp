@@ -74,6 +74,22 @@ int main() {
     }
     expect(boostedTotal == 508 && largestBoostedFrame <= 127,
         "capped 127-point pattern delivers boosted correction across HID frames");
+    ZeroSenseCorrection::State maximumPatternScheduler = {};
+    ZeroSenseCorrection::schedule(maximumPatternScheduler, -127.0f * 4.0f,
+        127.0f * 16.0f, 30000, 1000);
+    int32_t maximumPatternX = 0;
+    int32_t maximumPatternY = 0;
+    int32_t maximumPatternFrame = 0;
+    for (uint32_t frame = 0; frame < 30; ++frame) {
+        const auto result = ZeroSenseCorrection::service(
+            maximumPatternScheduler, 1000 + frame * 1000);
+        maximumPatternX += result.queuedX;
+        maximumPatternY += result.queuedY;
+        maximumPatternFrame = std::max(maximumPatternFrame, result.queuedY);
+    }
+    expect(maximumPatternX == -508 && maximumPatternY == 2032 &&
+        maximumPatternFrame <= 127,
+        "combined pattern and optic boost emits the full correction safely");
     const float jitteredDistance =
         10.0f * ZeroSenseMotion::intervalScale(7360) +
         10.0f * ZeroSenseMotion::intervalScale(8640);
