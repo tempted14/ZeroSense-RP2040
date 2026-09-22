@@ -33,9 +33,13 @@ jobs:
         shell: pwsh
         run: |
           dotnet restore Tests/RainbowRecoil.CoreTests.csproj --configfile NuGet.Config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet restore WindowsApp/RainbowRecoil.csproj --runtime win-x64 --configfile NuGet.Config
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           dotnet run --project Tests/RainbowRecoil.CoreTests.csproj --configuration Release --no-restore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s Tests -p "test_*.py" -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Publish portable Windows package
         shell: pwsh
         run: |

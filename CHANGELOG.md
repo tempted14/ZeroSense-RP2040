@@ -1,5 +1,45 @@
 # Changelog
 
+## 1.7.0 - 2026-09-22
+
+- Add a persistent 1.00–4.00× vertical boost scoped to automatic weapons using
+  the 2.5× optic. Apply it through the device sensitivity scale after the
+  127-point profile limit, so a saturated master gain can still increase real
+  output. Scale General-mode smoothing velocity and acceleration together so
+  its old 40-count cap does not erase the requested boost. Default remains 1×.
+- Replace the RP2350 PIO USB host's racy EOP program-counter poll with a
+  bounded four-bit-time wait, including the RP2350's fractional PIO divider.
+  This targets a reported host-core hang that matches live freeze telemetry;
+  hardware soak validation is still pending.
+- Mark the RP2350 mouse unavailable when its host core stops completing tasks,
+  release any cached physical buttons, and revoke generated output instead of
+  continuing to show a stale connected state.
+- Keep a quarantined RP2350 mouse interface retryable after sustained receive
+  submission failures, with bounded backoff and explicit re-arm after a fault.
+- Prevent a stalled CDC reader or serial input flood from monopolizing the HID
+  loop; expose queue failures, unmounts, host-loop age and dropped
+  replies in diagnostics. Add a STATUS-only capture tool for app-closed freezes.
+- Ignore delayed callbacks from replaced app connections, preserve complete
+  diagnostic lines, and fail CI immediately after an unsuccessful restore/test.
+- Recover an RP2350 downstream mouse when its HID interrupt receive request is
+  temporarily dropped instead of leaving COM connected with frozen input.
+- Bound the PIO-USB host task wait, poll board/mouse health every two seconds,
+  expose receive-recovery telemetry, and distinguish a live board from an
+  unavailable downstream mouse in the app.
+- Repeat RP2350 board and downstream-mouse identity on every status request so
+  Arm Output does not remain disabled when startup messages precede the app's
+  serial read loop.
+- Preserve a newly mounted HID interface until TinyUSB's authoritative unmount
+  callback fires; querying the device-wide mounted flag from inside the first
+  post-callback host iteration could otherwise discard a valid wired mouse.
+- Raise the master recoil calibration default from 3.50x to 12.00x and make
+  global and per-weapon output independently editable from 0 through the real
+  127-unit HID/Q8.8 limit.
+- Add persistent per-weapon horizontal controls that can retain the resolved
+  profile trace, mirror it, disable lateral correction, or apply deterministic
+  left-pull, right-pull, and alternating overrides with an independent 0-10x
+  strength. Source and measured profiles remain immutable.
+
 ## 1.6.0 - 2026-09-21
 
 - Restore exact floating-point configuration acknowledgements in both firmware

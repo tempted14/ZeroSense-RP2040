@@ -53,6 +53,14 @@ public sealed partial class MainPage : UserControl, IDisposable
         new(CompensationMode.Experimental, "Experimental · per-weapon calibrated"),
         new(CompensationMode.ResearchEstimate, "Supplied research profile · Y11S1.3 estimate")
     ];
+    private readonly IReadOnlyList<HorizontalModeOption> _horizontalModeOptions =
+    [
+        new(HorizontalPatternMode.Profile, "Profile pattern"),
+        new(HorizontalPatternMode.MirrorProfile, "Mirror profile"),
+        new(HorizontalPatternMode.WeaponPullLeft, "Gun pulls left"),
+        new(HorizontalPatternMode.WeaponPullRight, "Gun pulls right"),
+        new(HorizontalPatternMode.Alternating, "Alternating sway")
+    ];
     private readonly IReadOnlyList<DetectionModeOption> _detectionModeOptions =
     [
         new(OperatorDetectionMode.Disabled, "Disabled", "Screen recognition is off."),
@@ -78,6 +86,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private bool _configurationSyncPending;
     private int _configurationRevision;
     private int _automaticReconnectGeneration;
+    private int _deviceStatusPollTicks;
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
     private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
@@ -122,6 +131,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         {
             OperatorSelector.ItemsSource = _viewModel.AllOperators;
             CompensationModeSelector.ItemsSource = _modeOptions;
+            HorizontalPatternModeSelector.ItemsSource = _horizontalModeOptions;
             DetectionModeSelector.ItemsSource = _detectionModeOptions;
             MagnificationSelector.ItemsSource = new[] { "1.0x", "2.5x", "3.5x", "8.0x" };
             DetectionModifierSelector.ItemsSource = HotkeyChord.Modifiers;
@@ -175,6 +185,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             GeneralTimingVarianceToggle.IsOn = settings.GeneralTimingVarianceEnabled;
             DeltaNoiseToggle.IsOn = settings.DeltaNoiseEnabled;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
+            TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
             WeaponConfidenceSlider.Value = settings.WeaponDetectionConfidence * 100.0;
             WeaponDetectionRegionXBox.Value = settings.WeaponDetectionRegionX;
             WeaponDetectionRegionYBox.Value = settings.WeaponDetectionRegionY;
@@ -201,6 +212,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateProfileDescription();
         UpdateModeDescription();
         UpdateExperimentalTuningUi();
+        UpdateHorizontalTuningUi();
         UpdateDetectionUi();
         UpdateHotkeyPreviews();
         UpdateOverlayContent();
@@ -562,6 +574,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     {
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (_isDisposed || !ReferenceEquals(sender, _connection)) return;
             if (message is null)
             {
                 HandleConnectionLost("The hardware stopped responding.");
@@ -588,6 +601,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     {
         DispatcherQueue.TryEnqueue(() =>
         {
+            if (_isDisposed || !ReferenceEquals(sender, _connection)) return;
             if (status.StartsWith("Disconnected", StringComparison.OrdinalIgnoreCase))
             {
                 HandleConnectionLost(status);
@@ -715,7 +729,10 @@ public sealed partial class MainPage : UserControl, IDisposable
                     update.MaximumCorrectionLatenessUs > 5000 ||
                     update.HostDecodeErrors > 0 ||
                     update.HostAccumulatorSaturations > 0 ||
-                    update.GeneralIntervalClamps > 0;
+                    update.GeneralIntervalClamps > 0 ||
+                    update.HostReceiveQueueFailures > 0 ||
+                    update.HostMouseUnmounts > 0 ||
+                    update.HostTaskAgeMs > 100 || update.CdcDroppedMessages > 0;
                 FirmwareTelemetryText.Text =
                     $"{(transportWarning ? "Timing warning" : "Transport healthy")}: " +
                     $"{update.HidReportsSent} HID reports · " +
@@ -724,7 +741,12 @@ public sealed partial class MainPage : UserControl, IDisposable
                     $"max active gap {update.MaximumActiveReportGapUs} µs · " +
                     $"downstream {update.HostReportsReceived} reports / " +
                     $"{update.HostDecodeErrors} decode errors / " +
-                    $"{update.HostAccumulatorSaturations} saturations · " +
+                    $"{update.HostAccumulatorSaturations} saturations / " +
+                    $"{update.HostReceiveRecoveries} receive recoveries · " +
+                    $"{update.HostReceiveQueueFailures} queue failures / " +
+                    $"{update.HostMouseUnmounts} mouse unmounts / " +
+                    $"host task age {update.HostTaskAgeMs} ms / " +
+                    $"{update.CdcDroppedMessages} dropped status messages · " +
                     $"{update.UpstreamDisconnectStops} upstream safety stops · " +
                     $"scheduler {update.CorrectionDelayedFrames} delayed / " +
                     $"{update.MaximumCorrectionLatenessUs} µs max · " +
@@ -741,8 +763,24 @@ public sealed partial class MainPage : UserControl, IDisposable
         {
             var canArm = CanArmConnectedHardware();
             SetArmControls(canArm && _isArmed, canArm);
-            DeviceMessageText.Text = BuildConnectedHardwareDetail();
-            DevicePageConnectionDetail.Text = DeviceMessageText.Text;
+            var detail = BuildConnectedHardwareDetail();
+            if (_firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy &&
+                update.Kind is FirmwareStatusKind.MouseConnected or
+                    FirmwareStatusKind.MouseDisconnected or
+                    FirmwareStatusKind.MouseUnsupported or
+                    FirmwareStatusKind.MouseHostError)
+            {
+                SetConnectionStatus(
+                    canArm ? $"Connected on {_connection.PortName}" :
+                        "Board online — mouse unavailable",
+                    detail,
+                    canArm ? ConnectedBrush : WarningBrush);
+            }
+            else
+            {
+                DeviceMessageText.Text = detail;
+                DevicePageConnectionDetail.Text = detail;
+            }
         }
         UpdateHardwareStatusPresentation();
     }
@@ -832,6 +870,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         ApplyMagnificationPolicy(SettingsManager.LoadSettings());
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
+        UpdateHorizontalTuningUi();
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -880,6 +919,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         ApplyMagnificationPolicy(SettingsManager.LoadSettings());
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
+        UpdateHorizontalTuningUi();
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -979,6 +1019,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateModeDescription();
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
+        UpdateHorizontalTuningUi();
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -1062,6 +1103,7 @@ public sealed partial class MainPage : UserControl, IDisposable
                     ? "Defender DMR exception · 2.5x"
                     : "Defender default · 1.0x"
             : $"Manual override · {settings.ActiveMagnification}";
+        UpdateTwoPointFiveBoostStatus(settings);
         UpdateCalibrationSummary(settings);
     }
 
@@ -1153,6 +1195,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.MouseDpi = 1600;
         settings.MouseSensitivityMultiplierUnit = 0.001f;
         settings.MasterRecoilGain = RecoilStrengthModel.MasterDefault;
+        settings.TwoPointFiveAutoVerticalBoost = 1.0;
         settings.AdsSensitivity = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
         {
             ["1.0x"] = 38.0f,
@@ -1204,6 +1247,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             VerticalSensitivitySlider.Value = VerticalSensitivityBox.Value;
             SensitivityMultiplierBox.Value = settings.MouseSensitivityMultiplierUnit;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
+            TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
             AutomaticMagnificationToggle.IsOn = settings.AutomaticMagnificationEnabled;
             MagnificationSelector.SelectedItem = settings.ActiveMagnification;
             AdsSensitivityBox.Value = settings.GetActiveAdsSensitivity();
@@ -1392,8 +1436,22 @@ public sealed partial class MainPage : UserControl, IDisposable
         }
     }
 
-    private void Rp2350ArmLeaseTimer_Tick(object? sender, object e) =>
+    private void Rp2350ArmLeaseTimer_Tick(object? sender, object e)
+    {
         RefreshRp2350ArmLease();
+        if (++_deviceStatusPollTicks < 10)
+        {
+            return;
+        }
+        _deviceStatusPollTicks = 0;
+
+        var connection = _connection;
+        if (!_isDisposed && !_isConnecting && !_isSynchronizingConfiguration &&
+            connection?.IsConnected == true && !connection.IsSimulator)
+        {
+            TrySendCommand("STATUS");
+        }
+    }
 
     private void RefreshRp2350ArmLease()
     {
@@ -2100,7 +2158,7 @@ public sealed partial class MainPage : UserControl, IDisposable
                 new DeviceConfigurationRequest(
                     effectiveProfile,
                     settings.CompensationMode,
-                    settings.CalculateSensitivityScale(),
+                    settings.CalculateSensitivityScale(effectiveProfile),
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
                     effectiveProfile.RapidFireRoundsPerMinute,
                     settings.GeneralTimingVarianceEnabled,
@@ -2198,6 +2256,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             ResearchProfileStatusText.Text = "No weapon is selected.";
             AttachmentNoteText.Visibility = Visibility.Collapsed;
             UpdateWeaponStrengthUi();
+            UpdateHorizontalTuningUi();
             return;
         }
 
@@ -2254,6 +2313,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             ? Visibility.Collapsed
             : Visibility.Visible;
         UpdateWeaponStrengthUi();
+        UpdateHorizontalTuningUi();
     }
 
     private void UpdateModeDescription()
@@ -2345,7 +2405,90 @@ public sealed partial class MainPage : UserControl, IDisposable
                   $"{settings.GetEffectiveOutputGain(selected.Name):0.00}× total output"
                 : $"{selected.Name} has no automatic recoil output to scale.";
         MasterRecoilGainStatusText.Text =
-            $"{settings.MasterRecoilGain:0.00}× calibrated hardware output · pattern shape preserved";
+            $"{settings.MasterRecoilGain:0.00}× · profile points cap at 127; high values can flatten their shape";
+        UpdateTwoPointFiveBoostStatus(settings);
+    }
+
+    private void UpdateTwoPointFiveBoostStatus(Settings settings)
+    {
+        var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
+        var applies = settings.ActiveMagnification.Equals("2.5x", StringComparison.OrdinalIgnoreCase) &&
+            selected?.Profile.SupportsContinuousCompensation == true;
+        TwoPointFiveBoostStatusText.Text = applies
+            ? $"Active for {selected!.Name}: {settings.TwoPointFiveAutoVerticalBoost:0.00}× extra vertical output after the profile limit."
+            : "Only applies to automatic weapons using a 2.5× optic; other scopes are unchanged.";
+    }
+
+    private void TwoPointFiveBoost_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        var settings = SettingsManager.LoadSettings();
+        settings.TwoPointFiveAutoVerticalBoost = double.IsFinite(sender.Value)
+            ? Math.Clamp(sender.Value, 1.0, 4.0)
+            : 1.0;
+        UpdateTwoPointFiveBoostStatus(settings);
+        UpdateCalibrationSummary(settings);
+        SaveAndSynchronize();
+    }
+
+    private void UpdateHorizontalTuningUi()
+    {
+        var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
+        var available = selected is not null &&
+                        (selected.Profile.VerticalCompensation > 0 ||
+                         selected.Profile.HorizontalCompensation != 0 ||
+                         selected.Profile.HasWeaponPattern);
+        var settings = SettingsManager.LoadSettings();
+        var tuning = selected is null
+            ? new HorizontalRecoilTuning()
+            : settings.GetWeaponHorizontalTuning(selected.Name);
+
+        var wasInitializing = _isInitializing;
+        _isInitializing = true;
+        try
+        {
+            HorizontalPatternToggle.IsOn = tuning.Enabled;
+            HorizontalPatternModeSelector.SelectedItem = _horizontalModeOptions.First(option =>
+                option.Value == tuning.Mode);
+            HorizontalPatternStrengthBox.Value = tuning.Strength;
+            HorizontalPatternToggle.IsEnabled = available;
+            HorizontalPatternModeSelector.IsEnabled = available && tuning.Enabled;
+            HorizontalPatternStrengthBox.IsEnabled = available && tuning.Enabled;
+            ResetHorizontalPatternButton.IsEnabled = available &&
+                !HorizontalRecoilModel.IsDefault(tuning);
+        }
+        finally
+        {
+            _isInitializing = wasInitializing;
+        }
+
+        if (selected is null)
+        {
+            HorizontalPatternStatusText.Text = "Select a weapon to inspect its horizontal pattern.";
+            return;
+        }
+        if (!available)
+        {
+            HorizontalPatternStatusText.Text =
+                $"{selected.Name} has no automatic recoil output to tune.";
+            return;
+        }
+
+        var effective = BuildEffectiveSelectedProfile(settings);
+        var source = tuning.Mode == HorizontalPatternMode.Profile &&
+                     effective?.PatternDataQuality == PatternDataQuality.Measured
+            ? "Exact measured X/Y trace for the selected loadout."
+            : tuning.Mode == HorizontalPatternMode.Profile
+                ? HorizontalRecoilModel.DescribeCatalogDirection(selected.Name)
+                : "Custom deterministic override; the stored source profile remains unchanged.";
+        var state = tuning.Enabled
+            ? $"{HorizontalRecoilModel.DescribeMode(tuning.Mode)} · {tuning.Strength:0.00}×"
+            : "Disabled · vertical correction only";
+        HorizontalPatternStatusText.Text = $"{selected.Name} · {state}. {source}";
     }
 
     private void MasterRecoilGain_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
@@ -2411,6 +2554,56 @@ public sealed partial class MainPage : UserControl, IDisposable
         SaveAndSynchronize();
     }
 
+    private void HorizontalPatternToggle_Toggled(object sender, RoutedEventArgs e) =>
+        SaveHorizontalTuningFromUi();
+
+    private void HorizontalPatternModeSelector_SelectionChanged(
+        object sender,
+        SelectionChangedEventArgs e) => SaveHorizontalTuningFromUi();
+
+    private void HorizontalPatternStrength_ValueChanged(
+        NumberBox sender,
+        NumberBoxValueChangedEventArgs args) => SaveHorizontalTuningFromUi();
+
+    private void SaveHorizontalTuningFromUi()
+    {
+        if (_isInitializing ||
+            WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
+        {
+            return;
+        }
+
+        var settings = SettingsManager.LoadSettings();
+        var current = settings.GetWeaponHorizontalTuning(selected.Name);
+        var mode = HorizontalPatternModeSelector.SelectedItem is HorizontalModeOption selectedMode
+            ? selectedMode.Value
+            : current.Mode;
+        settings.SetWeaponHorizontalTuning(selected.Name, new HorizontalRecoilTuning
+        {
+            Enabled = HorizontalPatternToggle.IsOn,
+            Mode = mode,
+            Strength = ValidDouble(HorizontalPatternStrengthBox.Value, current.Strength)
+        });
+        UpdateProfileDescription();
+        UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
+    private void ResetHorizontalPattern_Click(object sender, RoutedEventArgs e)
+    {
+        if (WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
+        {
+            return;
+        }
+
+        SettingsManager.LoadSettings().SetWeaponHorizontalTuning(
+            selected.Name,
+            new HorizontalRecoilTuning());
+        UpdateProfileDescription();
+        UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
     private void ExperimentalTuning_ValueChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
         if (_isInitializing || SettingsManager.CompensationMode != CompensationMode.Experimental ||
@@ -2447,7 +2640,8 @@ public sealed partial class MainPage : UserControl, IDisposable
 
     private void UpdateCalibrationSummary(Settings settings)
     {
-        var scale = settings.CalculateSensitivityScale();
+        var profile = BuildEffectiveSelectedProfile(settings);
+        var scale = settings.CalculateSensitivityScale(profile);
         CalibrationSummaryText.Text =
             $"Scale H {scale.Horizontal:0.000} / V {scale.Vertical:0.000}  ·  " +
             $"master gain {settings.MasterRecoilGain:0.00}×  ·  " +
@@ -2582,6 +2776,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         string ActiveMagnification,
         bool AutomaticMagnification,
         double MasterRecoilGain,
+        double TwoPointFiveAutoVerticalBoost,
         string? WeaponName,
         double WeaponStrength)
     {
@@ -2594,6 +2789,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.ActiveMagnification,
             settings.AutomaticMagnificationEnabled,
             settings.MasterRecoilGain,
+            settings.TwoPointFiveAutoVerticalBoost,
             weaponName,
             string.IsNullOrWhiteSpace(weaponName)
                 ? RecoilStrengthModel.Default
@@ -2611,6 +2807,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.ActiveMagnification = ActiveMagnification;
             settings.AutomaticMagnificationEnabled = AutomaticMagnification;
             settings.MasterRecoilGain = MasterRecoilGain;
+            settings.TwoPointFiveAutoVerticalBoost = TwoPointFiveAutoVerticalBoost;
             if (!string.IsNullOrWhiteSpace(WeaponName))
             {
                 settings.SetWeaponOutputStrength(WeaponName, WeaponStrength);
@@ -2619,6 +2816,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     }
 
     private sealed record CompensationModeOption(CompensationMode Value, string DisplayName);
+    private sealed record HorizontalModeOption(HorizontalPatternMode Value, string DisplayName);
     private sealed record DetectionModeOption(
         OperatorDetectionMode Value,
         string DisplayName,

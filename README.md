@@ -129,7 +129,7 @@ pio run -e waveshare_rp2350_usb_c
 ```
 
 `platformio.ini` pins the Arduino-Pico-compatible platform for both boards and
-pins Pico-PIO-USB for the RP2350 build. `build.bat` compiles both targets. The
+vendors the reviewed Pico-PIO-USB host source for the RP2350 build. `build.bat` compiles both targets. The
 first build downloads its compiler, framework, and library dependencies.
 
 ### Arduino IDE
@@ -237,6 +237,17 @@ The pattern points are useful starting estimates, not extracted game constants. 
 Experimental tuning starts at `1.00`, which is exactly the standard estimated pattern. Calibrate one weapon in the shooting range, change one gain by `0.05` at a time, and use **Reset weapon** to return only that weapon to `1.00`. **First** affects shot one, **Early** the remainder of the first 25% of the magazine, **Mid** 25–70%, **Late** the final 30%, and **Horizontal** the entire trace. These controls provide a safe path toward measured curves; they do not make an unmeasured estimate “perfect.”
 
 Every weapon with recoil output also has a saved **Per-weapon output strength** control. `1.00×` preserves the profile exactly; values below it reduce correction and values above it increase correction. This multiplier works in General, Pattern, Experimental, and Research modes and also scales semi-automatic per-shot correction, so routine range calibration no longer requires editing profile JSON. Custom automatic profiles now generate their curve from their own RPM and magazine-size overrides instead of silently using the built-in timing.
+
+The saved **Horizontal recoil pattern** controls are separate from overall
+output strength. The default **Profile pattern** retains the resolved measured
+or estimated X trace. Per weapon, users can switch to vertical-only output,
+mirror the profile, describe the weapon as pulling left or right, or use an
+alternating sway, then scale only that lateral trace from `0.00×` to `10.00×`.
+Left/right labels describe weapon movement; the emitted correction moves in the
+opposite direction. Overrides are applied to an isolated runtime copy and never
+rewrite built-in, research, or measured profile data. Catalog directions remain
+clearly labeled estimates because Ubisoft does not publish numeric per-shot X
+coordinates.
 
 The research profile is intentionally isolated from the original catalog. Plot pixels cannot be converted directly into HID counts without a controlled calibration, so only within-weapon stage ratios are imported. See [`docs/RESEARCH_RECOIL_PROFILE.md`](docs/RESEARCH_RECOIL_PROFILE.md) for provenance, transformation rules, and limitations.
 

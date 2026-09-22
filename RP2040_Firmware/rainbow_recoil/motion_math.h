@@ -6,6 +6,13 @@
 
 namespace ZeroSenseMotion {
 
+// General-mode smoothing limits are defined at reference sensitivity.
+// Apply the same sensitivity factor to their velocity and acceleration so
+// calibration (including the scoped optic boost) cannot be lost at the cap.
+inline float calibratedLimit(float referenceLimit, float sensitivityFactor) {
+    return referenceLimit * sensitivityFactor;
+}
+
 static constexpr float ReferenceIntervalUs = 8000.0f;
 
 inline float intervalScale(uint32_t intervalUs) {

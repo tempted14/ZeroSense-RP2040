@@ -232,7 +232,14 @@ The first run initializes the supplied calibration: 1600 DPI, horizontal/vertica
 
 The app lists all 115 weapons in the current catalog. Select **General** for a steady adjustment, **Weapon pattern (video-derived estimate)** for the original deterministic RPM-timed trace, **Experimental (per-weapon calibrated)** to tune a separate copy with first/early/mid/late/horizontal gains, or **Research stages (Y11S1.3 estimate)** to compare the supplied model's normalized vertical stage ratios without changing the original profile. Pattern modes are available for 61 automatic weapons and stop after the current magazine size; Experimental falls back to General elsewhere, while Research mode falls back to the original estimate for XK23. Supported semi-automatic profiles enable rapid fire by default and apply recoil per generated shot. The patterns are deliberately labeled estimates: public videos include mouse input and Ubisoft does not publish raw per-shot recoil coordinates.
 
-The Overview page's per-weapon output strength is the safe first calibration control. `1.00×` is neutral, and the selected weapon remembers its own value. It scales every output mode, including semi-automatic per-shot recoil. Custom automatic profile RPM and magazine-size values are honored by both the firmware schedule and generated curve length.
+The Overview page exposes both **Master Recoil Gain** and a remembered
+**Per-weapon Output Strength**. The master calibration starts at `12.00×`, while
+`1.00×` is neutral for an individual weapon. Both accept any finite value from
+`0` through the device's real `127`-unit HID/Q8.8 limit; their product is capped
+at that same representable limit and the UI shows the effective total. They
+scale every output mode, including semi-automatic per-shot recoil. Custom
+automatic profile RPM and magazine-size values are honored by both the firmware
+schedule and generated curve length.
 
 Select **Arm output**, then hold right mouse (aim) and left mouse (fire) together
 to begin a burst. Releasing either button stops generated output immediately;

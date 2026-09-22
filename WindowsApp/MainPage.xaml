@@ -284,12 +284,12 @@
                                                         <TextBlock Text="MASTER RECOIL GAIN"
                                                                    Style="{StaticResource LabelStyle}" />
                                                         <TextBlock x:Name="MasterRecoilGainStatusText"
-                                                                   Text="3.50× calibrated hardware output"
+                                                                   Text="12.00× calibrated hardware output"
                                                                    Style="{StaticResource MutedTextStyle}" />
                                                     </StackPanel>
                                                     <NumberBox x:Name="MasterRecoilGainBox" Grid.Column="1"
-                                                               Minimum="0.5" Maximum="4" Value="3.5"
-                                                               SmallChange="0.05" SpinButtonPlacementMode="Compact"
+                                                               Minimum="0" Maximum="127" Value="12"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
                                                                VerticalAlignment="Center"
                                                                AutomationProperties.Name="Master recoil output gain"
                                                                ValueChanged="MasterRecoilGain_ValueChanged" />
@@ -297,6 +297,27 @@
                                                             VerticalAlignment="Center"
                                                             AutomationProperties.Name="Reset master recoil output gain"
                                                             Click="ResetMasterRecoilGain_Click" />
+                                                </Grid>
+                                            </Border>
+                                            <Border Padding="10" CornerRadius="7"
+                                                    Background="#0B0B0B"
+                                                    BorderBrush="{StaticResource StrokeBrush}"
+                                                    BorderThickness="1">
+                                                <Grid ColumnDefinitions="*,110" ColumnSpacing="9">
+                                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                        <TextBlock Text="2.5× AUTO VERTICAL BOOST"
+                                                                   Style="{StaticResource LabelStyle}" />
+                                                        <TextBlock x:Name="TwoPointFiveBoostStatusText"
+                                                                   Text="Only applies to automatic weapons using a 2.5× optic."
+                                                                   TextWrapping="Wrap"
+                                                                   Style="{StaticResource MutedTextStyle}" />
+                                                    </StackPanel>
+                                                    <NumberBox x:Name="TwoPointFiveBoostBox" Grid.Column="1"
+                                                               Minimum="1" Maximum="4" Value="1"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
+                                                               VerticalAlignment="Center"
+                                                               AutomationProperties.Name="2.5x automatic weapon vertical recoil boost"
+                                                               ValueChanged="TwoPointFiveBoost_ValueChanged" />
                                                 </Grid>
                                             </Border>
                                             <Border Padding="10" CornerRadius="7"
@@ -312,14 +333,51 @@
                                                                    Style="{StaticResource MutedTextStyle}" />
                                                     </StackPanel>
                                                     <NumberBox x:Name="WeaponStrengthBox" Grid.Column="1"
-                                                               Minimum="0.25" Maximum="2" Value="1"
-                                                               SmallChange="0.05" SpinButtonPlacementMode="Compact"
+                                                               Minimum="0" Maximum="127" Value="1"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
                                                                VerticalAlignment="Center"
+                                                               AutomationProperties.Name="Per-weapon recoil output gain"
                                                                ValueChanged="WeaponStrength_ValueChanged" />
                                                     <Button x:Name="ResetWeaponStrengthButton" Grid.Column="2"
                                                             Content="Reset" VerticalAlignment="Center"
                                                             Click="ResetWeaponStrength_Click" />
                                                 </Grid>
+                                            </Border>
+                                            <Border Padding="10" CornerRadius="7"
+                                                    Background="#0B0B0B"
+                                                    BorderBrush="{StaticResource StrokeBrush}"
+                                                    BorderThickness="1">
+                                                <StackPanel Spacing="8">
+                                                    <ToggleSwitch x:Name="HorizontalPatternToggle"
+                                                                  Header="HORIZONTAL RECOIL PATTERN"
+                                                                  OffContent="Vertical only"
+                                                                  OnContent="Horizontal correction enabled"
+                                                                  AutomationProperties.Name="Enable horizontal recoil pattern for this weapon"
+                                                                  Toggled="HorizontalPatternToggle_Toggled" />
+                                                    <Grid ColumnDefinitions="*,110,Auto" ColumnSpacing="9">
+                                                        <ComboBox x:Name="HorizontalPatternModeSelector"
+                                                                  Header="DIRECTION / SHAPE"
+                                                                  DisplayMemberPath="DisplayName"
+                                                                  HorizontalAlignment="Stretch"
+                                                                  AutomationProperties.Name="Horizontal recoil pattern direction"
+                                                                  SelectionChanged="HorizontalPatternModeSelector_SelectionChanged" />
+                                                        <NumberBox x:Name="HorizontalPatternStrengthBox" Grid.Column="1"
+                                                                   Header="STRENGTH"
+                                                                   Minimum="0" Maximum="10" Value="1"
+                                                                   SmallChange="0.05" SpinButtonPlacementMode="Compact"
+                                                                   AutomationProperties.Name="Per-weapon horizontal pattern strength"
+                                                                   ValueChanged="HorizontalPatternStrength_ValueChanged" />
+                                                        <Button x:Name="ResetHorizontalPatternButton" Grid.Column="2"
+                                                                Content="Reset" VerticalAlignment="Bottom"
+                                                                AutomationProperties.Name="Reset horizontal pattern for this weapon"
+                                                                Click="ResetHorizontalPattern_Click" />
+                                                    </Grid>
+                                                    <TextBlock x:Name="HorizontalPatternStatusText"
+                                                               Text="Select a weapon to inspect its horizontal pattern."
+                                                               Style="{StaticResource MutedTextStyle}"
+                                                               TextWrapping="Wrap"
+                                                               AutomationProperties.Name="Horizontal recoil pattern status" />
+                                                </StackPanel>
                                             </Border>
                                             <Border x:Name="ExperimentalTuningPanel"
                                                     Visibility="Collapsed"

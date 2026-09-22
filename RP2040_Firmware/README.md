@@ -28,7 +28,7 @@ buttons, movement, wheel, and pan remain live.
 | RP2040 board menu | `Waveshare RP2040 Zero` |
 | RP2350 build | Checked-in PlatformIO board definition |
 | USB stack | `Adafruit TinyUSB` |
-| PIO-USB library | Commit `5a37a66dc5d3fbe0ef3cdbeda923a757440f984f` |
+| PIO-USB library | Vendored from commit `5a37a66dc5d3fbe0ef3cdbeda923a757440f984f`; targeted EOP fix in `lib/README.md` |
 | RP2350 system clock | 120 MHz |
 
 The canonical sketch is `rainbow_recoil\rainbow_recoil.ino`.
