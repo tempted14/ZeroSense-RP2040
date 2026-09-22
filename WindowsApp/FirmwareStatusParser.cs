@@ -30,7 +30,8 @@ public readonly record struct FirmwareStatusUpdate(
     uint MaximumCorrectionLatenessUs = 0,
     uint CurrentQueuedDelta = 0,
     uint CurrentReportIntervalUs = 0,
-    uint GeneralIntervalClamps = 0);
+    uint GeneralIntervalClamps = 0,
+    uint HostReceiveRecoveries = 0);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -110,7 +111,8 @@ public static class FirmwareStatusParser
         var currentQueuedDelta = 0u;
         var currentReportIntervalUs = 0u;
         var generalIntervalClamps = 0u;
-        if (fields.Length is not (8 or 9 or 14) || fields[0] != "METRICS" ||
+        var hostReceiveRecoveries = 0u;
+        if (fields.Length is not (8 or 9 or 14 or 15) || fields[0] != "METRICS" ||
             !TryParseMetric(fields[1], "HID_SENT", out var hidReportsSent) ||
             !TryParseMetric(fields[2], "HID_BUSY", out var hidBusyDeferrals) ||
             !TryParseMetric(fields[3], "MAX_QUEUE", out var maximumQueuedDelta) ||
@@ -120,7 +122,7 @@ public static class FirmwareStatusParser
             !TryParseMetric(fields[7], "HOST_SATURATIONS", out var hostAccumulatorSaturations) ||
             (fields.Length >= 9 &&
              !TryParseMetric(fields[8], "USB_STOPS", out upstreamDisconnectStops)) ||
-            (fields.Length == 14 &&
+            (fields.Length >= 14 &&
              (!TryParseMetric(fields[9], "CORRECTION_LATE", out correctionDelayedFrames) ||
               !TryParseMetric(
                   fields[10],
@@ -128,7 +130,9 @@ public static class FirmwareStatusParser
                   out maximumCorrectionLatenessUs) ||
               !TryParseMetric(fields[11], "QUEUE", out currentQueuedDelta) ||
               !TryParseMetric(fields[12], "REPORT_INTERVAL_US", out currentReportIntervalUs) ||
-              !TryParseMetric(fields[13], "GENERAL_DT_CLAMPS", out generalIntervalClamps))))
+              !TryParseMetric(fields[13], "GENERAL_DT_CLAMPS", out generalIntervalClamps))) ||
+            (fields.Length == 15 &&
+             !TryParseMetric(fields[14], "HOST_RECOVERIES", out hostReceiveRecoveries)))
         {
             return false;
         }
@@ -147,7 +151,8 @@ public static class FirmwareStatusParser
             MaximumCorrectionLatenessUs: maximumCorrectionLatenessUs,
             CurrentQueuedDelta: currentQueuedDelta,
             CurrentReportIntervalUs: currentReportIntervalUs,
-            GeneralIntervalClamps: generalIntervalClamps);
+            GeneralIntervalClamps: generalIntervalClamps,
+            HostReceiveRecoveries: hostReceiveRecoveries);
         return true;
     }
 

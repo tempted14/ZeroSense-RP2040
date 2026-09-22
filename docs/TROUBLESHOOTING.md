@@ -16,6 +16,15 @@ available. `MOUSE:HOST_ERROR` means the PIO-USB host could not continue its
 report transfer. In either case the app intentionally disables arming. Test a
 plain wired mouse to separate descriptor compatibility from cabling/power.
 
+The app distinguishes **Board online — mouse unavailable** from a complete COM
+disconnect and refreshes device/mouse health every two seconds. Current RP2350
+firmware also uses bounded host polling and automatically re-queues an
+unexpectedly idle HID receive endpoint. The Device-page telemetry reports
+`receive recoveries`; a rising value with working input means the automatic
+recovery path is doing its job. If input remains unavailable after a host error,
+disconnect and reconnect the downstream mouse cable once so TinyUSB can
+enumerate it again.
+
 See [RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md) for the physical checklist.
 
 The board has two distinct USB states. Diagnose the state before changing tools or reinstalling anything.

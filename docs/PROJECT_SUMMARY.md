@@ -168,7 +168,15 @@ The opt-in Experimental mode stores independent first-shot, early, middle, late,
 
 Research mode is a fourth, isolated host-side pattern builder based on the supplied Y11S1.3 estimate table. It reshapes vertical output with per-weapon first-shot and stage ratios for 60 automatic weapons, normalizes each magazine back to the original total vertical HID output, retains the original horizontal trace, and leaves all original profile objects unchanged. The post-dataset XK23 uses the original estimate and the UI identifies the fallback.
 
-A separate neutral-default per-weapon output multiplier scales General baselines, automatic pattern points, Experimental results, and semi-automatic per-shot correction without mutating catalog data. Custom automatic profiles use their effective RPM and magazine size when their deterministic curve is generated, keeping the host pattern and firmware scheduler consistent. Settings migrations are saved atomically after a successful load, and the legacy armed flag is always cleared because arming is session-only.
+A `12.00×` master calibration and a separate neutral-default per-weapon output
+multiplier scale General baselines, automatic pattern points, Experimental
+results, and semi-automatic per-shot correction without mutating catalog data.
+Both controls cover the full `0..127` representable output range and their
+combined result is bounded at 127. Custom automatic profiles use their effective
+RPM and magazine size when their deterministic curve is generated, keeping the
+host pattern and firmware scheduler consistent. Settings migrations are saved
+atomically after a successful load, and the legacy armed flag is always cleared
+because arming is session-only.
 
 The client now depends on a small device interface implemented by both the real
 CDC transport and an explicit no-HID simulator. Output configuration is

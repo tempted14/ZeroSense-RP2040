@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Recover an RP2350 downstream mouse when its HID interrupt receive request is
+  temporarily dropped instead of leaving COM connected with frozen input.
+- Bound the PIO-USB host task wait, poll board/mouse health every two seconds,
+  expose receive-recovery telemetry, and distinguish a live board from an
+  unavailable downstream mouse in the app.
+- Repeat RP2350 board and downstream-mouse identity on every status request so
+  Arm Output does not remain disabled when startup messages precede the app's
+  serial read loop.
+- Preserve a newly mounted HID interface until TinyUSB's authoritative unmount
+  callback fires; querying the device-wide mounted flag from inside the first
+  post-callback host iteration could otherwise discard a valid wired mouse.
+- Raise the master recoil calibration default from 3.50x to 12.00x and make
+  global and per-weapon output independently editable from 0 through the real
+  127-unit HID/Q8.8 limit.
+
 ## 1.6.0 - 2026-09-21
 
 - Restore exact floating-point configuration acknowledgements in both firmware

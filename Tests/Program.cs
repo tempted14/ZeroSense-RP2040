@@ -397,6 +397,7 @@ static void WeaponOutputStrengthIsSafe()
     var adjusted = source.WithOutputStrength(1.5);
     var neutral = source.WithOutputStrength(RecoilStrengthModel.Default);
     var combined = source.WithCombinedOutputStrength(2.5, 1.2);
+    var highOutput = source.WithCombinedOutputStrength(12.0, 4.0);
     Equal(source.VerticalCompensation, neutral.VerticalCompensation,
         "neutral strength preserves vertical output");
     True(source.Pattern.SequenceEqual(neutral.Pattern),
@@ -412,21 +413,33 @@ static void WeaponOutputStrengthIsSafe()
     Equal(-3.0, combined.HorizontalCompensation, "combined master and weapon horizontal output");
     Equal(new RecoilPatternPoint(-6.0f, 12.0f), combined.Pattern[0],
         "combined master and weapon pattern output");
+    Equal(96.0, highOutput.VerticalCompensation,
+        "high custom gain reaches the expanded firmware range");
+    Equal(-48.0, highOutput.HorizontalCompensation,
+        "high custom horizontal gain remains proportional");
+    Equal(new RecoilPatternPoint(-96.0f, 127.0f), highOutput.Pattern[0],
+        "pattern output is bounded only at the representable device limit");
 
     Equal(RecoilStrengthModel.Minimum, RecoilStrengthModel.Normalize(-10),
         "strength lower clamp");
-    Equal(RecoilStrengthModel.Maximum, RecoilStrengthModel.Normalize(10),
+    Equal(10.0, RecoilStrengthModel.Normalize(10),
+        "strength accepts user-selected values inside the HID range");
+    Equal(RecoilStrengthModel.Maximum, RecoilStrengthModel.Normalize(1000),
         "strength upper clamp");
     Equal(RecoilStrengthModel.Default, RecoilStrengthModel.Normalize(double.NaN),
         "strength non-finite fallback");
     Equal(RecoilStrengthModel.MasterMinimum, RecoilStrengthModel.NormalizeMaster(-10),
         "master gain lower clamp");
-    Equal(RecoilStrengthModel.MasterMaximum, RecoilStrengthModel.NormalizeMaster(10),
+    Equal(10.0, RecoilStrengthModel.NormalizeMaster(10),
+        "master gain accepts user-selected values inside the HID range");
+    Equal(RecoilStrengthModel.MasterMaximum, RecoilStrengthModel.NormalizeMaster(1000),
         "master gain upper clamp");
     Equal(RecoilStrengthModel.MasterDefault, RecoilStrengthModel.NormalizeMaster(double.NaN),
         "master gain non-finite fallback");
     Equal(3.0, RecoilStrengthModel.Combine(2.5, 1.2),
         "master and weapon gains combine proportionally");
+    Equal(RecoilStrengthModel.EffectiveMaximum, RecoilStrengthModel.Combine(100, 2),
+        "combined custom gain caps at the representable device limit");
 }
 
 static void ExperimentalTuningIsIsolated()
@@ -504,10 +517,10 @@ static void SettingsNormalizationIsSafe()
         },
         WeaponOutputStrengths = new Dictionary<string, double>
         {
-            [" MP7 "] = 99,
+            [" MP7 "] = 999,
             [" F2 "] = double.NaN
         },
-        MasterRecoilGain = 99,
+        MasterRecoilGain = 999,
         GeneralTimingVarianceEnabled = true,
         DeltaNoiseEnabled = true
     };
@@ -1342,7 +1355,7 @@ static void FirmwareStatusIsParsed()
             "MAX_ACTIVE_GAP_US=1320:HOST_REPORTS=875:HOST_DECODE_ERRORS=2:" +
             "HOST_SATURATIONS=1:USB_STOPS=4:CORRECTION_LATE=7:" +
             "MAX_CORRECTION_LATE_US=2400:QUEUE=5:REPORT_INTERVAL_US=1000:" +
-            "GENERAL_DT_CLAMPS=2",
+            "GENERAL_DT_CLAMPS=2:HOST_RECOVERIES=6",
             out var metrics),
         "transport metrics should parse");
     Equal(FirmwareStatusKind.TransportMetrics, metrics.Kind, "metrics kind");
@@ -1359,6 +1372,7 @@ static void FirmwareStatusIsParsed()
     Equal(5u, metrics.CurrentQueuedDelta, "current queue");
     Equal(1000u, metrics.CurrentReportIntervalUs, "current report interval");
     Equal(2u, metrics.GeneralIntervalClamps, "general dt clamps");
+    Equal(6u, metrics.HostReceiveRecoveries, "host receive recoveries");
     True(
         FirmwareStatusParser.TryParse(
             "METRICS:HID_SENT=1:HID_BUSY=0:MAX_QUEUE=0:" +

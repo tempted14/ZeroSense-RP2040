@@ -5,6 +5,7 @@
 #include "../../RP2040_Firmware/rainbow_recoil/hid_report_decoder.h"
 #include "../../RP2040_Firmware/rainbow_recoil/correction_scheduler.h"
 #include "../../RP2040_Firmware/rainbow_recoil/delta_noise.h"
+#include "../../RP2040_Firmware/rainbow_recoil/host_receive_recovery.h"
 #include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
 
 namespace {
@@ -164,6 +165,24 @@ int main() {
     expect(!parseDescriptor(
         decoder, splitDescriptor, sizeof(splitDescriptor) - 1, mouseApplication),
         "truncated descriptor rejected");
+
+    ZeroSenseHostRecovery::QueueState receiveState = {};
+    expect(
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3) ==
+            ZeroSenseHostRecovery::QueueOutcome::Retry,
+        "first receive queue failure is retryable");
+    expect(
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, true, 3) ==
+            ZeroSenseHostRecovery::QueueOutcome::Recovered,
+        "successful requeue reports recovery");
+    expect(receiveState.consecutiveFailures == 0 && !receiveState.recoveryPending,
+        "successful requeue clears recovery state");
+    ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3);
+    ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3);
+    expect(
+        ZeroSenseHostRecovery::recordQueueAttempt(receiveState, false, 3) ==
+            ZeroSenseHostRecovery::QueueOutcome::Exhausted,
+        "bounded receive failures eventually fail closed");
 
     if (failures == 0) {
         std::cout << "HID replay: all fixtures passed\n";

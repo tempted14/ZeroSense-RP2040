@@ -284,12 +284,12 @@
                                                         <TextBlock Text="MASTER RECOIL GAIN"
                                                                    Style="{StaticResource LabelStyle}" />
                                                         <TextBlock x:Name="MasterRecoilGainStatusText"
-                                                                   Text="3.50× calibrated hardware output"
+                                                                   Text="12.00× calibrated hardware output"
                                                                    Style="{StaticResource MutedTextStyle}" />
                                                     </StackPanel>
                                                     <NumberBox x:Name="MasterRecoilGainBox" Grid.Column="1"
-                                                               Minimum="0.5" Maximum="4" Value="3.5"
-                                                               SmallChange="0.05" SpinButtonPlacementMode="Compact"
+                                                               Minimum="0" Maximum="127" Value="12"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
                                                                VerticalAlignment="Center"
                                                                AutomationProperties.Name="Master recoil output gain"
                                                                ValueChanged="MasterRecoilGain_ValueChanged" />
@@ -312,9 +312,10 @@
                                                                    Style="{StaticResource MutedTextStyle}" />
                                                     </StackPanel>
                                                     <NumberBox x:Name="WeaponStrengthBox" Grid.Column="1"
-                                                               Minimum="0.25" Maximum="2" Value="1"
-                                                               SmallChange="0.05" SpinButtonPlacementMode="Compact"
+                                                               Minimum="0" Maximum="127" Value="1"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
                                                                VerticalAlignment="Center"
+                                                               AutomationProperties.Name="Per-weapon recoil output gain"
                                                                ValueChanged="WeaponStrength_ValueChanged" />
                                                     <Button x:Name="ResetWeaponStrengthButton" Grid.Column="2"
                                                             Content="Reset" VerticalAlignment="Center"
