@@ -1227,11 +1227,12 @@ public sealed partial class MainPage : UserControl, IDisposable
         if (!string.IsNullOrWhiteSpace(selectedWeapon))
         {
             settings.SetWeaponOutputStrength(selectedWeapon, RecoilStrengthModel.Default);
+            settings.SetWeaponFirstBulletKick(selectedWeapon, 1.0);
         }
         settings.Normalize();
         RefreshCalibrationControls(settings);
         CalibrationActionStatusText.Text =
-            "Reference sensitivity, master gain, and this weapon's output strength were reset. Undo is available.";
+            "Reference sensitivity, master gain, and this weapon's output strength and first bullet kick were reset. Undo is available.";
         DiagnosticLog.Record("calibration", $"Reset calibration for {selectedWeapon ?? "no weapon"}.");
         SaveAndSynchronize();
     }
@@ -2183,7 +2184,10 @@ public sealed partial class MainPage : UserControl, IDisposable
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
                     effectiveProfile.RapidFireRoundsPerMinute,
                     settings.GeneralTimingVarianceEnabled,
-                    settings.DeltaNoiseEnabled),
+                    settings.DeltaNoiseEnabled,
+                    SerialProtocol.UsesPattern(settings.CompensationMode) &&
+                        effectiveProfile.HasWeaponPattern
+                        ? settings.GetWeaponFirstBulletKick(effectiveProfile.Name) : 1.0f),
                 cancellationToken);
             if (!connection.IsSimulator)
             {
@@ -2429,6 +2433,61 @@ public sealed partial class MainPage : UserControl, IDisposable
             $"{settings.MasterRecoilGain:0.00}× · profile points cap at 127; high values can flatten their shape";
         UpdateOriginalPatternMultiplierStatus(settings);
         UpdateTwoPointFiveBoostStatus(settings);
+        UpdateFirstBulletKickUi(settings);
+    }
+
+    private void UpdateFirstBulletKickUi(Settings settings)
+    {
+        var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
+        var available = selected?.Profile.HasWeaponPattern == true &&
+            SerialProtocol.UsesPattern(settings.CompensationMode);
+        var multiplier = selected is null ? 1.0f :
+            settings.GetWeaponFirstBulletKick(selected.Name);
+        var wasInitializing = _isInitializing;
+        _isInitializing = true;
+        try
+        {
+            FirstBulletKickBox.Value = multiplier;
+            FirstBulletKickBox.IsEnabled = available;
+            ResetFirstBulletKickButton.IsEnabled = available && multiplier != 1.0f;
+        }
+        finally
+        {
+            _isInitializing = wasInitializing;
+        }
+        FirstBulletKickStatusText.Text = selected is null
+            ? "Select an automatic weapon; 1.00× leaves the first bullet unchanged."
+            : available
+                ? $"{selected.Name}: {multiplier:0.00}× first-shot vertical only, after the pattern limit."
+                : "Only applies to an automatic weapon in a pattern mode; saved tuning is retained.";
+    }
+
+    private void FirstBulletKick_ValueChanged(
+        NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_isInitializing || WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
+        {
+            return;
+        }
+        var settings = SettingsManager.LoadSettings();
+        settings.SetWeaponFirstBulletKick(selected.Name,
+            ValidDouble(sender.Value, settings.GetWeaponFirstBulletKick(selected.Name)));
+        UpdateFirstBulletKickUi(settings);
+        UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
+    private void ResetFirstBulletKick_Click(object sender, RoutedEventArgs e)
+    {
+        if (WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
+        {
+            return;
+        }
+        var settings = SettingsManager.LoadSettings();
+        settings.SetWeaponFirstBulletKick(selected.Name, 1.0);
+        UpdateFirstBulletKickUi(settings);
+        UpdateOverlayContent();
+        SaveAndSynchronize();
     }
 
     private void UpdateOriginalPatternMultiplierStatus(Settings settings)
@@ -2831,7 +2890,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         double TwoPointFiveAutoVerticalBoost,
         double OriginalPatternOutputMultiplier,
         string? WeaponName,
-        double WeaponStrength)
+        double WeaponStrength,
+        float FirstBulletKick)
     {
         public static CalibrationSnapshot Capture(Settings settings, string? weaponName) => new(
             settings.HorizontalSensitivity,
@@ -2847,7 +2907,10 @@ public sealed partial class MainPage : UserControl, IDisposable
             weaponName,
             string.IsNullOrWhiteSpace(weaponName)
                 ? RecoilStrengthModel.Default
-                : settings.GetWeaponOutputStrength(weaponName));
+                : settings.GetWeaponOutputStrength(weaponName),
+            string.IsNullOrWhiteSpace(weaponName)
+                ? 1.0f
+                : settings.GetWeaponFirstBulletKick(weaponName));
 
         public void Restore(Settings settings)
         {
@@ -2866,6 +2929,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             if (!string.IsNullOrWhiteSpace(WeaponName))
             {
                 settings.SetWeaponOutputStrength(WeaponName, WeaponStrength);
+                settings.SetWeaponFirstBulletKick(WeaponName, FirstBulletKick);
             }
         }
     }

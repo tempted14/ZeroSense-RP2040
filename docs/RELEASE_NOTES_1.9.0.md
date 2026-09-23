@@ -1,49 +1,47 @@
-# ZeroSense v1.9.0 — local validation build
+# ZeroSense v1.9.0 — hardware-validation prerelease
 
-**Not published or hardware-certified.** This version addresses regressions
-in the unreleased RP2350 host-stall candidates. Real 1000 Hz passthrough and a
-sustained soak on the affected RP2350/VXE mouse remain acceptance gates.
+This build compiles and passes automated tests, but **RP2350 passthrough and
+1000 Hz stability have not been re-tested on the affected physical board**.
+Use it as a prerelease and keep your known-good rollback UF2. Software-only
+tests cannot prove that the intermittent mouse freeze is resolved.
 
-## RP2350 USB changes
+## First-bullet vertical kick
 
-- Restore the confirmed v1.8 rollback's bus sequencing and disconnect detection.
-- Remove extra timer reads from critical transmit/RX-clear waits. Replace
-  indefinite polling with register-only fault budgets, keeping the existing
-  EOP-tail race fix and protocol response timers.
-- Reject oversized/babbling RX before buffer overrun or index wrap.
-- Reinitialize stuck RX/EOP state only on a confirmed guard failure, not
-  during healthy traffic. Discard the failed transaction before retrying.
-- Propagate failed transfer/receive-start results into endpoint retries; do
-  not use stale handshake bytes or report a failed ACK as success.
-- Separate empty HID callbacks from non-empty decoder failures in diagnostics.
+- A per-weapon **First bullet vertical kick** control is available in
+  automatic pattern modes. `1.00×` is neutral; the range is `1.00–4.00×`.
+  Select Buck and C8-SFW, for example, to tune only that gun.
+- The device multiplies only the first vertical pattern point, after the
+  Q8.8 profile limit. Later shots, horizontal input, the original source
+  pattern, and physical mouse passthrough are unchanged. The saved value is
+  inactive in General mode. Experimental first-shot tuning is separate and
+  can compound with this control.
+- The app saves this setting by weapon name, shows it on selection, includes
+  it in diagnostics, requires exact device readback, and binds it into the
+  transactional configuration hash. Firmware configuration schema is now 4,
+  so **update the app and matching UF2 together**. The firmware reports
+  `BUILD:V1.9-FIRST-KICK-20260923` in STATUS.
 
-## Desktop polish
+## RP2350 host recovery candidate
 
-- App and Windows manifest identify v1.9.0; UI labels this as validation.
-- Short, current-sample USB summary with approximate accepted-input, empty
-  callback and outgoing-HID rates. Idle traffic is not called a disconnect.
-- Detect and label a stalled host task even if serial still responds.
-- Collapsible, selectable lifetime counters; firmware build shown separately.
-- BUILD/STATUS protocol replies no longer overwrite the connection explanation.
-- Counter resets, wraps and long sample gaps cannot produce bogus rate spikes.
+- Restores the confirmed v1.8 rollback's bus sequencing and disconnect
+  detection while bounding RX/EOP waits. Invalid or failed transfers are
+  discarded and retried instead of reusing stale handshake/report bytes.
+- Separates empty HID callbacks from decoder failures in diagnostics. The app
+  labels a stalled host task, summarizes current-sample rates, and does not
+  mistake idle traffic for a disconnect.
 
-## Retained
+## Retained and compatibility
 
-Existing profiles, original-pattern multiplier, global/per-weapon tuning,
-horizontal options, 2.5x boost, jitter and delta noise are unchanged. Settings
-schema and configuration protocol are unchanged. No calibration migration is
-introduced. RP2040 remains an output-only board; local physical-button
-activation stays RP2350-only.
+Stock/research/measured profile sources, master and per-weapon gain, original
+pattern multiplier, horizontal tuning, 2.5× optic boost, optional timing
+variance, and optional delta noise are retained. Older saved settings remain
+readable; absent first-bullet settings default to neutral. RP2040 remains an
+output-only board; RP2350 local M1+M2 activation remains device-local.
 
-## Installation and rollback
+Download the **Starter Bundle** for the app, setup guide, and one UF2 per
+board. Flash only the image matching your board. Verify the bundle against
+`SHA256SUMS.txt` before extracting. The portable app may be unsigned;
+checksums and GitHub provenance are not an Authenticode publisher signature.
 
-Use the local validation package's START_HERE guide. The package includes the
-v1.9 portable app, both explicitly named UF2 targets, diagnostics, checksums
-and a byte-for-byte copy of the user's confirmed-good RP2350 rollback.
-Never flash the RP2040 file onto RP2350. The portable app is unsigned; a local
-SHA256 manifest checks integrity, not publisher authenticity. No signing
-certificate or GitHub attestation is claimed for these local artifacts.
-
-For investigation details, rejected builds, evidence and verification limits,
-see [the USB audit](HOST_STALL_TEST_2026-09-22.md). Software tests do not
-prove hardware polling quality or eliminate every possible disconnect cause.
+For the investigation and testing limits, see
+[the USB audit](HOST_STALL_TEST_2026-09-22.md).

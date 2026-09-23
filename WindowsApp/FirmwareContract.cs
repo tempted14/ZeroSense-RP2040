@@ -81,6 +81,11 @@ internal static class FirmwareContract
             $":DELTA_NOISE={(deltaNoiseEnabled ? "ON" : "OFF")}",
             StringComparison.Ordinal);
 
+    public static bool FirstBulletKickAcknowledgementMatches(string line, float multiplier) =>
+        line.Equals(
+            string.Create(CultureInfo.InvariantCulture, $"FIRST_BULLET_KICK:V={multiplier:F3}"),
+            StringComparison.Ordinal);
+
     public static bool PatternAcknowledgementMatches(string line, WeaponProfile profile) =>
         line.Equals(
             $"PATTERN:READY:{Math.Min(profile.Pattern.Length, MaximumPatternPoints)}",
