@@ -314,6 +314,7 @@ static std::atomic<MouseProxyEvent> mouseProxyEvent{MouseProxyEvent::None};
 static std::atomic<bool> hostMouseFaultPending{false};
 static std::atomic<uint32_t> hostReportsReceived{0};
 static std::atomic<uint32_t> hostDecodeErrors{0};
+static std::atomic<uint32_t> hostEmptyReports{0};
 static std::atomic<uint32_t> hostAccumulatorSaturations{0};
 static std::atomic<uint32_t> hostReceiveRecoveries{0};
 static std::atomic<uint32_t> hostReceiveQueueFailures{0};
@@ -617,6 +618,12 @@ void tuh_hid_report_received_cb(
         instance);
     if (mouseInterface != nullptr && !mouseInterface->bootProtocolPending) {
         hostReportsReceived.fetch_add(1, std::memory_order_relaxed);
+        // TinyUSB HID also invokes this callback for failed transfers with
+        // zero bytes. Keep the legacy error total, but distinguish those
+        // callbacks from non-empty reports rejected by the HID decoder.
+        if (length == 0) {
+            hostEmptyReports.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!decode_host_mouse_report(*mouseInterface, report, length)) {
             hostDecodeErrors.fetch_add(1, std::memory_order_relaxed);
         } else {
@@ -948,7 +955,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:HOST-RX-HANDSHAKE-X2-20260922");
+    protocol_println("BUILD:HOST-BASELINE-GUARDS-X2-20260923");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (hostCoreStalled.load(std::memory_order_acquire)) {
@@ -1394,9 +1401,13 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 uint32_t pioRxFlagTimeouts = 0;
                 uint32_t pioRxPacketTimeouts = 0;
                 uint32_t pioFilteredDisconnects = 0;
+                uint32_t hostEmpty = 0;
+                uint32_t pioRxOversize = 0;
 #ifdef ZEROSENSE_RP2350_USB_C
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
+                hostEmpty = hostEmptyReports.load(std::memory_order_relaxed);
+                pioRxOversize = pio_usb_host_rx_oversize_count();
                 hostSaturations =
                     hostAccumulatorSaturations.load(std::memory_order_relaxed);
                 hostRecoveries = hostReceiveRecoveries.load(std::memory_order_relaxed);
@@ -1428,7 +1439,8 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     "HOST_RECOVERIES=%lu:HOST_QUEUE_FAILURES=%lu:HOST_UNMOUNTS=%lu:"
                     "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu:"
                     "PIO_TX_TIMEOUTS=%lu:PIO_RX_FLAG_TIMEOUTS=%lu:"
-                    "PIO_RX_PACKET_TIMEOUTS=%lu:PIO_SE0_GLITCHES=%lu\n",
+                    "PIO_RX_PACKET_TIMEOUTS=%lu:PIO_SE0_GLITCHES=%lu:"
+                    "HOST_EMPTY_REPORTS=%lu:PIO_RX_OVERSIZE=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1450,7 +1462,9 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(pioTxTimeouts),
                     static_cast<unsigned long>(pioRxFlagTimeouts),
                     static_cast<unsigned long>(pioRxPacketTimeouts),
-                    static_cast<unsigned long>(pioFilteredDisconnects));
+                    static_cast<unsigned long>(pioFilteredDisconnects),
+                    static_cast<unsigned long>(hostEmpty),
+                    static_cast<unsigned long>(pioRxOversize));
             }
             break;
 

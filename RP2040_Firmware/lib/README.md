@@ -16,18 +16,22 @@ testable. The change is based on upstream
 The full PR remains unmerged and has compatibility reports, so the original
 v1.7.0 release copied only that EOP change.
 
-The separate, unreleased RP2350 host-stall test build selectively adds bounded
-TX completion and packet-receive waits, plus a 100 us disconnect debounce,
-based on the remaining issues described in
-[PR #206](https://github.com/sekigon-gonnoc/Pico-PIO-USB/pull/206). Its TX
-fault budget is longer than the upstream proposal because that timeout drew
-device-compatibility reports. The first test build also reset the EOP detector
-before each transaction and waited for all RX flags to stay clear after TX;
-on the affected board it failed mouse enumeration with 30 RX flag timeouts.
-The next replacement left the EOP detector running and cleared post-TX flags
-once, which restored enumeration but produced roughly 80% downstream report
-decode errors and only ~280-320 host reports per second on the affected mouse.
-The current test candidate restores the original RX flag-clear handshake with
-a bounded timeout, while leaving EOP re-arming disabled. It still requires a sustained
-test with the affected RP2350 and mouse. None of these changes are part of the
-published v1.7.0 firmware.
+Three later host-stall candidates failed the user's RP2350 testing. They
+shared new timer reads in timing-sensitive TX/RX paths; an upstream comment
+specifically reports TX timer polling causing device-recognition failures.
+Increasing a timeout's duration does not eliminate that overhead. We did not
+isolate EOP reset or single-clear as individual causes, and the old decode
+counter also includes zero-byte transfer failures, not just malformed reports.
+
+The current unreleased candidate returns to the confirmed rollback's bus
+ordering, EOP state and disconnect behavior. `pio_usb_host_guard.h` supplies
+register-only fault-bounded waits (not calibrated USB timeouts) and a capacity
+check that rejects babbling RX before buffer/index overflow. The existing
+response/inter-byte timers are unchanged. Transfer failures propagate to
+normal endpoint retries rather than stale-buffer processing. Fake-register
+and capacity tests run as part of `Tests/HidReplay/hid_replay_tests.cpp`.
+
+See `docs/HOST_STALL_TEST_2026-09-22.md` for each failed candidate, new counter
+semantics, verification limits and physical acceptance steps. The current
+candidate is software-tested only; real 1000 Hz passthrough and a long soak
+with the affected RP2350/mouse are still required. No new release is published.

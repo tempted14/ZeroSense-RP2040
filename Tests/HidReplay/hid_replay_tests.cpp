@@ -23,8 +23,11 @@ void expect(bool condition, const char* name) {
 }
 }
 
+#include "pio_host_guard_tests.h"
+
 int main() {
     using namespace ZeroSenseHid;
+    testPioHostGuards();
 
     expect(pio_usb_host_bit_cycles(2, 128) == 10,
         "120 MHz full-speed PIO bit timing includes half-cycle divider");
@@ -32,12 +35,6 @@ int main() {
         "integer PIO divider timing remains exact");
     expect(pio_usb_host_bit_cycles(2, 1) == 9,
         "fractional PIO timing rounds up before EOP wait");
-    expect(pio_usb_host_tx_timeout_us(64, false) == 2256 &&
-        pio_usb_host_tx_timeout_us(8, true) == 2192,
-        "PIO TX fault budget covers both bus speeds");
-    expect(!pio_usb_host_timeout_elapsed(UINT32_MAX - 100, 1899, 2000) &&
-        pio_usb_host_timeout_elapsed(UINT32_MAX - 100, 1900, 2000),
-        "PIO timeout deadline survives microsecond counter wrap");
     expect(!ZeroSenseHostHealth::stalled(0, 100000, 500),
         "host watchdog does not trip before the first heartbeat");
     expect(!ZeroSenseHostHealth::stalled(2000, 2500, 500) &&

@@ -8,9 +8,8 @@
 #include "hardware/pio.h"
 #include "hardware/regs/sysinfo.h"
 #include "pio_usb_configuration.h"
-#include "pio_usb_host_timing.h"
+#include "pio_usb_host_guard.h"
 #include "usb_definitions.h"
-#include "usb_crc.h"
 #include <stdint.h>
 
 #include "usb_tx.pio.h"
@@ -133,12 +132,13 @@ void pio_usb_bus_init(pio_port_t *pp, const pio_usb_configuration_t *c,
                       root_port_t *root);
 
 void pio_usb_bus_prepare_receive(const pio_port_t *pp);
+void pio_usb_bus_recover_receive(const pio_port_t *pp);
 int pio_usb_bus_receive_packet_and_handshake(pio_port_t *pp, uint8_t handshake);
-void pio_usb_bus_usb_transfer(pio_port_t *pp, uint8_t *data,
+bool pio_usb_bus_usb_transfer(pio_port_t *pp, uint8_t *data,
                               uint16_t len);
 
 uint8_t pio_usb_bus_wait_handshake(pio_port_t *pp);
-void pio_usb_bus_send_token(pio_port_t *pp, uint8_t token, uint8_t addr,
+bool pio_usb_bus_send_token(pio_port_t *pp, uint8_t token, uint8_t addr,
                             uint8_t ep_num);
 
 static __always_inline port_pin_status_t
@@ -169,19 +169,17 @@ pio_usb_bus_get_line_state(root_port_t *root) {
 
 void pio_usb_host_record_rx_flag_timeout(void);
 
-static __always_inline void pio_usb_bus_start_receive(const pio_port_t *pp) {
-  // Preserve the upstream flag-clear handshake. A single write without a
-  // readback allowed stale TX-side receive flags to contaminate many mouse
-  // packets on the affected RP2350 (HOST_DECODE_ERRORS rose ~80%). Bound the
-  // wait so an abnormal stuck flag cannot freeze the host core forever.
+static __always_inline bool pio_usb_bus_start_receive(const pio_port_t *pp) {
+  // Preserve the rollback's clear/readback ordering, without timer reads
+  // between clearing the flags and observing their acknowledgement.
   pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;
-  const uint32_t start_us = get_time_us_32();
-  while ((pp->pio_usb_rx->irq & IRQ_RX_ALL_MASK) != 0) {
-    if (pio_usb_host_timeout_elapsed(start_us, get_time_us_32(), 1000u)) {
-      pio_usb_host_record_rx_flag_timeout();
-      break;
-    }
+  if (!pio_usb_host_wait_clear(&pp->pio_usb_rx->irq, IRQ_RX_ALL_MASK,
+                               PIO_USB_HOST_WAIT_POLLS)) {
+    pio_usb_host_record_rx_flag_timeout();
+    pio_usb_bus_recover_receive(pp);
+    return false;
   }
+  return true;
 }
 
 //--------------------------------------------------------------------+

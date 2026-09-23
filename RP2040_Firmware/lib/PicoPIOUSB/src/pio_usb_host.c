@@ -17,7 +17,6 @@
 
 #include "pio_usb.h"
 #include "pio_usb_ll.h"
-#include "pio_usb_host_timing.h"
 #include "usb_crc.h"
 
 enum {
@@ -220,10 +219,9 @@ static void __not_in_flash_func(busy_wait_1_us)(void) {
   }
 }
 
-static uint32_t filtered_disconnects;
-
 uint32_t pio_usb_host_filtered_disconnect_count(void) {
-  return __atomic_load_n(&filtered_disconnects, __ATOMIC_RELAXED);
+  // Legacy metric: keep the wire schema while restoring baseline detection.
+  return 0;
 }
 
 static bool __no_inline_not_in_flash_func(connection_check)(root_port_t *port) {
@@ -231,16 +229,6 @@ static bool __no_inline_not_in_flash_func(connection_check)(root_port_t *port) {
     busy_wait_1_us();
 
     if (pio_usb_bus_get_line_state(port) == PORT_PIN_SE0) {
-      // A brief SE0 glitch must not retire all endpoints while the mouse is
-      // still physically attached. A real detach remains SE0 throughout.
-      const uint32_t se0_start_us = get_time_us_32();
-      while (!pio_usb_host_timeout_elapsed(
-          se0_start_us, get_time_us_32(), 100u)) {
-        if (pio_usb_bus_get_line_state(port) != PORT_PIN_SE0) {
-          __atomic_fetch_add(&filtered_disconnects, 1u, __ATOMIC_RELAXED);
-          return true;
-        }
-      }
       busy_wait_1_us();
       // device disconnect
       port->connected = false;
@@ -557,11 +545,10 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
   uint8_t expect_pid = (ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0;
 
   pio_usb_bus_prepare_receive(pp);
-  pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num);
-  pio_usb_bus_start_receive(pp);
-
-  int receive_len = pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK);
-  uint8_t const receive_pid = pp->usb_rx_buffer[1];
+  const bool ready = pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num) &&
+                     pio_usb_bus_start_receive(pp);
+  int receive_len = ready ? pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK) : -1;
+  uint8_t const receive_pid = ready ? pp->usb_rx_buffer[1] : 0;
 
   if (receive_len >= 0) {
     if (receive_pid == expect_pid) {
@@ -611,15 +598,12 @@ static int __no_inline_not_in_flash_func(usb_out_transaction)(pio_port_t *pp,
   uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
 
   pio_usb_bus_prepare_receive(pp);
-  pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
-
-  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
-  pio_usb_bus_start_receive(pp);
-
-  pio_usb_bus_wait_handshake(pp);
+  const bool ready = pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num) &&
+                     pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len) &&
+                     pio_usb_bus_start_receive(pp);
+  // Use the validated handshake, never a stale byte after a failed wait.
+  uint8_t const receive_token = ready ? pio_usb_bus_wait_handshake(pp) : 0;
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false);
-
-  uint8_t const receive_token = pp->usb_rx_buffer[1];
 
   if (receive_token == USB_PID_ACK) {
     pio_usb_ll_transfer_continue(ep, xact_len);
@@ -651,15 +635,16 @@ static int __no_inline_not_in_flash_func(usb_setup_transaction)(
 
   // Setup token
   pio_usb_bus_prepare_receive(pp);
-  pio_usb_bus_send_token(pp, USB_PID_SETUP, ep->dev_addr, 0);
+  const bool token_sent = pio_usb_bus_send_token(pp, USB_PID_SETUP, ep->dev_addr, 0);
 
   // Data
   ep->data_id = 0; // set to DATA0
-  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
+  const bool ready = token_sent &&
+                     pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len) &&
+                     pio_usb_bus_start_receive(pp);
 
   // Handshake
-  pio_usb_bus_start_receive(pp);
-  const uint8_t handshake = pio_usb_bus_wait_handshake(pp);
+  const uint8_t handshake = ready ? pio_usb_bus_wait_handshake(pp) : 0;
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false);
 
   if (handshake == USB_PID_ACK) {

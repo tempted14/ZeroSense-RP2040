@@ -18,6 +18,7 @@ uint32_t pio_usb_host_get_frame_number(void);
 uint32_t pio_usb_host_tx_timeout_count(void);
 uint32_t pio_usb_host_rx_flag_timeout_count(void);
 uint32_t pio_usb_host_rx_packet_timeout_count(void);
+uint32_t pio_usb_host_rx_oversize_count(void);
 uint32_t pio_usb_host_filtered_disconnect_count(void);
 
 // Call this every 1ms when skip_alarm_pool is true.

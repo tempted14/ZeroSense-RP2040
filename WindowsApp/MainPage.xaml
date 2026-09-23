@@ -954,6 +954,20 @@
                                                    Text="Transport: metrics appear after configuration sync"
                                                    FontSize="11" Foreground="#A8A8A8" TextWrapping="Wrap"
                                                    AutomationProperties.LiveSetting="Polite" />
+                                        <TextBlock x:Name="FirmwareBuildText"
+                                                   Text="Firmware build: waiting for device"
+                                                   FontSize="11" TextWrapping="Wrap"
+                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                   IsTextSelectionEnabled="True" />
+                                        <Expander Header="USB diagnostic counters (since board boot)"
+                                                  HorizontalAlignment="Stretch"
+                                                  HorizontalContentAlignment="Stretch"
+                                                  AutomationProperties.Name="USB diagnostic counters">
+                                            <TextBlock x:Name="FirmwareTelemetryDetailsText"
+                                                       Text="Waiting for counters."
+                                                       FontSize="11" TextWrapping="Wrap"
+                                                       IsTextSelectionEnabled="True" />
+                                        </Expander>
                                     </StackPanel>
                                 </Border>
                             </Grid>

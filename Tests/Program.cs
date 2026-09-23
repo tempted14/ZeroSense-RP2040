@@ -44,6 +44,7 @@ var tests = new (string Name, Action Run)[]
     ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
     ("configuration validator rejects unsafe output", ConfigurationValidationFailsClosed),
     ("firmware status identifies both boards and proxy mouse state", FirmwareStatusIsParsed),
+    ("USB diagnostics distinguish recent faults, idle input and counter resets", TransportDiagnosticsAreAccurate),
     ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath),
     ("release updates report assets without assuming a signature", ReleaseUpdatesAreReportedTruthfully)
 };
@@ -1622,6 +1623,20 @@ static void FirmwareStatusIsParsed()
     Equal(30u, pioStatus.PioRxFlagTimeouts, "PIO RX flag timeouts");
     Equal(2u, pioStatus.PioRxPacketTimeouts, "PIO RX packet timeouts");
     Equal(4u, pioStatus.PioSe0Glitches, "filtered PIO SE0 glitches");
+    const string guardedMetrics = pioMetrics + ":HOST_EMPTY_REPORTS=246:PIO_RX_OVERSIZE=7";
+    True(FirmwareStatusParser.TryParse(guardedMetrics, out var guardedStatus),
+        "baseline-guards telemetry is recognized without overwriting connection state");
+    Equal(246u, guardedStatus.HostEmptyReports, "empty callbacks are distinct from decode errors");
+    Equal(7u, guardedStatus.PioRxOversize, "oversized USB packets");
+    Equal(30u, guardedStatus.PioRxFlagTimeouts, "new metrics retain older PIO fields");
+    foreach (var malformed in new[] {
+        guardedMetrics.Replace("HOST_EMPTY_REPORTS=246", "HOST_EMPTY_REPORTS=-1"),
+        guardedMetrics.Replace("PIO_RX_OVERSIZE=7", "PIO_RX_OVERSIZE=4294967296"),
+        guardedMetrics.Replace(":PIO_RX_OVERSIZE=7", ""),
+        guardedMetrics.Replace("PIO_TX_TIMEOUTS=1", "PIO_TX_TIMEOUTS=bad") })
+    {
+        True(!FirmwareStatusParser.TryParse(malformed, out _), "invalid extended telemetry rejected");
+    }
     True(!FirmwareStatusParser.TryParse(
         pioMetrics.Replace("PIO_RX_FLAG_TIMEOUTS=30", "PIO_RX_FLAG_TIMEOUTS=bad"), out _),
         "malformed PIO telemetry is rejected");
@@ -1652,6 +1667,53 @@ static void FirmwareStatusIsParsed()
             "HOST_SATURATIONS=1:USB_STOPS=4",
             out _),
         "malformed metrics must fail closed");
+}
+
+static void TransportDiagnosticsAreAccurate()
+{
+    var monitor = new FirmwareTransportMonitor();
+    var initial = new FirmwareStatusUpdate(FirmwareStatusKind.TransportMetrics,
+        HidReportsSent: 100, HostReportsReceived: 200, HostDecodeErrors: 10,
+        HostEmptyReports: 5, HostTaskAgeMs: 0);
+    True(monitor.Observe(initial, 10, true).AcceptedReportsPerSecond is null,
+        "first sample never invents a rate");
+    var current = initial with { HidReportsSent = 1700, HostReportsReceived = 2200,
+        HostDecodeErrors = 210, HostEmptyReports = 145 };
+    var active = monitor.Observe(current, 12, true);
+    Equal(900d, active.AcceptedReportsPerSecond!.Value, "rate excludes rejected callbacks");
+    Equal(70d, active.EmptyCallbacksPerSecond!.Value, "empty completion rate is separate");
+    Equal(800d, active.HidReportsPerSecond!.Value, "outgoing rate uses actual elapsed time");
+    True(active.Warning, "new errors warn");
+    var idle = monitor.Observe(current, 14, true);
+    Equal(0d, idle.AcceptedReportsPerSecond!.Value, "idle rate is zero");
+    True(!idle.Warning && idle.Summary.Contains("idle", StringComparison.Ordinal),
+        "no traffic alone is not labeled a disconnect and old faults are not new faults");
+    var stalled = monitor.Observe(current with { HostTaskAgeMs = 1500 }, 16, true);
+    True(stalled.Warning && stalled.Summary.Contains("stalled", StringComparison.Ordinal),
+        "frozen host core is distinct from healthy serial connection");
+    var reboot = monitor.Observe(initial, 18, true);
+    True(reboot.AcceptedReportsPerSecond is null, "counter reset rebaselines without a rate spike");
+    var longGap = monitor.Observe(current, 100, true);
+    True(longGap.AcceptedReportsPerSecond is null, "long gaps do not claim current polling");
+    monitor.Reset();
+    True(monitor.Observe(initial, 101, false).AcceptedReportsPerSecond is null,
+        "explicit reconnect discards previous rate history");
+    var rp2040 = monitor.Observe(initial with { HidReportsSent = 1100, HostTaskAgeMs = 6000 }, 103, false);
+    True(!rp2040.Warning && !rp2040.Summary.Contains("mouse reports", StringComparison.Ordinal),
+        "RP2040 output-only mode does not claim a downstream mouse rate or host stall");
+    monitor.Reset();
+    monitor.Observe(initial with { HostReportsReceived = uint.MaxValue }, 200, true);
+    True(monitor.Observe(initial, 202, true).AcceptedReportsPerSecond is null,
+        "32-bit counter wrap rebaselines safely");
+    monitor.Reset();
+    monitor.Observe(initial, 300, true);
+    True(monitor.Observe(initial, 300.01, true).AcceptedReportsPerSecond is null,
+        "closely-spaced config responses do not generate a rate spike");
+    Equal(900d, monitor.Observe(current, 302, true).AcceptedReportsPerSecond!.Value,
+        "rapid responses do not discard the original rate baseline");
+    var inconsistent = current with { HostDecodeErrors = current.HostDecodeErrors + 1 };
+    Equal(0d, monitor.Observe(inconsistent, 304, true).AcceptedReportsPerSecond!.Value,
+        "cross-core snapshot skew cannot produce a negative rate");
 }
 
 static void SimulatorExercisesConfigurationPath()
