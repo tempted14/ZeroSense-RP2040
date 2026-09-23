@@ -1,0 +1,51 @@
+ZeroSense v1.9.0 - RP2350 USB recovery validation
+=============================================
+
+This is a local, unsigned portable build, NOT a published stable release.
+Software tests passed. Real mouse polling and long-run stability still need
+your hardware test. Recoil profiles, multipliers, jitter and delta noise stay
+unchanged. Your confirmed-good rollback is included separately.
+
+1. Keep a backup mouse directly connected to your PC. Close ZeroSense.
+2. Put the RP2350 into BOOTSEL: hold BOOT while connecting its PC-facing USB
+   port (or hold BOOT, tap RESET, then release BOOT when the drive appears).
+3. Copy this ONE file to the BOOTSEL drive:
+   Firmware\ZeroSense-RP2350-USB-C-1.9.0-validation.uf2
+   Do not delete INDEX/INFO_UF2. The drive disappearing after copying is normal.
+   Do NOT use the RP2040 UF2 on your RP2350.
+4. Connect your mouse using the same cable/adapter orientation that worked
+   with the rollback. Check passthrough FIRST, with the app still closed.
+   Test movement, buttons, scroll wheel and sustained movement at 1000 Hz.
+5. If passthrough is good, open App\zerosense.exe. Keep the entire App folder
+   together; do not copy the exe out on its own. No SDK or PlatformIO is needed.
+   The top bar should say v1.9.0 validation.
+6. Device diagnostics show approximate accepted-input and outgoing-HID rates,
+   plus collapsible counters. These are not a guarantee of Windows polling Hz.
+   The firmware build must be HOST-BASELINE-GUARDS-X2-20260923.
+7. Test idle/resume and a long session beyond the old freeze interval. Test
+   Arm Output separately only after ordinary passthrough is stable.
+
+IF IT FAILS
+-----------
+Stop testing. Before unplugging, copy the app's diagnostic report if possible.
+For a standalone read: close the app, open PowerShell in this folder and run:
+
+  .\tools\read_usb_status.ps1 -Port COM4
+
+Use your actual COM port if it changed. This script does not arm or reconfigure
+the board. If Windows cannot open the COM port, record the error; a failed
+capture does not mean the counters were zero.
+
+To return to the confirmed-good firmware, enter BOOTSEL again and copy:
+  Rollback\CONFIRMED-GOOD-RP2350-X2.uf2
+
+Rollback SHA256:
+6af79744b80c9f770208ae5037e3e14511d593501742b9feb8473c469432afe4
+
+SHA256SUMS.txt lists every packaged file. Checksums detect changed files but
+are not a publisher signature. No Authenticode signature is claimed here.
+The app is self-contained for .NET/Windows App SDK. Do not disable antivirus
+or system security to run it. If blocked, retain the known-good build and
+report the exact warning instead.
+
+See RELEASE_NOTES_1.9.0.md and HOST_STALL_TEST_2026-09-22.md for details.

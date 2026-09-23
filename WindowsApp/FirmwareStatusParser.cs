@@ -39,7 +39,9 @@ public readonly record struct FirmwareStatusUpdate(
     uint PioTxTimeouts = 0,
     uint PioRxFlagTimeouts = 0,
     uint PioRxPacketTimeouts = 0,
-    uint PioSe0Glitches = 0);
+    uint PioSe0Glitches = 0,
+    uint HostEmptyReports = 0,
+    uint PioRxOversize = 0);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -128,7 +130,9 @@ public static class FirmwareStatusParser
         var pioRxFlagTimeouts = 0u;
         var pioRxPacketTimeouts = 0u;
         var pioSe0Glitches = 0u;
-        if (fields.Length is not (8 or 9 or 14 or 15 or 19 or 23) || fields[0] != "METRICS" ||
+        var hostEmptyReports = 0u;
+        var pioRxOversize = 0u;
+        if (fields.Length is not (8 or 9 or 14 or 15 or 19 or 23 or 25) || fields[0] != "METRICS" ||
             !TryParseMetric(fields[1], "HID_SENT", out var hidReportsSent) ||
             !TryParseMetric(fields[2], "HID_BUSY", out var hidBusyDeferrals) ||
             !TryParseMetric(fields[3], "MAX_QUEUE", out var maximumQueuedDelta) ||
@@ -154,11 +158,14 @@ public static class FirmwareStatusParser
               !TryParseMetric(fields[16], "HOST_UNMOUNTS", out hostMouseUnmounts) ||
               !TryParseMetric(fields[17], "HOST_TASK_AGE_MS", out hostTaskAgeMs) ||
               !TryParseMetric(fields[18], "CDC_DROPPED", out cdcDroppedMessages))) ||
-            (fields.Length == 23 &&
+            (fields.Length >= 23 &&
              (!TryParseMetric(fields[19], "PIO_TX_TIMEOUTS", out pioTxTimeouts) ||
               !TryParseMetric(fields[20], "PIO_RX_FLAG_TIMEOUTS", out pioRxFlagTimeouts) ||
               !TryParseMetric(fields[21], "PIO_RX_PACKET_TIMEOUTS", out pioRxPacketTimeouts) ||
-              !TryParseMetric(fields[22], "PIO_SE0_GLITCHES", out pioSe0Glitches))))
+              !TryParseMetric(fields[22], "PIO_SE0_GLITCHES", out pioSe0Glitches))) ||
+            (fields.Length == 25 &&
+             (!TryParseMetric(fields[23], "HOST_EMPTY_REPORTS", out hostEmptyReports) ||
+              !TryParseMetric(fields[24], "PIO_RX_OVERSIZE", out pioRxOversize))))
         {
             return false;
         }
@@ -186,7 +193,9 @@ public static class FirmwareStatusParser
             PioTxTimeouts: pioTxTimeouts,
             PioRxFlagTimeouts: pioRxFlagTimeouts,
             PioRxPacketTimeouts: pioRxPacketTimeouts,
-            PioSe0Glitches: pioSe0Glitches);
+            PioSe0Glitches: pioSe0Glitches,
+            HostEmptyReports: hostEmptyReports,
+            PioRxOversize: pioRxOversize);
         return true;
     }
 

@@ -90,6 +90,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
     private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
+    private readonly FirmwareTransportMonitor _transportMonitor = new();
     private FirmwareStatusKind? _physicalMouseStatus;
     private ushort _physicalMouseVendorId;
     private ushort _physicalMouseProductId;
@@ -99,7 +100,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         InitializeComponent();
         var appVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version();
         TopVersionText.Text =
-            $"v{appVersion.ToString(3)} · config {SerialProtocol.ConfigurationSchemaVersion}";
+            $"v{appVersion.ToString(3)} validation · config {SerialProtocol.ConfigurationSchemaVersion}";
         DiagnosticLog.Record("app", "Main page initialized.");
         InitializeSelectors();
         ApplySavedSettings();
@@ -589,6 +590,17 @@ public sealed partial class MainPage : UserControl, IDisposable
                 ApplyFirmwareStatus(status);
                 DiagnosticLog.Record("firmware", message);
             }
+            else if (message.StartsWith("BUILD:", StringComparison.Ordinal))
+            {
+                FirmwareBuildText.Text = "Firmware build: " + message[6..];
+                DiagnosticLog.Record("firmware", message);
+            }
+            else if (message.StartsWith("STATUS:HASH=", StringComparison.Ordinal))
+            {
+                // Protocol readback belongs in the log, not over the clear
+                // human-facing mouse/connection status on every STATUS poll.
+                DiagnosticLog.Record("firmware", message);
+            }
             else if (!message.StartsWith("PONG:", StringComparison.Ordinal))
             {
                 DeviceMessageText.Text = message;
@@ -725,25 +737,17 @@ public sealed partial class MainPage : UserControl, IDisposable
                 _physicalMouseProductId = 0;
                 break;
             case FirmwareStatusKind.TransportMetrics:
-                var transportWarning = update.CurrentQueuedDelta > 127 ||
-                    update.MaximumActiveReportGapUs > 3000 ||
-                    update.MaximumCorrectionLatenessUs > 5000 ||
-                    update.HostDecodeErrors > 0 ||
-                    update.HostAccumulatorSaturations > 0 ||
-                    update.GeneralIntervalClamps > 0 ||
-                    update.HostReceiveQueueFailures > 0 ||
-                    update.HostMouseUnmounts > 0 ||
-                    update.HostTaskAgeMs > 100 || update.CdcDroppedMessages > 0 ||
-                    update.PioTxTimeouts > 0 || update.PioRxFlagTimeouts > 0 ||
-                    update.PioRxPacketTimeouts > 0;
-                FirmwareTelemetryText.Text =
-                    $"{(transportWarning ? "Timing warning" : "Transport healthy")}: " +
+                var transport = _transportMonitor.Observe(update,
+                    (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency,
+                    _firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy);
+                FirmwareTelemetryText.Text = transport.Summary;
+                FirmwareTelemetryDetailsText.Text =
                     $"{update.HidReportsSent} HID reports · " +
                     $"{update.HidBusyDeferrals} busy deferrals · " +
                     $"max queue {update.MaximumQueuedDelta} · " +
                     $"max active gap {update.MaximumActiveReportGapUs} µs · " +
-                    $"downstream {update.HostReportsReceived} reports / " +
-                    $"{update.HostDecodeErrors} decode errors / " +
+                    $"downstream {update.HostReportsReceived} callbacks / " +
+                    $"{update.HostDecodeErrors} rejected (including {update.HostEmptyReports} empty) / " +
                     $"{update.HostAccumulatorSaturations} saturations / " +
                     $"{update.HostReceiveRecoveries} receive recoveries · " +
                     $"{update.HostReceiveQueueFailures} queue failures / " +
@@ -754,13 +758,14 @@ public sealed partial class MainPage : UserControl, IDisposable
                     $"{update.PioRxFlagTimeouts} RX flag timeouts / " +
                     $"{update.PioRxPacketTimeouts} packet timeouts / " +
                     $"{update.PioSe0Glitches} filtered SE0 glitches · " +
+                    $"{update.PioRxOversize} oversized RX packets · " +
                     $"{update.UpstreamDisconnectStops} upstream safety stops · " +
                     $"scheduler {update.CorrectionDelayedFrames} delayed / " +
                     $"{update.MaximumCorrectionLatenessUs} µs max · " +
                     $"queue now {update.CurrentQueuedDelta} · " +
-                    $"report interval {update.CurrentReportIntervalUs} µs · " +
+                    $"target report interval {update.CurrentReportIntervalUs} µs (not measured polling) · " +
                     $"general dt clamps {update.GeneralIntervalClamps}";
-                FirmwareTelemetryText.Foreground = transportWarning
+                FirmwareTelemetryText.Foreground = transport.Warning
                     ? WarningBrush
                     : ConnectedBrush;
                 return;
@@ -827,7 +832,10 @@ public sealed partial class MainPage : UserControl, IDisposable
         _physicalMouseStatus = null;
         _physicalMouseVendorId = 0;
         _physicalMouseProductId = 0;
+        _transportMonitor.Reset();
         FirmwareTelemetryText.Text = "Transport: metrics appear after configuration sync";
+        FirmwareTelemetryDetailsText.Text = "Waiting for counters.";
+        FirmwareBuildText.Text = "Firmware build: waiting for device";
         UpdateHardwareStatusPresentation();
     }
 

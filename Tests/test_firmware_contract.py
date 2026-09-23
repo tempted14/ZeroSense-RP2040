@@ -282,8 +282,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("F_CPU == 120000000L || F_CPU == 240000000L", FIRMWARE)
 
     def test_pio_host_eop_wait_has_no_program_counter_spin(self) -> None:
-        transfer = PIO_HOST.split("void __not_in_flash_func(pio_usb_bus_usb_transfer)", 1)[1]
-        transfer = transfer.split("void __no_inline_not_in_flash_func(pio_usb_bus_send_token)", 1)[0]
+        transfer = PIO_HOST.split("bool __not_in_flash_func(pio_usb_bus_usb_transfer)", 1)[1]
+        transfer = transfer.split("bool __no_inline_not_in_flash_func(pio_usb_bus_send_token)", 1)[0]
         self.assertNotIn("*pc < PIO_USB_TX_ENCODED_DATA_COMP", transfer)
         self.assertNotIn("*pc <= PIO_USB_TX_ENCODED_DATA_COMP", transfer)
         self.assertIn("busy_wait_at_least_cycles(4u * bit_cycles)", transfer)
@@ -291,7 +291,7 @@ class FirmwareContractTests(unittest.TestCase):
     def test_pio_receive_setup_leaves_edge_detector_running(self) -> None:
         receive = PIO_HOST.split(
             "void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)", 1
-        )[1].split("static inline __force_inline bool pio_usb_bus_wait_for_rx_start", 1)[0]
+        )[1].split("void __no_inline_not_in_flash_func(pio_usb_bus_recover_receive)", 1)[0]
         self.assertNotIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", receive)
         self.assertNotIn("pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, false)", receive)
 
@@ -360,24 +360,57 @@ class FirmwareContractTests(unittest.TestCase):
     def test_host_diagnostics_distinguish_loop_and_report_stalls(self) -> None:
         for metric in ("HOST_QUEUE_FAILURES", "HOST_UNMOUNTS", "HOST_TASK_AGE_MS",
                        "CDC_DROPPED", "PIO_TX_TIMEOUTS", "PIO_RX_FLAG_TIMEOUTS",
-                       "PIO_RX_PACKET_TIMEOUTS", "PIO_SE0_GLITCHES"):
+                       "PIO_RX_PACKET_TIMEOUTS", "PIO_SE0_GLITCHES",
+                       "HOST_EMPTY_REPORTS", "PIO_RX_OVERSIZE"):
             self.assertIn(metric + "=%lu", FIRMWARE)
         self.assertIn("hostTaskLastAtMs.store(millis()", FIRMWARE)
 
     def test_host_stall_paths_are_bounded_and_traceable(self) -> None:
-        self.assertIn("pio_usb_host_tx_timeout_us(len, pp->low_speed)", PIO_HOST)
+        self.assertIn("pio_usb_host_wait_set(&pp->pio_usb_tx->irq", PIO_HOST)
         self.assertIn("recover_tx_timeout(pp)", PIO_HOST)
-        self.assertIn("packet_start_us", PIO_HOST)
-        self.assertNotIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", PIO_HOST)
+        self.assertNotIn("packet_start_us", PIO_HOST)
+        self.assertIn("!pio_usb_host_rx_has_room(idx, rx_buf_len)", PIO_HOST)
+        self.assertIn("return pio_usb_bus_usb_transfer(pp, ack_encoded, 5) ? idx - 4 : -1", PIO_HOST)
         receive_start = PIO_LOW_LEVEL.split(
-            "static __always_inline void pio_usb_bus_start_receive", 1
+            "static __always_inline bool pio_usb_bus_start_receive", 1
         )[1].split("//--------------------------------------------------------------------+", 1)[0]
         self.assertIn("pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;", receive_start)
-        self.assertIn("while ((pp->pio_usb_rx->irq & IRQ_RX_ALL_MASK) != 0)", receive_start)
+        self.assertIn("pio_usb_host_wait_clear(", receive_start)
         self.assertIn("pio_usb_host_record_rx_flag_timeout()", receive_start)
-        self.assertIn("pio_usb_host_timeout_elapsed(", receive_start)
-        self.assertIn("filtered_disconnects", PIO_HOST_FRAME)
-        self.assertIn("BUILD:HOST-RX-HANDSHAKE-X2-20260922", FIRMWARE)
+        self.assertIn("pio_usb_bus_recover_receive(pp);", receive_start)
+        self.assertIn("return false;", receive_start)
+        self.assertNotIn("get_time_us_32", receive_start)
+        # The failed candidates added clock reads before RX could be armed.
+        tx = PIO_HOST.split("static bool __no_inline_not_in_flash_func(send_pre)", 1)[1]
+        tx = tx.split("void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)", 1)[0]
+        self.assertNotIn("get_time_us_32", tx)
+        self.assertIn("BUILD:HOST-BASELINE-GUARDS-X2-20260923", FIRMWARE)
+
+    def test_rx_detector_restart_is_restricted_to_exhausted_guards(self) -> None:
+        recovery = PIO_HOST.split(
+            "void __no_inline_not_in_flash_func(pio_usb_bus_recover_receive)", 1
+        )[1].split("static inline __force_inline bool pio_usb_bus_wait_for_rx_start", 1)[0]
+        self.assertIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", recovery)
+        self.assertIn("pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false)", recovery)
+        self.assertIn("pio_encode_jmp(pp->offset_eop)", recovery)
+        self.assertNotIn("while", recovery)
+        # One invocation after flag-budget exhaustion, one on RX overflow.
+        self.assertEqual(1, PIO_LOW_LEVEL.count("pio_usb_bus_recover_receive(pp);"))
+        self.assertEqual(1, PIO_HOST.count("pio_usb_bus_recover_receive(pp);"))
+
+    def test_transaction_failures_cannot_use_stale_handshakes(self) -> None:
+        self.assertIn("ready ? pio_usb_bus_receive_packet_and_handshake", PIO_HOST_FRAME)
+        self.assertIn("ready ? pp->usb_rx_buffer[1] : 0", PIO_HOST_FRAME)
+        self.assertEqual(2, PIO_HOST_FRAME.count("ready ? pio_usb_bus_wait_handshake(pp) : 0"))
+        self.assertNotIn("receive_token = pp->usb_rx_buffer[1]", PIO_HOST_FRAME)
+
+    def test_metrics_fit_the_output_buffer_at_max_counter_values(self) -> None:
+        metric_call = FIRMWARE.split('"METRICS:HID_SENT=', 1)[1].split(
+            "static_cast<unsigned long>(hidReportsSent)", 1)[0]
+        strings = re.findall(r'"([^"\n]*)"', '"METRICS:HID_SENT=' + metric_call)
+        line = "".join(strings).replace("%lu", "4294967295").replace(r"\n", "\n")
+        capacity = int(re.search(r"char line\[(\d+)\]", FIRMWARE).group(1))
+        self.assertLess(len(line), capacity, "METRICS must not silently truncate")
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
         self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
