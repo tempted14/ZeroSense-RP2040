@@ -23,7 +23,17 @@ $diagnosticPort.ReadTimeout = 200
 $diagnosticPort.WriteTimeout = 500
 $receivedStatus = $false
 try {
-    $diagnosticPort.Open()
+    Write-Host "Opening $Port for diagnostic STATUS (no board settings will change)..."
+    try {
+        $diagnosticPort.Open()
+    } catch {
+        $detail = if ($_.Exception.InnerException) {
+            $_.Exception.InnerException.Message
+        } else {
+            $_.Exception.Message
+        }
+        throw "Could not open $Port ($detail). No STATUS was captured. Close other serial readers; if Windows reports a semaphore timeout, reconnect the board before retrying."
+    }
     for ($sample = 1; $sample -le $Samples; $sample++) {
         # Version 1, little-endian sequence, STATUS (0xFC), empty payload.
         [byte[]]$body = @(1, $sample, 0, 252, 0)
