@@ -948,7 +948,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:HOST-STALL-TEST-X2-20260922");
+    protocol_println("BUILD:HOST-RX-FIX-X2-20260922");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (hostCoreStalled.load(std::memory_order_acquire)) {

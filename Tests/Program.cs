@@ -1613,6 +1613,21 @@ static void FirmwareStatusIsParsed()
     Equal(2u, recovery.HostMouseUnmounts, "host unmounts");
     Equal(150u, recovery.HostTaskAgeMs, "host task age");
     Equal(3u, recovery.CdcDroppedMessages, "dropped CDC replies");
+    const string pioMetrics = recoveryMetrics +
+        ":PIO_TX_TIMEOUTS=1:PIO_RX_FLAG_TIMEOUTS=30:" +
+        "PIO_RX_PACKET_TIMEOUTS=2:PIO_SE0_GLITCHES=4";
+    True(FirmwareStatusParser.TryParse(pioMetrics, out var pioStatus),
+        "host-stall test telemetry parses as metrics rather than a raw UI status line");
+    Equal(1u, pioStatus.PioTxTimeouts, "PIO TX timeouts");
+    Equal(30u, pioStatus.PioRxFlagTimeouts, "PIO RX flag timeouts");
+    Equal(2u, pioStatus.PioRxPacketTimeouts, "PIO RX packet timeouts");
+    Equal(4u, pioStatus.PioSe0Glitches, "filtered PIO SE0 glitches");
+    True(!FirmwareStatusParser.TryParse(
+        pioMetrics.Replace("PIO_RX_FLAG_TIMEOUTS=30", "PIO_RX_FLAG_TIMEOUTS=bad"), out _),
+        "malformed PIO telemetry is rejected");
+    True(!FirmwareStatusParser.TryParse(
+        pioMetrics.Replace(":PIO_SE0_GLITCHES=4", ""), out _),
+        "incomplete PIO telemetry is rejected");
     True(!FirmwareStatusParser.TryParse(
         recoveryMetrics.Replace("HOST_TASK_AGE_MS=150", "HOST_TASK_AGE_MS=-1"), out _),
         "negative host task age rejected");
