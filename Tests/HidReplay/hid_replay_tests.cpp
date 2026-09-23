@@ -8,6 +8,7 @@
 #include "../../RP2040_Firmware/rainbow_recoil/delta_noise.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_receive_recovery.h"
 #include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
+#include "../../RP2040_Firmware/rainbow_recoil/first_bullet_kick.h"
 #include "../../RP2040_Firmware/rainbow_recoil/protocol_output.h"
 #include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_timing.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_core_health.h"
@@ -28,6 +29,13 @@ void expect(bool condition, const char* name) {
 int main() {
     using namespace ZeroSenseHid;
     testPioHostGuards();
+
+    expect(ZeroSenseFirstBullet::verticalForShot(127.0f, 0, 2.0f) == 254.0f,
+        "first bullet kick applies after Q8.8 profile saturation");
+    expect(ZeroSenseFirstBullet::verticalForShot(127.0f, 1, 2.0f) == 127.0f,
+        "later shots retain their original vertical vectors");
+    expect(ZeroSenseFirstBullet::verticalForShot(12.0f, 0, 1.0f) == 12.0f,
+        "default first bullet kick is neutral");
 
     expect(pio_usb_host_bit_cycles(2, 128) == 10,
         "120 MHz full-speed PIO bit timing includes half-cycle divider");

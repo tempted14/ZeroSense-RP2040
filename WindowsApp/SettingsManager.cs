@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 16;
+    public const int CurrentCalibrationVersion = 17;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -267,6 +267,11 @@ public sealed class Settings
 
     [JsonPropertyName("weaponOutputStrengths")]
     public Dictionary<string, double> WeaponOutputStrengths { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    // A post-profile multiplier for only the first automatic-pattern shot.
+    [JsonPropertyName("weaponFirstBulletKickMultipliers")]
+    public Dictionary<string, double> WeaponFirstBulletKickMultipliers { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
     [JsonPropertyName("weaponHorizontalTunings")]
@@ -512,6 +517,15 @@ public sealed class Settings
                 RecoilStrengthModel.Normalize(group.Last().Value)))
             .Where(pair => Math.Abs(pair.Value - RecoilStrengthModel.Default) > 0.0001)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        WeaponFirstBulletKickMultipliers ??= new Dictionary<string, double>(
+            StringComparer.OrdinalIgnoreCase);
+        WeaponFirstBulletKickMultipliers = WeaponFirstBulletKickMultipliers
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key))
+            .GroupBy(pair => pair.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new KeyValuePair<string, double>(
+                group.Key, NormalizeFirstBulletKick(group.Last().Value)))
+            .Where(pair => Math.Abs(pair.Value - 1.0) > 0.0001)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         WeaponHorizontalTunings ??= new Dictionary<string, HorizontalRecoilTuning>(
             StringComparer.OrdinalIgnoreCase);
         WeaponHorizontalTunings = WeaponHorizontalTunings
@@ -592,6 +606,30 @@ public sealed class Settings
 
     public double GetEffectiveOutputGain(string weaponName) =>
         RecoilStrengthModel.Combine(MasterRecoilGain, GetWeaponOutputStrength(weaponName));
+
+    public float GetWeaponFirstBulletKick(string weaponName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        return (float)(WeaponFirstBulletKickMultipliers.TryGetValue(weaponName, out var value)
+            ? NormalizeFirstBulletKick(value) : 1.0);
+    }
+
+    public void SetWeaponFirstBulletKick(string weaponName, double requestedMultiplier)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        var value = NormalizeFirstBulletKick(requestedMultiplier);
+        if (Math.Abs(value - 1.0) <= 0.0001)
+        {
+            WeaponFirstBulletKickMultipliers.Remove(weaponName);
+        }
+        else
+        {
+            WeaponFirstBulletKickMultipliers[weaponName] = value;
+        }
+    }
+
+    private static double NormalizeFirstBulletKick(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 1.0, 4.0) : 1.0;
 
     public HorizontalRecoilTuning GetWeaponHorizontalTuning(string weaponName)
     {

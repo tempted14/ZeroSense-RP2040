@@ -261,6 +261,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         int rapidFireRoundsPerMinute,
         bool generalTimingVarianceEnabled,
         bool deltaNoiseEnabled,
+        float firstBulletKickMultiplier,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -273,7 +274,8 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             rapidFireEnabled,
             rapidFireRoundsPerMinute,
             generalTimingVarianceEnabled,
-            deltaNoiseEnabled);
+            deltaNoiseEnabled,
+            firstBulletKickMultiplier);
         var transactionStarted = false;
         try
         {
@@ -363,6 +365,17 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                          generalTimingVarianceEnabled,
                          deltaNoiseEnabled)),
                 "general movement settings",
+                cancellationToken).ConfigureAwait(false);
+
+            await SendAndAwaitAsync(
+                () => Write(SerialProtocol.BuildFirstBulletKickCommand(firstBulletKickMultiplier)),
+                line => FirmwareContract.FirstBulletKickAcknowledgementMatches(
+                    line, firstBulletKickMultiplier),
+                line => line.StartsWith("ERROR:FIRST_BULLET_KICK", StringComparison.Ordinal) ||
+                    (line.StartsWith("FIRST_BULLET_KICK:", StringComparison.Ordinal) &&
+                     !FirmwareContract.FirstBulletKickAcknowledgementMatches(
+                         line, firstBulletKickMultiplier)),
+                "first bullet kick",
                 cancellationToken).ConfigureAwait(false);
 
             try

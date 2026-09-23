@@ -17,6 +17,7 @@
 #include "correction_scheduler.h"
 #include "delta_noise.h"
 #include "motion_math.h"
+#include "first_bullet_kick.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
@@ -79,6 +80,7 @@ enum CommandId : uint8_t {
     CMD_CONFIG_ABORT = 0xFB,
     CMD_STATUS      = 0xFC,
     CMD_GENERAL_SETTINGS = 0xFD,
+    CMD_FIRST_BULLET_KICK = 0xFE,
     CMD_RESET       = 0xFF
 };
 
@@ -125,6 +127,7 @@ static int16_t patternHorizontal[maxPatternPoints] = {};
 static int16_t patternVertical[maxPatternPoints] = {};
 static float horizontalSensitivityFactor = 1.0f;
 static float verticalSensitivityFactor = 1.0f;
+static float firstBulletKickMultiplier = 1.0f;
 static float fractionalMouseX = 0.0f;
 static float fractionalMouseY = 0.0f;
 
@@ -167,7 +170,7 @@ static uint32_t nextRapidShotAtUs = 0;
 static uint32_t rapidIntervalRemainder = 0;
 static uint32_t lastHostKeepAliveAtMs = 0;
 
-static constexpr uint8_t configurationSchemaVersion = 3;
+static constexpr uint8_t configurationSchemaVersion = 4;
 static constexpr uint32_t configurationTransactionTimeoutMs = 10000;
 typedef struct {
     char profileName[54];
@@ -186,6 +189,7 @@ typedef struct {
     uint16_t rapidRoundsPerMinute;
     bool generalTimingJitterEnabled;
     bool deltaNoiseEnabled;
+    float firstBulletKickMultiplier;
 } ConfigurationSnapshot;
 
 static ConfigurationSnapshot previousConfiguration;
@@ -814,6 +818,7 @@ static void capture_configuration(ConfigurationSnapshot& snapshot) {
     snapshot.rapidRoundsPerMinute = rapidFireRoundsPerMinute;
     snapshot.generalTimingJitterEnabled = generalTimingJitterEnabled;
     snapshot.deltaNoiseEnabled = deltaNoiseEnabled;
+    snapshot.firstBulletKickMultiplier = firstBulletKickMultiplier;
 }
 
 static void restore_configuration(const ConfigurationSnapshot& snapshot) {
@@ -835,6 +840,7 @@ static void restore_configuration(const ConfigurationSnapshot& snapshot) {
     rapidFireRoundsPerMinute = snapshot.rapidRoundsPerMinute;
     generalTimingJitterEnabled = snapshot.generalTimingJitterEnabled;
     deltaNoiseEnabled = snapshot.deltaNoiseEnabled;
+    firstBulletKickMultiplier = snapshot.firstBulletKickMultiplier;
 }
 
 static void hash_byte(uint32_t& hash, uint8_t value) {
@@ -886,6 +892,7 @@ static uint32_t current_configuration_hash() {
     hash_uint16(hash, rapidFireEnabled ? rapidFireRoundsPerMinute : 0);
     hash_byte(hash, generalTimingJitterEnabled ? 1 : 0);
     hash_byte(hash, deltaNoiseEnabled ? 1 : 0);
+    hash_float(hash, firstBulletKickMultiplier);
     for (uint8_t index = 0; index < pointCount; ++index) {
         hash_int16(hash, patternHorizontal[index]);
         hash_int16(hash, patternVertical[index]);
@@ -955,7 +962,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:HOST-BASELINE-GUARDS-X2-20260923");
+    protocol_println("BUILD:V1.9-FIRST-KICK-20260923");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (hostCoreStalled.load(std::memory_order_acquire)) {
@@ -1185,6 +1192,20 @@ static void apply_general_settings_payload(const uint8_t* payload, uint16_t leng
         deltaNoiseEnabled ? "ON" : "OFF");
 }
 
+static void apply_first_bullet_kick_payload(const uint8_t* payload, uint16_t length) {
+    if (length != sizeof(float)) {
+        protocol_println("ERROR:FIRST_BULLET_KICK:FORMAT");
+        return;
+    }
+    const float multiplier = readFloatLittleEndian(payload);
+    if (!std::isfinite(multiplier) || multiplier < 1.0f || multiplier > 4.0f) {
+        protocol_println("ERROR:FIRST_BULLET_KICK:RANGE");
+        return;
+    }
+    firstBulletKickMultiplier = multiplier;
+    protocol_printf("FIRST_BULLET_KICK:V=%.3f\n", firstBulletKickMultiplier);
+}
+
 static void process_command(uint8_t command, const uint8_t* payload, uint16_t length) {
     switch (command) {
         case CMD_PING:
@@ -1255,6 +1276,15 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             }
             configurationTransactionTouchedAtMs = millis();
             apply_general_settings_payload(payload, length);
+            break;
+
+        case CMD_FIRST_BULLET_KICK:
+            if (!configurationTransactionActive) {
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
+            apply_first_bullet_kick_payload(payload, length);
             break;
 
         case CMD_KEEPALIVE:
@@ -2004,7 +2034,9 @@ static void generate_movement(uint32_t shotIntervalUs) {
         }
         // Pattern values are stored as Q8.8 fixed-point (int16 / 256.0f)
         horizontal = static_cast<float>(patternHorizontal[shotsInBurst]) / 256.0f;
-        vertical = static_cast<float>(patternVertical[shotsInBurst]) / 256.0f;
+        vertical = ZeroSenseFirstBullet::verticalForShot(
+            static_cast<float>(patternVertical[shotsInBurst]) / 256.0f,
+            shotsInBurst, firstBulletKickMultiplier);
     } else {
         vertical = activeVerticalCompensation;
         horizontal = activeHorizontalCompensation;

@@ -70,7 +70,11 @@ internal static class DiagnosticLog
         if (!string.IsNullOrWhiteSpace(selectedProfile?.Name))
         {
             builder.AppendLine(
+                $"Per-weapon output strength: {settings.GetWeaponOutputStrength(selectedProfile.Name):F2}x");
+            builder.AppendLine(
                 $"Effective recoil gain: {settings.GetEffectiveOutputGain(selectedProfile.Name):F2}x");
+            builder.AppendLine(
+                $"First bullet vertical kick: {settings.GetWeaponFirstBulletKick(selectedProfile.Name):F2}x (pattern modes only)");
             var horizontal = settings.GetWeaponHorizontalTuning(selectedProfile.Name);
             builder.AppendLine(
                 $"Horizontal pattern: {(horizontal.Enabled ? HorizontalRecoilModel.DescribeMode(horizontal.Mode) : "Disabled")}, " +

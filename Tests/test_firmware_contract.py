@@ -48,7 +48,7 @@ class FirmwareContractTests(unittest.TestCase):
             "ping", "start", "stop", "profile", "sensitivity",
             "pattern", "rapid_fire", "keepalive", "arm_lease",
             "config_begin", "config_commit", "config_abort", "status",
-            "general_settings", "reset",
+            "general_settings", "first_bullet_kick", "reset",
         }
         self.assertEqual(expected, firmware.keys())
         expected_desktop_names = {
@@ -60,6 +60,7 @@ class FirmwareContractTests(unittest.TestCase):
             "config_commit": "configurationcommit",
             "config_abort": "configurationabort", "status": "status",
             "general_settings": "generalsettings",
+            "first_bullet_kick": "firstbulletkick",
             "reset": "reset",
         }
         self.assertEqual(
@@ -234,6 +235,9 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("TIMING_JITTER_PCT = 8.0f", FIRMWARE)
         self.assertIn("if (!generalTimingJitterEnabled)", FIRMWARE)
         self.assertIn("CMD_GENERAL_SETTINGS = 0xFD", FIRMWARE)
+        self.assertIn("CMD_FIRST_BULLET_KICK = 0xFE", FIRMWARE)
+        self.assertIn("hash_float(hash, firstBulletKickMultiplier)", FIRMWARE)
+        self.assertIn("ZeroSenseFirstBullet::verticalForShot(", FIRMWARE)
         self.assertIn("GENERAL_SETTINGS:TIMING_VARIANCE=%s", FIRMWARE)
         self.assertIn(":DELTA_NOISE=%s", FIRMWARE)
         self.assertIn("hash_byte(hash, generalTimingJitterEnabled ? 1 : 0)", FIRMWARE)
@@ -384,7 +388,7 @@ class FirmwareContractTests(unittest.TestCase):
         tx = PIO_HOST.split("static bool __no_inline_not_in_flash_func(send_pre)", 1)[1]
         tx = tx.split("void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)", 1)[0]
         self.assertNotIn("get_time_us_32", tx)
-        self.assertIn("BUILD:HOST-BASELINE-GUARDS-X2-20260923", FIRMWARE)
+        self.assertIn("BUILD:V1.9-FIRST-KICK-20260923", FIRMWARE)
 
     def test_rx_detector_restart_is_restricted_to_exhausted_guards(self) -> None:
         recovery = PIO_HOST.split(

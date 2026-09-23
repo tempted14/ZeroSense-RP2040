@@ -17,6 +17,7 @@ var tests = new (string Name, Action Run)[]
     ("research estimate is isolated and normalized", ResearchEstimateIsIsolatedAndNormalized),
     ("profile source switching preserves optic-specific references", ProfileSourceSwitchingIsExact),
     ("per-weapon output strength is isolated and bounded", WeaponOutputStrengthIsSafe),
+    ("operator-specific multipliers and first bullet kick are isolated", OperatorFirstBulletKickIsIsolated),
     ("horizontal recoil overrides are isolated and customizable", HorizontalRecoilOverridesAreSafe),
     ("experimental tuning is isolated and stage-specific", ExperimentalTuningIsIsolated),
     ("operator attachment overrides are isolated", OperatorOverridesAreIsolated),
@@ -447,6 +448,58 @@ static void WeaponOutputStrengthIsSafe()
         "master and weapon gains combine proportionally");
     Equal(RecoilStrengthModel.EffectiveMaximum, RecoilStrengthModel.Combine(100, 2),
         "combined custom gain caps at the representable device limit");
+}
+
+static void OperatorFirstBulletKickIsIsolated()
+{
+    var settings = new Settings
+    {
+        MasterRecoilGain = 2.0,
+        ActiveMagnification = "2.5x",
+        CompensationMode = CompensationMode.WeaponPattern,
+        TwoPointFiveAutoVerticalBoost = 1.5,
+        OriginalPatternOutputMultiplier = 2.0
+    };
+    settings.SetWeaponOutputStrength("C8-SFW", 1.5);
+    settings.SetWeaponFirstBulletKick("C8-SFW", 2.0);
+    settings.Normalize();
+    Equal(3.0, settings.GetEffectiveOutputGain("C8-SFW"),
+        "Buck's C8-SFW combines master and weapon gains");
+    Equal(2.0, settings.GetEffectiveOutputGain("MP7"),
+        "Bandit's MP7 retains only the master gain");
+    Equal(2.0f, settings.GetWeaponFirstBulletKick("C8-SFW"),
+        "C8-SFW retains its first-shot setting");
+    Equal(1.0f, settings.GetWeaponFirstBulletKick("MP7"),
+        "MP7 does not inherit C8-SFW first-shot tuning");
+
+    var c8 = WeaponProfile.FindByName("C8-SFW")!;
+    var source = c8.Pattern.ToArray();
+    var selected = RecoilProfileResolver.Build(c8, "Buck", settings);
+    True(selected.HasWeaponPattern, "Buck's selected automatic profile has a pattern");
+    Equal("C8-SFW", selected.Name, "operator loadout resolves the selected gun");
+    True(source.SequenceEqual(c8.Pattern), "original C8-SFW pattern is not edited");
+    var scale = settings.CalculateSensitivityScale(selected, CompensationMode.WeaponPattern);
+    True(scale.Vertical >= 1.5f, "selected optic vertical boost reaches output scale");
+
+    var roundTrip = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))!;
+    roundTrip.Normalize();
+    Equal(2.0f, roundTrip.GetWeaponFirstBulletKick("C8-SFW"),
+        "first bullet setting survives settings persistence");
+    Equal(1.0f, roundTrip.GetWeaponFirstBulletKick("MP7"),
+        "neutral guns stay neutral after persistence");
+    var neutralHash = SerialProtocol.ComputeConfigurationHash(
+        selected, CompensationMode.WeaponPattern, scale, false, 0,
+        firstBulletKick: 1.0f);
+    var kickHash = SerialProtocol.ComputeConfigurationHash(
+        selected, CompensationMode.WeaponPattern, scale, false, 0,
+        firstBulletKick: roundTrip.GetWeaponFirstBulletKick("C8-SFW"));
+    True(neutralHash != kickHash, "first bullet kick is included in exact device hash");
+    roundTrip.SetWeaponFirstBulletKick("C8-SFW", double.PositiveInfinity);
+    Equal(1.0f, roundTrip.GetWeaponFirstBulletKick("C8-SFW"),
+        "invalid first-shot tuning fails to neutral");
+    roundTrip.SetWeaponFirstBulletKick("C8-SFW", 999.0);
+    Equal(4.0f, roundTrip.GetWeaponFirstBulletKick("C8-SFW"),
+        "first-shot tuning respects the firmware's upper bound");
 }
 
 static void ExperimentalTuningIsIsolated()
@@ -1171,6 +1224,7 @@ static void SerialProtocolCoverageIsComplete()
         ["CONFIG_ABORT"] = 0xFB,
         ["STATUS"] = 0xFC,
         ["GENERAL_SETTINGS"] = 0xFD,
+        ["FIRST_BULLET_KICK"] = 0xFE,
         ["RESET"] = 0xFF
     };
     foreach (var (name, identifier) in commands)
@@ -1200,6 +1254,17 @@ static void SerialProtocolCoverageIsComplete()
     True(!FirmwareContract.GeneralSettingsAcknowledgementMatches(
         "GENERAL_SETTINGS:TIMING_VARIANCE=OFF:DELTA_NOISE=ON", true, true),
         "opposite general movement readback is rejected");
+    var kick = SerialProtocol.BuildFirstBulletKickCommand(2.5f);
+    Equal((byte)0xFE, kick[5], "first-bullet command identifier");
+    Equal((byte)4, kick[6], "first-bullet command payload length");
+    Equal(2.5f, BinaryPrimitives.ReadSingleLittleEndian(kick.AsSpan(7, 4)),
+        "first-bullet multiplier transfers exactly");
+    True(FirmwareContract.FirstBulletKickAcknowledgementMatches(
+        "FIRST_BULLET_KICK:V=2.500", 2.5f), "first-bullet exact readback");
+    True(!FirmwareContract.FirstBulletKickAcknowledgementMatches(
+        "FIRST_BULLET_KICK:V=2.499", 2.5f), "first-bullet mismatch rejected");
+    Throws<ArgumentOutOfRangeException>(() =>
+        SerialProtocol.BuildFirstBulletKickCommand(float.NaN));
 
     var points = Enumerable.Range(0, 31)
         .Select(index => new RecoilPatternPoint(index == 0 ? 127.0f : index / 10.0f, index / 5.0f))
@@ -1268,7 +1333,7 @@ static void ConfigurationTransactionsAreDeterministic()
         scale,
         true,
         600);
-    Equal(0xCD470D73u, hash, "independent FNV-1a vector");
+    Equal(0x56638B07u, hash, "independent FNV-1a vector including neutral first bullet kick");
     Equal(hash, SerialProtocol.ComputeConfigurationHash(
         profile, CompensationMode.General, scale, true, 600), "stable hash");
 
@@ -1730,6 +1795,7 @@ static void SimulatorExercisesConfigurationPath()
         0,
         true,
         true,
+        2.0f,
         CancellationToken.None).GetAwaiter().GetResult();
     simulator.SendCommand("START");
     simulator.SendCommand("STOP");
@@ -1738,6 +1804,8 @@ static void SimulatorExercisesConfigurationPath()
     Equal(CompensationMode.WeaponPattern, simulator.LastMode, "simulated mode");
     True(simulator.LastGeneralTimingVarianceEnabled, "simulated timing variance setting");
     True(simulator.LastDeltaNoiseEnabled, "simulated delta noise setting");
+    Equal(2.0f, simulator.LastFirstBulletKickMultiplier,
+        "simulated first bullet kick setting");
     Equal("STOP", simulator.LastCommand, "simulated safety command");
     var metrics = simulator.GetMetrics();
     True(metrics.CommandsSent >= 4, "simulator should count encoded commands");

@@ -28,6 +28,7 @@ public interface IRecoilDeviceConnection : IDisposable
         int rapidFireRoundsPerMinute,
         bool generalTimingVarianceEnabled,
         bool deltaNoiseEnabled,
+        float firstBulletKickMultiplier,
         CancellationToken cancellationToken);
 
     void SendCommand(string commandType);

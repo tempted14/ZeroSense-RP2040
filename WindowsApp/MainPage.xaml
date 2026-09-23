@@ -368,6 +368,31 @@
                                                     Background="#0B0B0B"
                                                     BorderBrush="{StaticResource StrokeBrush}"
                                                     BorderThickness="1">
+                                                <Grid ColumnDefinitions="*,110,Auto" ColumnSpacing="9">
+                                                    <StackPanel Spacing="2" VerticalAlignment="Center">
+                                                        <TextBlock Text="FIRST BULLET VERTICAL KICK"
+                                                                   Style="{StaticResource LabelStyle}" />
+                                                        <TextBlock x:Name="FirstBulletKickStatusText"
+                                                                   Text="Select an automatic weapon; 1.00× leaves the first bullet unchanged."
+                                                                   TextWrapping="Wrap"
+                                                                   Style="{StaticResource MutedTextStyle}" />
+                                                    </StackPanel>
+                                                    <NumberBox x:Name="FirstBulletKickBox" Grid.Column="1"
+                                                               Minimum="1" Maximum="4" Value="1"
+                                                               SmallChange="0.1" SpinButtonPlacementMode="Compact"
+                                                               VerticalAlignment="Center"
+                                                               AutomationProperties.Name="First bullet vertical recoil multiplier for selected weapon"
+                                                               ValueChanged="FirstBulletKick_ValueChanged" />
+                                                    <Button x:Name="ResetFirstBulletKickButton" Grid.Column="2"
+                                                            Content="Reset" VerticalAlignment="Center"
+                                                            AutomationProperties.Name="Reset first bullet vertical recoil multiplier"
+                                                            Click="ResetFirstBulletKick_Click" />
+                                                </Grid>
+                                            </Border>
+                                            <Border Padding="10" CornerRadius="7"
+                                                    Background="#0B0B0B"
+                                                    BorderBrush="{StaticResource StrokeBrush}"
+                                                    BorderThickness="1">
                                                 <StackPanel Spacing="8">
                                                     <ToggleSwitch x:Name="HorizontalPatternToggle"
                                                                   Header="HORIZONTAL RECOIL PATTERN"
