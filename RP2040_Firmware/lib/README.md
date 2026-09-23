@@ -24,8 +24,10 @@ fault budget is longer than the upstream proposal because that timeout drew
 device-compatibility reports. The first test build also reset the EOP detector
 before each transaction and waited for all RX flags to stay clear after TX;
 on the affected board it failed mouse enumeration with 30 RX flag timeouts.
-The replacement leaves the EOP detector running and clears post-TX flags
-once so a fast mouse response cannot be consumed by the clear loop. The
-replacement compiles and passes software tests but still requires a sustained
+The next replacement left the EOP detector running and cleared post-TX flags
+once, which restored enumeration but produced roughly 80% downstream report
+decode errors and only ~280-320 host reports per second on the affected mouse.
+The current test candidate restores the original RX flag-clear handshake with
+a bounded timeout, while leaving EOP re-arming disabled. It still requires a sustained
 test with the affected RP2350 and mouse. None of these changes are part of the
 published v1.7.0 firmware.

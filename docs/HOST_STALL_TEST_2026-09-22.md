@@ -23,14 +23,19 @@ verified, and native replay, Python, and .NET tests pass. No physical soak
 test has been performed. The first test build marker was
 `BUILD:HOST-STALL-TEST-X2-20260922`. That build failed mouse enumeration on
 the user's board: `HOST_REPORTS=0` and `PIO_RX_FLAG_TIMEOUTS=30`. Its new
-EOP-detector reset has been removed. The RX-start flag-clear loop was also
-removed: a fast reply can set `RX_START` immediately after the clear, causing
-the loop to wait for a valid packet and miss it. The replacement candidate is marked
-`BUILD:HOST-RX-FIX-X2-20260922`. The older desktop app also failed to parse
-the four new PIO counters and displayed the raw METRICS line as a connection
-detail; the parser and telemetry display now recognize them. Neither
-candidate is published. The replacement still needs physical testing before
-passthrough or disconnect reliability can be claimed.
+EOP-detector reset has been removed. The first replacement candidate,
+`BUILD:HOST-RX-FIX-X2-20260922`, also removed the RX-start flag-clear loop.
+That restored enumeration but corrupted most reports: the user's three
+roughly one-second STATUS samples showed `HOST_REPORTS` increases of 322 and
+280 while `HOST_DECODE_ERRORS` rose by 248 and 249. This matches the reported
+uneven polling. A second candidate, `BUILD:HOST-RX-HANDSHAKE-X2-20260922`,
+restores the last working flag-clear sequence with a bounded timeout. The
+1 ms main-loop sleep existed in the user's earlier working v1.8 build, so it
+is not changed while this regression is isolated. The older desktop app also
+failed to parse the four new PIO counters and displayed the raw METRICS line
+as a connection detail; the parser and telemetry display now recognize them.
+None of the candidates is published. The latest candidate still needs physical
+testing before passthrough or disconnect reliability can be claimed.
 
 Keep a backup mouse connected directly to the PC. Flash only the test UF2 to
 the RP2350 in BOOTSEL mode, verify ordinary passthrough with the app closed,

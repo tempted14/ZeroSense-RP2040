@@ -8,7 +8,9 @@
 #include "hardware/pio.h"
 #include "hardware/regs/sysinfo.h"
 #include "pio_usb_configuration.h"
+#include "pio_usb_host_timing.h"
 #include "usb_definitions.h"
+#include "usb_crc.h"
 #include <stdint.h>
 
 #include "usb_tx.pio.h"
@@ -168,11 +170,18 @@ pio_usb_bus_get_line_state(root_port_t *root) {
 void pio_usb_host_record_rx_flag_timeout(void);
 
 static __always_inline void pio_usb_bus_start_receive(const pio_port_t *pp) {
-  // Drop the flags raised by our own outbound packet. A downstream device
-  // may respond almost immediately; RX_START reasserting after this write is
-  // a real packet, not a condition to spin on. Waiting for every flag to stay
-  // clear can consume the entire reply and stall mouse enumeration.
+  // Preserve the upstream flag-clear handshake. A single write without a
+  // readback allowed stale TX-side receive flags to contaminate many mouse
+  // packets on the affected RP2350 (HOST_DECODE_ERRORS rose ~80%). Bound the
+  // wait so an abnormal stuck flag cannot freeze the host core forever.
   pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;
+  const uint32_t start_us = get_time_us_32();
+  while ((pp->pio_usb_rx->irq & IRQ_RX_ALL_MASK) != 0) {
+    if (pio_usb_host_timeout_elapsed(start_us, get_time_us_32(), 1000u)) {
+      pio_usb_host_record_rx_flag_timeout();
+      break;
+    }
+  }
 }
 
 //--------------------------------------------------------------------+
