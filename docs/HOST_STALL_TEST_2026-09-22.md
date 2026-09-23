@@ -9,8 +9,8 @@ error does **not** identify which firmware loop, USB device endpoint, cable,
 or Windows driver path failed.
 
 This separate test UF2 starts from the local v1.8 multiplier candidate. It
-bounds TX completion, RX flag-clear and packet-receive waits; re-arms the EOP
-detector; filters brief SE0 glitches before treating them as disconnects; and
+bounds TX completion, RX flag-clear and packet-receive waits; filters brief
+SE0 glitches before treating them as disconnects; and
 adds `PIO_TX_TIMEOUTS`, `PIO_RX_FLAG_TIMEOUTS`, `PIO_RX_PACKET_TIMEOUTS`, and
 `PIO_SE0_GLITCHES` to STATUS. It preserves the v1.8 recoil multiplier,
 patterns, 2.5x boost, jitter, delta noise, and configuration contract. The
@@ -20,9 +20,17 @@ here uses a longer budget than that proposal.
 
 The RP2350 target compiles, the UF2 family and embedded build marker were
 verified, and native replay, Python, and .NET tests pass. No physical soak
-test has been performed. The build marker is
-`BUILD:HOST-STALL-TEST-X2-20260922`. The UF2 and rollback image are in
-`dist/rp2350-host-stall-test-20260922/` locally; neither is published.
+test has been performed. The first test build marker was
+`BUILD:HOST-STALL-TEST-X2-20260922`. That build failed mouse enumeration on
+the user's board: `HOST_REPORTS=0` and `PIO_RX_FLAG_TIMEOUTS=30`. Its new
+EOP-detector reset has been removed. The RX-start flag-clear loop was also
+removed: a fast reply can set `RX_START` immediately after the clear, causing
+the loop to wait for a valid packet and miss it. The replacement candidate is marked
+`BUILD:HOST-RX-FIX-X2-20260922`. The older desktop app also failed to parse
+the four new PIO counters and displayed the raw METRICS line as a connection
+detail; the parser and telemetry display now recognize them. Neither
+candidate is published. The replacement still needs physical testing before
+passthrough or disconnect reliability can be claimed.
 
 Keep a backup mouse connected directly to the PC. Flash only the test UF2 to
 the RP2350 in BOOTSEL mode, verify ordinary passthrough with the app closed,

@@ -180,12 +180,10 @@ void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)(const pio_port_t
   pio_sm_exec(pp->pio_usb_rx, pp->sm_rx, pp->rx_reset_instr);
   pio_sm_exec(pp->pio_usb_rx, pp->sm_rx, pp->rx_reset_instr2);
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, true);
-  // A stale EOP detector can leave every later IN request silent even while
-  // the host task is alive. Re-arm it alongside the RX decoder each request.
-  pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, false);
-  pio_sm_restart(pp->pio_usb_rx, pp->sm_eop);
-  pio_sm_exec(pp->pio_usb_rx, pp->sm_eop, pio_encode_jmp(pp->offset_eop));
-  pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, true);
+  // Do not reset the edge/EOP detector here. It owns the shared RX IRQ
+  // handshake and was deliberately left running in the last working build.
+  // Restarting it before every token caused repeated RX flag-clear timeouts
+  // during mouse enumeration on the RP2350 test board.
 }
 
 static inline __force_inline bool pio_usb_bus_wait_for_rx_start(const pio_port_t* pp) {

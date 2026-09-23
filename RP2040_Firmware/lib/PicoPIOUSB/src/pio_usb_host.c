@@ -17,6 +17,7 @@
 
 #include "pio_usb.h"
 #include "pio_usb_ll.h"
+#include "pio_usb_host_timing.h"
 #include "usb_crc.h"
 
 enum {

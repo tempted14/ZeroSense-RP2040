@@ -17,10 +17,15 @@ The full PR remains unmerged and has compatibility reports, so the original
 v1.7.0 release copied only that EOP change.
 
 The separate, unreleased RP2350 host-stall test build selectively adds bounded
-TX completion, RX flag-clear and packet-receive waits, EOP detector re-arming,
-and a 100 us disconnect debounce based on the remaining issues described in
+TX completion and packet-receive waits, plus a 100 us disconnect debounce,
+based on the remaining issues described in
 [PR #206](https://github.com/sekigon-gonnoc/Pico-PIO-USB/pull/206). Its TX
 fault budget is longer than the upstream proposal because that timeout drew
-device-compatibility reports. These changes compile and pass software tests but
-still require a sustained test with the affected RP2350 and mouse. They are not
-part of the published v1.7.0 firmware.
+device-compatibility reports. The first test build also reset the EOP detector
+before each transaction and waited for all RX flags to stay clear after TX;
+on the affected board it failed mouse enumeration with 30 RX flag timeouts.
+The replacement leaves the EOP detector running and clears post-TX flags
+once so a fast mouse response cannot be consumed by the clear loop. The
+replacement compiles and passes software tests but still requires a sustained
+test with the affected RP2350 and mouse. None of these changes are part of the
+published v1.7.0 firmware.

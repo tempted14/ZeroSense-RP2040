@@ -288,6 +288,13 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertNotIn("*pc <= PIO_USB_TX_ENCODED_DATA_COMP", transfer)
         self.assertIn("busy_wait_at_least_cycles(4u * bit_cycles)", transfer)
 
+    def test_pio_receive_setup_leaves_edge_detector_running(self) -> None:
+        receive = PIO_HOST.split(
+            "void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)", 1
+        )[1].split("static inline __force_inline bool pio_usb_bus_wait_for_rx_start", 1)[0]
+        self.assertNotIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", receive)
+        self.assertNotIn("pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, false)", receive)
+
     def test_physical_input_is_additive_and_not_cleared_by_stop(self) -> None:
         self.assertIn(
             "hostMouseX.exchange(0, std::memory_order_acq_rel)",
@@ -361,11 +368,14 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("pio_usb_host_tx_timeout_us(len, pp->low_speed)", PIO_HOST)
         self.assertIn("recover_tx_timeout(pp)", PIO_HOST)
         self.assertIn("packet_start_us", PIO_HOST)
-        self.assertIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", PIO_HOST)
-        self.assertIn("pio_usb_host_record_rx_flag_timeout()", PIO_LOW_LEVEL)
-        self.assertIn("pio_usb_host_timeout_elapsed(", PIO_LOW_LEVEL)
+        self.assertNotIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", PIO_HOST)
+        receive_start = PIO_LOW_LEVEL.split(
+            "static __always_inline void pio_usb_bus_start_receive", 1
+        )[1].split("//--------------------------------------------------------------------+", 1)[0]
+        self.assertIn("pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;", receive_start)
+        self.assertNotIn("while", receive_start)
         self.assertIn("filtered_disconnects", PIO_HOST_FRAME)
-        self.assertIn("BUILD:HOST-STALL-TEST-X2-20260922", FIRMWARE)
+        self.assertIn("BUILD:HOST-RX-FIX-X2-20260922", FIRMWARE)
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
         self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)

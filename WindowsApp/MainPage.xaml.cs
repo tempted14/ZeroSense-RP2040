@@ -733,7 +733,9 @@ public sealed partial class MainPage : UserControl, IDisposable
                     update.GeneralIntervalClamps > 0 ||
                     update.HostReceiveQueueFailures > 0 ||
                     update.HostMouseUnmounts > 0 ||
-                    update.HostTaskAgeMs > 100 || update.CdcDroppedMessages > 0;
+                    update.HostTaskAgeMs > 100 || update.CdcDroppedMessages > 0 ||
+                    update.PioTxTimeouts > 0 || update.PioRxFlagTimeouts > 0 ||
+                    update.PioRxPacketTimeouts > 0;
                 FirmwareTelemetryText.Text =
                     $"{(transportWarning ? "Timing warning" : "Transport healthy")}: " +
                     $"{update.HidReportsSent} HID reports · " +
@@ -748,6 +750,10 @@ public sealed partial class MainPage : UserControl, IDisposable
                     $"{update.HostMouseUnmounts} mouse unmounts / " +
                     $"host task age {update.HostTaskAgeMs} ms / " +
                     $"{update.CdcDroppedMessages} dropped status messages · " +
+                    $"PIO {update.PioTxTimeouts} TX timeouts / " +
+                    $"{update.PioRxFlagTimeouts} RX flag timeouts / " +
+                    $"{update.PioRxPacketTimeouts} packet timeouts / " +
+                    $"{update.PioSe0Glitches} filtered SE0 glitches · " +
                     $"{update.UpstreamDisconnectStops} upstream safety stops · " +
                     $"scheduler {update.CorrectionDelayedFrames} delayed / " +
                     $"{update.MaximumCorrectionLatenessUs} µs max · " +
