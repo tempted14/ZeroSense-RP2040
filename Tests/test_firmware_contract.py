@@ -373,9 +373,11 @@ class FirmwareContractTests(unittest.TestCase):
             "static __always_inline void pio_usb_bus_start_receive", 1
         )[1].split("//--------------------------------------------------------------------+", 1)[0]
         self.assertIn("pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;", receive_start)
-        self.assertNotIn("while", receive_start)
+        self.assertIn("while ((pp->pio_usb_rx->irq & IRQ_RX_ALL_MASK) != 0)", receive_start)
+        self.assertIn("pio_usb_host_record_rx_flag_timeout()", receive_start)
+        self.assertIn("pio_usb_host_timeout_elapsed(", receive_start)
         self.assertIn("filtered_disconnects", PIO_HOST_FRAME)
-        self.assertIn("BUILD:HOST-RX-FIX-X2-20260922", FIRMWARE)
+        self.assertIn("BUILD:HOST-RX-HANDSHAKE-X2-20260922", FIRMWARE)
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
         self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
