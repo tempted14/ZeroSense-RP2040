@@ -219,11 +219,27 @@ static void __not_in_flash_func(busy_wait_1_us)(void) {
   }
 }
 
+static uint32_t filtered_disconnects;
+
+uint32_t pio_usb_host_filtered_disconnect_count(void) {
+  return __atomic_load_n(&filtered_disconnects, __ATOMIC_RELAXED);
+}
+
 static bool __no_inline_not_in_flash_func(connection_check)(root_port_t *port) {
   if (pio_usb_bus_get_line_state(port) == PORT_PIN_SE0) {
     busy_wait_1_us();
 
     if (pio_usb_bus_get_line_state(port) == PORT_PIN_SE0) {
+      // A brief SE0 glitch must not retire all endpoints while the mouse is
+      // still physically attached. A real detach remains SE0 throughout.
+      const uint32_t se0_start_us = get_time_us_32();
+      while (!pio_usb_host_timeout_elapsed(
+          se0_start_us, get_time_us_32(), 100u)) {
+        if (pio_usb_bus_get_line_state(port) != PORT_PIN_SE0) {
+          __atomic_fetch_add(&filtered_disconnects, 1u, __ATOMIC_RELAXED);
+          return true;
+        }
+      }
       busy_wait_1_us();
       // device disconnect
       port->connected = false;

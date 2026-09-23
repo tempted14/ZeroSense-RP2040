@@ -13,6 +13,14 @@ divider. The added `src/pio_usb_host_timing.h` makes the divider calculation
 testable. The change is based on upstream
 [issue #197](https://github.com/sekigon-gonnoc/Pico-PIO-USB/issues/197) and
 [PR #206, first commit](https://github.com/sekigon-gonnoc/Pico-PIO-USB/pull/206/commits/02ca10b779ba4bba191bd46c7360d061fe703ce0).
-The full PR remains unmerged and has compatibility reports, so its other changes
-were deliberately not copied. RP2350 hardware soak testing is required before
-calling this a confirmed fix.
+The full PR remains unmerged and has compatibility reports, so the original
+v1.7.0 release copied only that EOP change.
+
+The separate, unreleased RP2350 host-stall test build selectively adds bounded
+TX completion, RX flag-clear and packet-receive waits, EOP detector re-arming,
+and a 100 us disconnect debounce based on the remaining issues described in
+[PR #206](https://github.com/sekigon-gonnoc/Pico-PIO-USB/pull/206). Its TX
+fault budget is longer than the upstream proposal because that timeout drew
+device-compatibility reports. These changes compile and pass software tests but
+still require a sustained test with the affected RP2350 and mouse. They are not
+part of the published v1.7.0 firmware.

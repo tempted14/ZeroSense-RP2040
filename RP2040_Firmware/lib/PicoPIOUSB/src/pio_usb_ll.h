@@ -8,7 +8,9 @@
 #include "hardware/pio.h"
 #include "hardware/regs/sysinfo.h"
 #include "pio_usb_configuration.h"
+#include "pio_usb_host_timing.h"
 #include "usb_definitions.h"
+#include "usb_crc.h"
 #include <stdint.h>
 
 #include "usb_tx.pio.h"
@@ -165,10 +167,16 @@ pio_usb_bus_get_line_state(root_port_t *root) {
   return (dm << 1) | dp;
 }
 
+void pio_usb_host_record_rx_flag_timeout(void);
+
 static __always_inline void pio_usb_bus_start_receive(const pio_port_t *pp) {
   pp->pio_usb_rx->irq = IRQ_RX_ALL_MASK;
+  const uint32_t start_us = get_time_us_32();
   while ((pp->pio_usb_rx->irq & IRQ_RX_ALL_MASK) != 0) {
-    continue;
+    if (pio_usb_host_timeout_elapsed(start_us, get_time_us_32(), 1000u)) {
+      pio_usb_host_record_rx_flag_timeout();
+      break;
+    }
   }
 }
 

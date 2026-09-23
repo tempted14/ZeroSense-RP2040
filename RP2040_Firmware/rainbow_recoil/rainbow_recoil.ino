@@ -948,7 +948,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:ORIGINAL-PATTERN-X2-20260922");
+    protocol_println("BUILD:HOST-STALL-TEST-X2-20260922");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (hostCoreStalled.load(std::memory_order_acquire)) {
@@ -1390,6 +1390,10 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 uint32_t hostQueueFailures = 0;
                 uint32_t hostUnmounts = 0;
                 uint32_t hostTaskAgeMs = 0;
+                uint32_t pioTxTimeouts = 0;
+                uint32_t pioRxFlagTimeouts = 0;
+                uint32_t pioRxPacketTimeouts = 0;
+                uint32_t pioFilteredDisconnects = 0;
 #ifdef ZEROSENSE_RP2350_USB_C
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
@@ -1401,6 +1405,11 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 // Sample the heartbeat before the clock to avoid a future timestamp.
                 const uint32_t hostTaskAt = hostTaskLastAtMs.load(std::memory_order_relaxed);
                 hostTaskAgeMs = millis() - hostTaskAt;
+                pioTxTimeouts = pio_usb_host_tx_timeout_count();
+                pioRxFlagTimeouts = pio_usb_host_rx_flag_timeout_count();
+                pioRxPacketTimeouts = pio_usb_host_rx_packet_timeout_count();
+                pioFilteredDisconnects =
+                    pio_usb_host_filtered_disconnect_count();
 #endif
                 const int64_t currentQueuedX =
                     static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
@@ -1417,7 +1426,9 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     "CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:"
                     "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu:"
                     "HOST_RECOVERIES=%lu:HOST_QUEUE_FAILURES=%lu:HOST_UNMOUNTS=%lu:"
-                    "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu\n",
+                    "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu:"
+                    "PIO_TX_TIMEOUTS=%lu:PIO_RX_FLAG_TIMEOUTS=%lu:"
+                    "PIO_RX_PACKET_TIMEOUTS=%lu:PIO_SE0_GLITCHES=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1435,7 +1446,11 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(hostQueueFailures),
                     static_cast<unsigned long>(hostUnmounts),
                     static_cast<unsigned long>(hostTaskAgeMs),
-                    static_cast<unsigned long>(protocolOutput.droppedMessages));
+                    static_cast<unsigned long>(protocolOutput.droppedMessages),
+                    static_cast<unsigned long>(pioTxTimeouts),
+                    static_cast<unsigned long>(pioRxFlagTimeouts),
+                    static_cast<unsigned long>(pioRxPacketTimeouts),
+                    static_cast<unsigned long>(pioFilteredDisconnects));
             }
             break;
 

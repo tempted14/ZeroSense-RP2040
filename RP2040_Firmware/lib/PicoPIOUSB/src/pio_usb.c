@@ -36,12 +36,42 @@ static uint8_t ack_encoded[5];
 static uint8_t nak_encoded[5];
 static uint8_t stall_encoded[5];
 static uint8_t pre_encoded[5];
+static uint32_t host_tx_timeouts;
+static uint32_t host_rx_flag_timeouts;
+static uint32_t host_rx_packet_timeouts;
+
+uint32_t pio_usb_host_tx_timeout_count(void) {
+  return __atomic_load_n(&host_tx_timeouts, __ATOMIC_RELAXED);
+}
+
+uint32_t pio_usb_host_rx_flag_timeout_count(void) {
+  return __atomic_load_n(&host_rx_flag_timeouts, __ATOMIC_RELAXED);
+}
+
+uint32_t pio_usb_host_rx_packet_timeout_count(void) {
+  return __atomic_load_n(&host_rx_packet_timeouts, __ATOMIC_RELAXED);
+}
+
+void pio_usb_host_record_rx_flag_timeout(void) {
+  __atomic_fetch_add(&host_rx_flag_timeouts, 1u, __ATOMIC_RELAXED);
+}
+
+static void __no_inline_not_in_flash_func(recover_tx_timeout)(pio_port_t *pp) {
+  __atomic_fetch_add(&host_tx_timeouts, 1u, __ATOMIC_RELAXED);
+  dma_channel_abort(pp->tx_ch);
+  pio_sm_set_enabled(pp->pio_usb_tx, pp->sm_tx, false);
+  pio_sm_clear_fifos(pp->pio_usb_tx, pp->sm_tx);
+  pio_sm_restart(pp->pio_usb_tx, pp->sm_tx);
+  pio_sm_exec(pp->pio_usb_tx, pp->sm_tx, pp->tx_reset_instr);
+  pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK;
+  pio_sm_set_enabled(pp->pio_usb_tx, pp->sm_tx, true);
+}
 
 //--------------------------------------------------------------------+
 // Bus functions
 //--------------------------------------------------------------------+
 
-static void __no_inline_not_in_flash_func(send_pre)(pio_port_t *pp) {
+static bool __no_inline_not_in_flash_func(send_pre)(pio_port_t *pp) {
   // send PRE token in full-speed
   pp->low_speed = false;
   uint16_t instr = pp->fs_tx_pre_program->instructions[0];
@@ -49,21 +79,29 @@ static void __no_inline_not_in_flash_func(send_pre)(pio_port_t *pp) {
 
   SM_SET_CLKDIV(pp->pio_usb_tx, pp->sm_tx, pp->clk_div_fs_tx);
 
-  pio_sm_exec(pp->pio_usb_tx, pp->sm_tx, pp->tx_start_instr);
   pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK;       // clear complete flag
+  pio_sm_exec(pp->pio_usb_tx, pp->sm_tx, pp->tx_start_instr);
   dma_channel_transfer_from_buffer_now(pp->tx_ch, pre_encoded,
                                        sizeof(pre_encoded));
 
+  const uint32_t tx_start_us = get_time_us_32();
   while ((pp->pio_usb_tx->irq & IRQ_TX_EOP_MASK) == 0) {
-    continue;
+    if (pio_usb_host_timeout_elapsed(tx_start_us, get_time_us_32(), 2000u)) {
+      recover_tx_timeout(pp);
+      return false;
+    }
   }
   // Wait for complete transmission of the PRE packet. We don't want to
   // accidentally send trailing Ks in low speed mode due to an early start
   // instruction that re-enables the outputs.
   uint32_t stall_mask = 1 << (PIO_FDEBUG_TXSTALL_LSB + pp->sm_tx);
   pp->pio_usb_tx->fdebug = stall_mask; // clear sticky stall mask bit
+  const uint32_t stall_start_us = get_time_us_32();
   while (!(pp->pio_usb_tx->fdebug & stall_mask)) {
-    continue;
+    if (pio_usb_host_timeout_elapsed(stall_start_us, get_time_us_32(), 2000u)) {
+      recover_tx_timeout(pp);
+      return false;
+    }
   }
 
   // change bus speed to low-speed
@@ -81,20 +119,30 @@ static void __no_inline_not_in_flash_func(send_pre)(pio_port_t *pp) {
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, false);
   SM_SET_CLKDIV(pp->pio_usb_rx, pp->sm_eop, pp->clk_div_ls_rx);
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, true);
+  return true;
 }
 
 void __not_in_flash_func(pio_usb_bus_usb_transfer)(pio_port_t *pp,
                                               uint8_t *data, uint16_t len) {
   if (pp->need_pre) {
-    send_pre(pp);
+    if (!send_pre(pp)) {
+      return;
+    }
   }
 
+  // Clear the completion flag before starting DMA: clearing it after start
+  // can erase a fast completion and turn the wait into a permanent hang.
+  pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK;
   pio_sm_exec(pp->pio_usb_tx, pp->sm_tx, pp->tx_start_instr);
   dma_channel_transfer_from_buffer_now(pp->tx_ch, data, len);
-  pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK; // clear complete flag
 
+  const uint32_t tx_start_us = get_time_us_32();
+  const uint32_t timeout_us = pio_usb_host_tx_timeout_us(len, pp->low_speed);
   while ((pp->pio_usb_tx->irq & IRQ_TX_ALL_MASK) == 0) {
-    continue;
+    if (pio_usb_host_timeout_elapsed(tx_start_us, get_time_us_32(), timeout_us)) {
+      recover_tx_timeout(pp);
+      return;
+    }
   }
   pp->pio_usb_tx->irq = IRQ_TX_ALL_MASK; // clear complete flag
 
@@ -132,6 +180,12 @@ void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)(const pio_port_t
   pio_sm_exec(pp->pio_usb_rx, pp->sm_rx, pp->rx_reset_instr);
   pio_sm_exec(pp->pio_usb_rx, pp->sm_rx, pp->rx_reset_instr2);
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, true);
+  // A stale EOP detector can leave every later IN request silent even while
+  // the host task is alive. Re-arm it alongside the RX decoder each request.
+  pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, false);
+  pio_sm_restart(pp->pio_usb_rx, pp->sm_eop);
+  pio_sm_exec(pp->pio_usb_rx, pp->sm_eop, pio_encode_jmp(pp->offset_eop));
+  pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_eop, true);
 }
 
 static inline __force_inline bool pio_usb_bus_wait_for_rx_start(const pio_port_t* pp) {
@@ -212,7 +266,12 @@ int __no_inline_not_in_flash_func(pio_usb_bus_receive_packet_and_handshake)(
   // Timeout in seven microseconds. That is enough time to receive one byte at low speed.
   // This is to detect packets without an EOP because the device was unplugged.
   uint32_t start = get_time_us_32();
+  const uint32_t packet_start_us = start;
   while (1) {
+    if (pio_usb_host_timeout_elapsed(packet_start_us, get_time_us_32(), 1000u)) {
+      __atomic_fetch_add(&host_rx_packet_timeouts, 1u, __ATOMIC_RELAXED);
+      return -1;
+    }
     if (pio_sm_get_rx_fifo_level(pio_usb_rx, sm_rx)) {
       uint8_t data = pio_sm_get(pio_usb_rx, sm_rx) >> 24;
       if (idx < rx_buf_len) {
