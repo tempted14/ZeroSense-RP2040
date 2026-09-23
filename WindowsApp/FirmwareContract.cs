@@ -16,7 +16,7 @@ internal static class FirmwareContract
     // Broad wire-safety bounds, not tuning clamps. Values are transferred
     // exactly and acknowledged; the UI calibration determines the actual scale.
     public const float MinimumSensitivityFactor = 0.05f;
-    public const float MaximumSensitivityFactor = 8.0f;
+    public const float MaximumSensitivityFactor = 16.0f;
     public const int MaximumPatternPoints = 160;
     public const int MinimumPatternRoundsPerMinute = 1;
     public const int MaximumPatternRoundsPerMinute = 2000;
@@ -79,6 +79,11 @@ internal static class FirmwareContract
         line.Equals(
             $"GENERAL_SETTINGS:TIMING_VARIANCE={(timingVarianceEnabled ? "ON" : "OFF")}" +
             $":DELTA_NOISE={(deltaNoiseEnabled ? "ON" : "OFF")}",
+            StringComparison.Ordinal);
+
+    public static bool FirstBulletKickAcknowledgementMatches(string line, float multiplier) =>
+        line.Equals(
+            string.Create(CultureInfo.InvariantCulture, $"FIRST_BULLET_KICK:V={multiplier:F3}"),
             StringComparison.Ordinal);
 
     public static bool PatternAcknowledgementMatches(string line, WeaponProfile profile) =>

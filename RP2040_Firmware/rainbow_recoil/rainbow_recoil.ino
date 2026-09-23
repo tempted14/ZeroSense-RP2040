@@ -17,6 +17,7 @@
 #include "correction_scheduler.h"
 #include "delta_noise.h"
 #include "motion_math.h"
+#include "first_bullet_kick.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
@@ -79,6 +80,7 @@ enum CommandId : uint8_t {
     CMD_CONFIG_ABORT = 0xFB,
     CMD_STATUS      = 0xFC,
     CMD_GENERAL_SETTINGS = 0xFD,
+    CMD_FIRST_BULLET_KICK = 0xFE,
     CMD_RESET       = 0xFF
 };
 
@@ -93,7 +95,7 @@ static constexpr float minCompensation = -127.0f;
 static constexpr float maxCompensation = 127.0f;
 static constexpr float minVerticalCompensation = 0.0f;
 static constexpr float minSensitivityFactor = 0.05f;
-static constexpr float maxSensitivityFactor = 8.0f;
+static constexpr float maxSensitivityFactor = 16.0f;
 // Adaptive standalone polling intervals in microseconds.
 static constexpr uint32_t POLL_IDLE_US   = 4000; // 250 Hz during idle
 static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
@@ -125,6 +127,7 @@ static int16_t patternHorizontal[maxPatternPoints] = {};
 static int16_t patternVertical[maxPatternPoints] = {};
 static float horizontalSensitivityFactor = 1.0f;
 static float verticalSensitivityFactor = 1.0f;
+static float firstBulletKickMultiplier = 1.0f;
 static float fractionalMouseX = 0.0f;
 static float fractionalMouseY = 0.0f;
 
@@ -167,7 +170,7 @@ static uint32_t nextRapidShotAtUs = 0;
 static uint32_t rapidIntervalRemainder = 0;
 static uint32_t lastHostKeepAliveAtMs = 0;
 
-static constexpr uint8_t configurationSchemaVersion = 3;
+static constexpr uint8_t configurationSchemaVersion = 4;
 static constexpr uint32_t configurationTransactionTimeoutMs = 10000;
 typedef struct {
     char profileName[54];
@@ -186,6 +189,7 @@ typedef struct {
     uint16_t rapidRoundsPerMinute;
     bool generalTimingJitterEnabled;
     bool deltaNoiseEnabled;
+    float firstBulletKickMultiplier;
 } ConfigurationSnapshot;
 
 static ConfigurationSnapshot previousConfiguration;
@@ -314,6 +318,7 @@ static std::atomic<MouseProxyEvent> mouseProxyEvent{MouseProxyEvent::None};
 static std::atomic<bool> hostMouseFaultPending{false};
 static std::atomic<uint32_t> hostReportsReceived{0};
 static std::atomic<uint32_t> hostDecodeErrors{0};
+static std::atomic<uint32_t> hostEmptyReports{0};
 static std::atomic<uint32_t> hostAccumulatorSaturations{0};
 static std::atomic<uint32_t> hostReceiveRecoveries{0};
 static std::atomic<uint32_t> hostReceiveQueueFailures{0};
@@ -617,6 +622,12 @@ void tuh_hid_report_received_cb(
         instance);
     if (mouseInterface != nullptr && !mouseInterface->bootProtocolPending) {
         hostReportsReceived.fetch_add(1, std::memory_order_relaxed);
+        // TinyUSB HID also invokes this callback for failed transfers with
+        // zero bytes. Keep the legacy error total, but distinguish those
+        // callbacks from non-empty reports rejected by the HID decoder.
+        if (length == 0) {
+            hostEmptyReports.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!decode_host_mouse_report(*mouseInterface, report, length)) {
             hostDecodeErrors.fetch_add(1, std::memory_order_relaxed);
         } else {
@@ -807,6 +818,7 @@ static void capture_configuration(ConfigurationSnapshot& snapshot) {
     snapshot.rapidRoundsPerMinute = rapidFireRoundsPerMinute;
     snapshot.generalTimingJitterEnabled = generalTimingJitterEnabled;
     snapshot.deltaNoiseEnabled = deltaNoiseEnabled;
+    snapshot.firstBulletKickMultiplier = firstBulletKickMultiplier;
 }
 
 static void restore_configuration(const ConfigurationSnapshot& snapshot) {
@@ -828,6 +840,7 @@ static void restore_configuration(const ConfigurationSnapshot& snapshot) {
     rapidFireRoundsPerMinute = snapshot.rapidRoundsPerMinute;
     generalTimingJitterEnabled = snapshot.generalTimingJitterEnabled;
     deltaNoiseEnabled = snapshot.deltaNoiseEnabled;
+    firstBulletKickMultiplier = snapshot.firstBulletKickMultiplier;
 }
 
 static void hash_byte(uint32_t& hash, uint8_t value) {
@@ -879,6 +892,7 @@ static uint32_t current_configuration_hash() {
     hash_uint16(hash, rapidFireEnabled ? rapidFireRoundsPerMinute : 0);
     hash_byte(hash, generalTimingJitterEnabled ? 1 : 0);
     hash_byte(hash, deltaNoiseEnabled ? 1 : 0);
+    hash_float(hash, firstBulletKickMultiplier);
     for (uint8_t index = 0; index < pointCount; ++index) {
         hash_int16(hash, patternHorizontal[index]);
         hash_int16(hash, patternVertical[index]);
@@ -948,7 +962,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:HOST-FIX-OPTIC-20260922");
+    protocol_println("BUILD:V1.9-FIRST-KICK-20260923");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (hostCoreStalled.load(std::memory_order_acquire)) {
@@ -1178,6 +1192,20 @@ static void apply_general_settings_payload(const uint8_t* payload, uint16_t leng
         deltaNoiseEnabled ? "ON" : "OFF");
 }
 
+static void apply_first_bullet_kick_payload(const uint8_t* payload, uint16_t length) {
+    if (length != sizeof(float)) {
+        protocol_println("ERROR:FIRST_BULLET_KICK:FORMAT");
+        return;
+    }
+    const float multiplier = readFloatLittleEndian(payload);
+    if (!std::isfinite(multiplier) || multiplier < 1.0f || multiplier > 4.0f) {
+        protocol_println("ERROR:FIRST_BULLET_KICK:RANGE");
+        return;
+    }
+    firstBulletKickMultiplier = multiplier;
+    protocol_printf("FIRST_BULLET_KICK:V=%.3f\n", firstBulletKickMultiplier);
+}
+
 static void process_command(uint8_t command, const uint8_t* payload, uint16_t length) {
     switch (command) {
         case CMD_PING:
@@ -1248,6 +1276,15 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             }
             configurationTransactionTouchedAtMs = millis();
             apply_general_settings_payload(payload, length);
+            break;
+
+        case CMD_FIRST_BULLET_KICK:
+            if (!configurationTransactionActive) {
+                protocol_println("ERROR:CONFIG:TRANSACTION_REQUIRED");
+                break;
+            }
+            configurationTransactionTouchedAtMs = millis();
+            apply_first_bullet_kick_payload(payload, length);
             break;
 
         case CMD_KEEPALIVE:
@@ -1390,9 +1427,17 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 uint32_t hostQueueFailures = 0;
                 uint32_t hostUnmounts = 0;
                 uint32_t hostTaskAgeMs = 0;
+                uint32_t pioTxTimeouts = 0;
+                uint32_t pioRxFlagTimeouts = 0;
+                uint32_t pioRxPacketTimeouts = 0;
+                uint32_t pioFilteredDisconnects = 0;
+                uint32_t hostEmpty = 0;
+                uint32_t pioRxOversize = 0;
 #ifdef ZEROSENSE_RP2350_USB_C
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
+                hostEmpty = hostEmptyReports.load(std::memory_order_relaxed);
+                pioRxOversize = pio_usb_host_rx_oversize_count();
                 hostSaturations =
                     hostAccumulatorSaturations.load(std::memory_order_relaxed);
                 hostRecoveries = hostReceiveRecoveries.load(std::memory_order_relaxed);
@@ -1401,6 +1446,11 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 // Sample the heartbeat before the clock to avoid a future timestamp.
                 const uint32_t hostTaskAt = hostTaskLastAtMs.load(std::memory_order_relaxed);
                 hostTaskAgeMs = millis() - hostTaskAt;
+                pioTxTimeouts = pio_usb_host_tx_timeout_count();
+                pioRxFlagTimeouts = pio_usb_host_rx_flag_timeout_count();
+                pioRxPacketTimeouts = pio_usb_host_rx_packet_timeout_count();
+                pioFilteredDisconnects =
+                    pio_usb_host_filtered_disconnect_count();
 #endif
                 const int64_t currentQueuedX =
                     static_cast<int64_t>(pendingMouseX) + pendingPhysicalMouseX;
@@ -1417,7 +1467,10 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     "CORRECTION_LATE=%lu:MAX_CORRECTION_LATE_US=%lu:QUEUE=%lu:"
                     "REPORT_INTERVAL_US=%lu:GENERAL_DT_CLAMPS=%lu:"
                     "HOST_RECOVERIES=%lu:HOST_QUEUE_FAILURES=%lu:HOST_UNMOUNTS=%lu:"
-                    "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu\n",
+                    "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu:"
+                    "PIO_TX_TIMEOUTS=%lu:PIO_RX_FLAG_TIMEOUTS=%lu:"
+                    "PIO_RX_PACKET_TIMEOUTS=%lu:PIO_SE0_GLITCHES=%lu:"
+                    "HOST_EMPTY_REPORTS=%lu:PIO_RX_OVERSIZE=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1435,7 +1488,13 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(hostQueueFailures),
                     static_cast<unsigned long>(hostUnmounts),
                     static_cast<unsigned long>(hostTaskAgeMs),
-                    static_cast<unsigned long>(protocolOutput.droppedMessages));
+                    static_cast<unsigned long>(protocolOutput.droppedMessages),
+                    static_cast<unsigned long>(pioTxTimeouts),
+                    static_cast<unsigned long>(pioRxFlagTimeouts),
+                    static_cast<unsigned long>(pioRxPacketTimeouts),
+                    static_cast<unsigned long>(pioFilteredDisconnects),
+                    static_cast<unsigned long>(hostEmpty),
+                    static_cast<unsigned long>(pioRxOversize));
             }
             break;
 
@@ -1975,7 +2034,9 @@ static void generate_movement(uint32_t shotIntervalUs) {
         }
         // Pattern values are stored as Q8.8 fixed-point (int16 / 256.0f)
         horizontal = static_cast<float>(patternHorizontal[shotsInBurst]) / 256.0f;
-        vertical = static_cast<float>(patternVertical[shotsInBurst]) / 256.0f;
+        vertical = ZeroSenseFirstBullet::verticalForShot(
+            static_cast<float>(patternVertical[shotsInBurst]) / 256.0f,
+            shotsInBurst, firstBulletKickMultiplier);
     } else {
         vertical = activeVerticalCompensation;
         horizontal = activeHorizontalCompensation;

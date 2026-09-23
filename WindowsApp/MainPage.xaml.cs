@@ -90,6 +90,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
     private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
+    private readonly FirmwareTransportMonitor _transportMonitor = new();
     private FirmwareStatusKind? _physicalMouseStatus;
     private ushort _physicalMouseVendorId;
     private ushort _physicalMouseProductId;
@@ -99,7 +100,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         InitializeComponent();
         var appVersion = Assembly.GetExecutingAssembly().GetName().Version ?? new Version();
         TopVersionText.Text =
-            $"v{appVersion.ToString(3)} · config {SerialProtocol.ConfigurationSchemaVersion}";
+            $"v{appVersion.ToString(3)} validation · config {SerialProtocol.ConfigurationSchemaVersion}";
         DiagnosticLog.Record("app", "Main page initialized.");
         InitializeSelectors();
         ApplySavedSettings();
@@ -186,6 +187,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             DeltaNoiseToggle.IsOn = settings.DeltaNoiseEnabled;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
+            OriginalPatternMultiplierBox.Value = settings.OriginalPatternOutputMultiplier;
             WeaponConfidenceSlider.Value = settings.WeaponDetectionConfidence * 100.0;
             WeaponDetectionRegionXBox.Value = settings.WeaponDetectionRegionX;
             WeaponDetectionRegionYBox.Value = settings.WeaponDetectionRegionY;
@@ -588,6 +590,17 @@ public sealed partial class MainPage : UserControl, IDisposable
                 ApplyFirmwareStatus(status);
                 DiagnosticLog.Record("firmware", message);
             }
+            else if (message.StartsWith("BUILD:", StringComparison.Ordinal))
+            {
+                FirmwareBuildText.Text = "Firmware build: " + message[6..];
+                DiagnosticLog.Record("firmware", message);
+            }
+            else if (message.StartsWith("STATUS:HASH=", StringComparison.Ordinal))
+            {
+                // Protocol readback belongs in the log, not over the clear
+                // human-facing mouse/connection status on every STATUS poll.
+                DiagnosticLog.Record("firmware", message);
+            }
             else if (!message.StartsWith("PONG:", StringComparison.Ordinal))
             {
                 DeviceMessageText.Text = message;
@@ -724,36 +737,35 @@ public sealed partial class MainPage : UserControl, IDisposable
                 _physicalMouseProductId = 0;
                 break;
             case FirmwareStatusKind.TransportMetrics:
-                var transportWarning = update.CurrentQueuedDelta > 127 ||
-                    update.MaximumActiveReportGapUs > 3000 ||
-                    update.MaximumCorrectionLatenessUs > 5000 ||
-                    update.HostDecodeErrors > 0 ||
-                    update.HostAccumulatorSaturations > 0 ||
-                    update.GeneralIntervalClamps > 0 ||
-                    update.HostReceiveQueueFailures > 0 ||
-                    update.HostMouseUnmounts > 0 ||
-                    update.HostTaskAgeMs > 100 || update.CdcDroppedMessages > 0;
-                FirmwareTelemetryText.Text =
-                    $"{(transportWarning ? "Timing warning" : "Transport healthy")}: " +
+                var transport = _transportMonitor.Observe(update,
+                    (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency,
+                    _firmwareDeviceKind == FirmwareStatusKind.Rp2350MouseProxy);
+                FirmwareTelemetryText.Text = transport.Summary;
+                FirmwareTelemetryDetailsText.Text =
                     $"{update.HidReportsSent} HID reports · " +
                     $"{update.HidBusyDeferrals} busy deferrals · " +
                     $"max queue {update.MaximumQueuedDelta} · " +
                     $"max active gap {update.MaximumActiveReportGapUs} µs · " +
-                    $"downstream {update.HostReportsReceived} reports / " +
-                    $"{update.HostDecodeErrors} decode errors / " +
+                    $"downstream {update.HostReportsReceived} callbacks / " +
+                    $"{update.HostDecodeErrors} rejected (including {update.HostEmptyReports} empty) / " +
                     $"{update.HostAccumulatorSaturations} saturations / " +
                     $"{update.HostReceiveRecoveries} receive recoveries · " +
                     $"{update.HostReceiveQueueFailures} queue failures / " +
                     $"{update.HostMouseUnmounts} mouse unmounts / " +
                     $"host task age {update.HostTaskAgeMs} ms / " +
                     $"{update.CdcDroppedMessages} dropped status messages · " +
+                    $"PIO {update.PioTxTimeouts} TX timeouts / " +
+                    $"{update.PioRxFlagTimeouts} RX flag timeouts / " +
+                    $"{update.PioRxPacketTimeouts} packet timeouts / " +
+                    $"{update.PioSe0Glitches} filtered SE0 glitches · " +
+                    $"{update.PioRxOversize} oversized RX packets · " +
                     $"{update.UpstreamDisconnectStops} upstream safety stops · " +
                     $"scheduler {update.CorrectionDelayedFrames} delayed / " +
                     $"{update.MaximumCorrectionLatenessUs} µs max · " +
                     $"queue now {update.CurrentQueuedDelta} · " +
-                    $"report interval {update.CurrentReportIntervalUs} µs · " +
+                    $"target report interval {update.CurrentReportIntervalUs} µs (not measured polling) · " +
                     $"general dt clamps {update.GeneralIntervalClamps}";
-                FirmwareTelemetryText.Foreground = transportWarning
+                FirmwareTelemetryText.Foreground = transport.Warning
                     ? WarningBrush
                     : ConnectedBrush;
                 return;
@@ -820,7 +832,10 @@ public sealed partial class MainPage : UserControl, IDisposable
         _physicalMouseStatus = null;
         _physicalMouseVendorId = 0;
         _physicalMouseProductId = 0;
+        _transportMonitor.Reset();
         FirmwareTelemetryText.Text = "Transport: metrics appear after configuration sync";
+        FirmwareTelemetryDetailsText.Text = "Waiting for counters.";
+        FirmwareBuildText.Text = "Firmware build: waiting for device";
         UpdateHardwareStatusPresentation();
     }
 
@@ -871,6 +886,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
         UpdateHorizontalTuningUi();
+        UpdateOriginalPatternMultiplierStatus(SettingsManager.LoadSettings());
+        UpdateCalibrationSummary(SettingsManager.LoadSettings());
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -1020,6 +1037,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateProfileDescription();
         UpdateExperimentalTuningUi();
         UpdateHorizontalTuningUi();
+        UpdateOriginalPatternMultiplierStatus(SettingsManager.LoadSettings());
+        UpdateCalibrationSummary(SettingsManager.LoadSettings());
         UpdateOverlayContent();
         SaveAndSynchronize();
     }
@@ -1196,6 +1215,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.MouseSensitivityMultiplierUnit = 0.001f;
         settings.MasterRecoilGain = RecoilStrengthModel.MasterDefault;
         settings.TwoPointFiveAutoVerticalBoost = 1.0;
+        settings.OriginalPatternOutputMultiplier = 2.0;
         settings.AdsSensitivity = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
         {
             ["1.0x"] = 38.0f,
@@ -1207,11 +1227,12 @@ public sealed partial class MainPage : UserControl, IDisposable
         if (!string.IsNullOrWhiteSpace(selectedWeapon))
         {
             settings.SetWeaponOutputStrength(selectedWeapon, RecoilStrengthModel.Default);
+            settings.SetWeaponFirstBulletKick(selectedWeapon, 1.0);
         }
         settings.Normalize();
         RefreshCalibrationControls(settings);
         CalibrationActionStatusText.Text =
-            "Reference sensitivity, master gain, and this weapon's output strength were reset. Undo is available.";
+            "Reference sensitivity, master gain, and this weapon's output strength and first bullet kick were reset. Undo is available.";
         DiagnosticLog.Record("calibration", $"Reset calibration for {selectedWeapon ?? "no weapon"}.");
         SaveAndSynchronize();
     }
@@ -1248,6 +1269,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             SensitivityMultiplierBox.Value = settings.MouseSensitivityMultiplierUnit;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
+            OriginalPatternMultiplierBox.Value = settings.OriginalPatternOutputMultiplier;
             AutomaticMagnificationToggle.IsOn = settings.AutomaticMagnificationEnabled;
             MagnificationSelector.SelectedItem = settings.ActiveMagnification;
             AdsSensitivityBox.Value = settings.GetActiveAdsSensitivity();
@@ -2158,11 +2180,14 @@ public sealed partial class MainPage : UserControl, IDisposable
                 new DeviceConfigurationRequest(
                     effectiveProfile,
                     settings.CompensationMode,
-                    settings.CalculateSensitivityScale(effectiveProfile),
+                    settings.CalculateSensitivityScale(effectiveProfile, settings.CompensationMode),
                     settings.RapidFireEnabled && effectiveProfile.SupportsRapidFire,
                     effectiveProfile.RapidFireRoundsPerMinute,
                     settings.GeneralTimingVarianceEnabled,
-                    settings.DeltaNoiseEnabled),
+                    settings.DeltaNoiseEnabled,
+                    SerialProtocol.UsesPattern(settings.CompensationMode) &&
+                        effectiveProfile.HasWeaponPattern
+                        ? settings.GetWeaponFirstBulletKick(effectiveProfile.Name) : 1.0f),
                 cancellationToken);
             if (!connection.IsSimulator)
             {
@@ -2406,7 +2431,93 @@ public sealed partial class MainPage : UserControl, IDisposable
                 : $"{selected.Name} has no automatic recoil output to scale.";
         MasterRecoilGainStatusText.Text =
             $"{settings.MasterRecoilGain:0.00}× · profile points cap at 127; high values can flatten their shape";
+        UpdateOriginalPatternMultiplierStatus(settings);
         UpdateTwoPointFiveBoostStatus(settings);
+        UpdateFirstBulletKickUi(settings);
+    }
+
+    private void UpdateFirstBulletKickUi(Settings settings)
+    {
+        var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
+        var available = selected?.Profile.HasWeaponPattern == true &&
+            SerialProtocol.UsesPattern(settings.CompensationMode);
+        var multiplier = selected is null ? 1.0f :
+            settings.GetWeaponFirstBulletKick(selected.Name);
+        var wasInitializing = _isInitializing;
+        _isInitializing = true;
+        try
+        {
+            FirstBulletKickBox.Value = multiplier;
+            FirstBulletKickBox.IsEnabled = available;
+            ResetFirstBulletKickButton.IsEnabled = available && multiplier != 1.0f;
+        }
+        finally
+        {
+            _isInitializing = wasInitializing;
+        }
+        FirstBulletKickStatusText.Text = selected is null
+            ? "Select an automatic weapon; 1.00× leaves the first bullet unchanged."
+            : available
+                ? $"{selected.Name}: {multiplier:0.00}× first-shot vertical only, after the pattern limit."
+                : "Only applies to an automatic weapon in a pattern mode; saved tuning is retained.";
+    }
+
+    private void FirstBulletKick_ValueChanged(
+        NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (_isInitializing || WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
+        {
+            return;
+        }
+        var settings = SettingsManager.LoadSettings();
+        settings.SetWeaponFirstBulletKick(selected.Name,
+            ValidDouble(sender.Value, settings.GetWeaponFirstBulletKick(selected.Name)));
+        UpdateFirstBulletKickUi(settings);
+        UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
+    private void ResetFirstBulletKick_Click(object sender, RoutedEventArgs e)
+    {
+        if (WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
+        {
+            return;
+        }
+        var settings = SettingsManager.LoadSettings();
+        settings.SetWeaponFirstBulletKick(selected.Name, 1.0);
+        UpdateFirstBulletKickUi(settings);
+        UpdateOverlayContent();
+        SaveAndSynchronize();
+    }
+
+    private void UpdateOriginalPatternMultiplierStatus(Settings settings)
+    {
+        var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;
+        var effective = selected is null ? null : BuildEffectiveSelectedProfile(settings);
+        var applies = settings.CompensationMode == CompensationMode.WeaponPattern &&
+            effective is { IsBaseline: true, HasWeaponPattern: true,
+                PatternDataQuality: PatternDataQuality.VideoDerivedEstimate };
+        OriginalPatternMultiplierStatusText.Text = applies
+            ? $"Active for {selected!.Name}: {settings.OriginalPatternOutputMultiplier:0.00}× X/Y output after the profile limit."
+            : "Only applies to stock estimated automatic patterns in Original mode; modified and measured profiles are unchanged.";
+    }
+
+    private void OriginalPatternMultiplier_ValueChanged(
+        NumberBox sender,
+        NumberBoxValueChangedEventArgs args)
+    {
+        if (_isInitializing)
+        {
+            return;
+        }
+
+        var settings = SettingsManager.LoadSettings();
+        settings.OriginalPatternOutputMultiplier = double.IsFinite(sender.Value)
+            ? Math.Clamp(sender.Value, 1.0, 4.0)
+            : 2.0;
+        UpdateOriginalPatternMultiplierStatus(settings);
+        UpdateCalibrationSummary(settings);
+        SaveAndSynchronize();
     }
 
     private void UpdateTwoPointFiveBoostStatus(Settings settings)
@@ -2641,7 +2752,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private void UpdateCalibrationSummary(Settings settings)
     {
         var profile = BuildEffectiveSelectedProfile(settings);
-        var scale = settings.CalculateSensitivityScale(profile);
+        var scale = settings.CalculateSensitivityScale(profile, settings.CompensationMode);
         CalibrationSummaryText.Text =
             $"Scale H {scale.Horizontal:0.000} / V {scale.Vertical:0.000}  ·  " +
             $"master gain {settings.MasterRecoilGain:0.00}×  ·  " +
@@ -2777,8 +2888,10 @@ public sealed partial class MainPage : UserControl, IDisposable
         bool AutomaticMagnification,
         double MasterRecoilGain,
         double TwoPointFiveAutoVerticalBoost,
+        double OriginalPatternOutputMultiplier,
         string? WeaponName,
-        double WeaponStrength)
+        double WeaponStrength,
+        float FirstBulletKick)
     {
         public static CalibrationSnapshot Capture(Settings settings, string? weaponName) => new(
             settings.HorizontalSensitivity,
@@ -2790,10 +2903,14 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.AutomaticMagnificationEnabled,
             settings.MasterRecoilGain,
             settings.TwoPointFiveAutoVerticalBoost,
+            settings.OriginalPatternOutputMultiplier,
             weaponName,
             string.IsNullOrWhiteSpace(weaponName)
                 ? RecoilStrengthModel.Default
-                : settings.GetWeaponOutputStrength(weaponName));
+                : settings.GetWeaponOutputStrength(weaponName),
+            string.IsNullOrWhiteSpace(weaponName)
+                ? 1.0f
+                : settings.GetWeaponFirstBulletKick(weaponName));
 
         public void Restore(Settings settings)
         {
@@ -2808,9 +2925,11 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.AutomaticMagnificationEnabled = AutomaticMagnification;
             settings.MasterRecoilGain = MasterRecoilGain;
             settings.TwoPointFiveAutoVerticalBoost = TwoPointFiveAutoVerticalBoost;
+            settings.OriginalPatternOutputMultiplier = OriginalPatternOutputMultiplier;
             if (!string.IsNullOrWhiteSpace(WeaponName))
             {
                 settings.SetWeaponOutputStrength(WeaponName, WeaponStrength);
+                settings.SetWeaponFirstBulletKick(WeaponName, FirstBulletKick);
             }
         }
     }
