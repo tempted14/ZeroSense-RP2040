@@ -21,6 +21,12 @@ CS_PROTOCOL = (ROOT / "WindowsApp" / "SerialProtocol.cs").read_text()
 CS_CONNECTION = (ROOT / "WindowsApp" / "SerialConnection.cs").read_text()
 PLATFORMIO = (ROOT / "RP2040_Firmware" / "platformio.ini").read_text()
 PIO_HOST = (ROOT / "RP2040_Firmware" / "lib" / "PicoPIOUSB" / "src" / "pio_usb.c").read_text()
+PIO_LOW_LEVEL = (
+    ROOT / "RP2040_Firmware" / "lib" / "PicoPIOUSB" / "src" / "pio_usb_ll.h"
+).read_text()
+PIO_HOST_FRAME = (
+    ROOT / "RP2040_Firmware" / "lib" / "PicoPIOUSB" / "src" / "pio_usb_host.c"
+).read_text()
 PIO_PROVENANCE = (ROOT / "RP2040_Firmware" / "lib" / "README.md").read_text()
 RP2350_BOARD = json.loads((
     ROOT / "RP2040_Firmware" / "boards" / "waveshare_rp2350_usb_c.json"
@@ -346,9 +352,20 @@ class FirmwareContractTests(unittest.TestCase):
 
     def test_host_diagnostics_distinguish_loop_and_report_stalls(self) -> None:
         for metric in ("HOST_QUEUE_FAILURES", "HOST_UNMOUNTS", "HOST_TASK_AGE_MS",
-                       "CDC_DROPPED"):
+                       "CDC_DROPPED", "PIO_TX_TIMEOUTS", "PIO_RX_FLAG_TIMEOUTS",
+                       "PIO_RX_PACKET_TIMEOUTS", "PIO_SE0_GLITCHES"):
             self.assertIn(metric + "=%lu", FIRMWARE)
         self.assertIn("hostTaskLastAtMs.store(millis()", FIRMWARE)
+
+    def test_host_stall_paths_are_bounded_and_traceable(self) -> None:
+        self.assertIn("pio_usb_host_tx_timeout_us(len, pp->low_speed)", PIO_HOST)
+        self.assertIn("recover_tx_timeout(pp)", PIO_HOST)
+        self.assertIn("packet_start_us", PIO_HOST)
+        self.assertIn("pio_sm_restart(pp->pio_usb_rx, pp->sm_eop)", PIO_HOST)
+        self.assertIn("pio_usb_host_record_rx_flag_timeout()", PIO_LOW_LEVEL)
+        self.assertIn("pio_usb_host_timeout_elapsed(", PIO_LOW_LEVEL)
+        self.assertIn("filtered_disconnects", PIO_HOST_FRAME)
+        self.assertIn("BUILD:HOST-STALL-TEST-X2-20260922", FIRMWARE)
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
         self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
