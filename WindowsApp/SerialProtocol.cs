@@ -12,7 +12,7 @@ internal static class SerialProtocol
 {
     internal const int MaximumPayloadLength = 63;
     internal const int MaximumProfileNameLength = 49;
-    internal const byte ConfigurationSchemaVersion = 3;
+    internal const byte ConfigurationSchemaVersion = 4;
     internal const byte FrameMagicFirst = 0xA5;
     internal const byte FrameMagicSecond = 0x5A;
     internal const byte FrameVersion = 1;
@@ -185,6 +185,17 @@ internal static class SerialProtocol
                 deltaNoiseEnabled ? (byte)1 : (byte)0
             ]);
 
+    public static byte[] BuildFirstBulletKickCommand(float multiplier)
+    {
+        if (!float.IsFinite(multiplier) || multiplier is < 1.0f or > 4.0f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(multiplier));
+        }
+        var payload = new byte[sizeof(float)];
+        BinaryPrimitives.WriteSingleLittleEndian(payload, multiplier);
+        return BuildPacket(CommandType.FirstBulletKick, payload);
+    }
+
     public static byte[] BuildArmLeaseCommand(bool enabled) =>
         BuildPacket(CommandType.ArmLease, [enabled ? (byte)1 : (byte)0]);
 
@@ -226,13 +237,15 @@ internal static class SerialProtocol
         bool rapidFireEnabled,
         int rapidFireRoundsPerMinute,
         bool generalTimingVarianceEnabled = false,
-        bool deltaNoiseEnabled = false)
+        bool deltaNoiseEnabled = false,
+        float firstBulletKick = 1.0f)
     {
         ArgumentNullException.ThrowIfNull(profile);
         // Reuse the encoders for all contract validation before hashing.
         _ = BuildProfileCommand(profile, mode);
         _ = BuildSensitivityCommand(scale);
         _ = BuildRapidFireCommand(rapidFireEnabled, rapidFireRoundsPerMinute);
+        _ = BuildFirstBulletKickCommand(firstBulletKick);
 
         var usesPattern = UsesPattern(mode) && profile.HasWeaponPattern;
         var pointCount = usesPattern
@@ -258,6 +271,7 @@ internal static class SerialProtocol
         AppendUInt16(canonical, (ushort)(rapidFireEnabled ? rapidFireRoundsPerMinute : 0));
         canonical.Add(generalTimingVarianceEnabled ? (byte)1 : (byte)0);
         canonical.Add(deltaNoiseEnabled ? (byte)1 : (byte)0);
+        AppendSingle(canonical, firstBulletKick);
 
         for (var index = 0; index < pointCount; ++index)
         {
@@ -403,6 +417,7 @@ internal static class SerialProtocol
         "CONFIG_ABORT" => CommandType.ConfigurationAbort,
         "STATUS" => CommandType.Status,
         "GENERAL_SETTINGS" => CommandType.GeneralSettings,
+        "FIRST_BULLET_KICK" => CommandType.FirstBulletKick,
         "RESET" => CommandType.Reset,
         _ => throw new ArgumentException($"Unknown command type '{name}'.", nameof(name))
     };
@@ -423,6 +438,7 @@ internal static class SerialProtocol
         ConfigurationAbort = 0xFB,
         Status = 0xFC,
         GeneralSettings = 0xFD,
+        FirstBulletKick = 0xFE,
         Reset = 0xFF
     }
 }

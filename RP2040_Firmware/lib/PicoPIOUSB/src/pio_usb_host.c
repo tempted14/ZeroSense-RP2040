@@ -219,6 +219,11 @@ static void __not_in_flash_func(busy_wait_1_us)(void) {
   }
 }
 
+uint32_t pio_usb_host_filtered_disconnect_count(void) {
+  // Legacy metric: keep the wire schema while restoring baseline detection.
+  return 0;
+}
+
 static bool __no_inline_not_in_flash_func(connection_check)(root_port_t *port) {
   if (pio_usb_bus_get_line_state(port) == PORT_PIN_SE0) {
     busy_wait_1_us();
@@ -540,11 +545,10 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
   uint8_t expect_pid = (ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0;
 
   pio_usb_bus_prepare_receive(pp);
-  pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num);
-  pio_usb_bus_start_receive(pp);
-
-  int receive_len = pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK);
-  uint8_t const receive_pid = pp->usb_rx_buffer[1];
+  const bool ready = pio_usb_bus_send_token(pp, USB_PID_IN, ep->dev_addr, ep->ep_num) &&
+                     pio_usb_bus_start_receive(pp);
+  int receive_len = ready ? pio_usb_bus_receive_packet_and_handshake(pp, USB_PID_ACK) : -1;
+  uint8_t const receive_pid = ready ? pp->usb_rx_buffer[1] : 0;
 
   if (receive_len >= 0) {
     if (receive_pid == expect_pid) {
@@ -594,15 +598,12 @@ static int __no_inline_not_in_flash_func(usb_out_transaction)(pio_port_t *pp,
   uint16_t const xact_len = pio_usb_ll_get_transaction_len(ep);
 
   pio_usb_bus_prepare_receive(pp);
-  pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num);
-
-  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
-  pio_usb_bus_start_receive(pp);
-
-  pio_usb_bus_wait_handshake(pp);
+  const bool ready = pio_usb_bus_send_token(pp, USB_PID_OUT, ep->dev_addr, ep->ep_num) &&
+                     pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len) &&
+                     pio_usb_bus_start_receive(pp);
+  // Use the validated handshake, never a stale byte after a failed wait.
+  uint8_t const receive_token = ready ? pio_usb_bus_wait_handshake(pp) : 0;
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false);
-
-  uint8_t const receive_token = pp->usb_rx_buffer[1];
 
   if (receive_token == USB_PID_ACK) {
     pio_usb_ll_transfer_continue(ep, xact_len);
@@ -634,15 +635,16 @@ static int __no_inline_not_in_flash_func(usb_setup_transaction)(
 
   // Setup token
   pio_usb_bus_prepare_receive(pp);
-  pio_usb_bus_send_token(pp, USB_PID_SETUP, ep->dev_addr, 0);
+  const bool token_sent = pio_usb_bus_send_token(pp, USB_PID_SETUP, ep->dev_addr, 0);
 
   // Data
   ep->data_id = 0; // set to DATA0
-  pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len);
+  const bool ready = token_sent &&
+                     pio_usb_bus_usb_transfer(pp, ep->buffer, ep->encoded_data_len) &&
+                     pio_usb_bus_start_receive(pp);
 
   // Handshake
-  pio_usb_bus_start_receive(pp);
-  const uint8_t handshake = pio_usb_bus_wait_handshake(pp);
+  const uint8_t handshake = ready ? pio_usb_bus_wait_handshake(pp) : 0;
   pio_sm_set_enabled(pp->pio_usb_rx, pp->sm_rx, false);
 
   if (handshake == USB_PID_ACK) {

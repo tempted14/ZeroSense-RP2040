@@ -8,6 +8,7 @@
 #include "../../RP2040_Firmware/rainbow_recoil/delta_noise.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_receive_recovery.h"
 #include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
+#include "../../RP2040_Firmware/rainbow_recoil/first_bullet_kick.h"
 #include "../../RP2040_Firmware/rainbow_recoil/protocol_output.h"
 #include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_timing.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_core_health.h"
@@ -23,8 +24,18 @@ void expect(bool condition, const char* name) {
 }
 }
 
+#include "pio_host_guard_tests.h"
+
 int main() {
     using namespace ZeroSenseHid;
+    testPioHostGuards();
+
+    expect(ZeroSenseFirstBullet::verticalForShot(127.0f, 0, 2.0f) == 254.0f,
+        "first bullet kick applies after Q8.8 profile saturation");
+    expect(ZeroSenseFirstBullet::verticalForShot(127.0f, 1, 2.0f) == 127.0f,
+        "later shots retain their original vertical vectors");
+    expect(ZeroSenseFirstBullet::verticalForShot(12.0f, 0, 1.0f) == 12.0f,
+        "default first bullet kick is neutral");
 
     expect(pio_usb_host_bit_cycles(2, 128) == 10,
         "120 MHz full-speed PIO bit timing includes half-cycle divider");
@@ -74,6 +85,22 @@ int main() {
     }
     expect(boostedTotal == 508 && largestBoostedFrame <= 127,
         "capped 127-point pattern delivers boosted correction across HID frames");
+    ZeroSenseCorrection::State maximumPatternScheduler = {};
+    ZeroSenseCorrection::schedule(maximumPatternScheduler, -127.0f * 4.0f,
+        127.0f * 16.0f, 30000, 1000);
+    int32_t maximumPatternX = 0;
+    int32_t maximumPatternY = 0;
+    int32_t maximumPatternFrame = 0;
+    for (uint32_t frame = 0; frame < 30; ++frame) {
+        const auto result = ZeroSenseCorrection::service(
+            maximumPatternScheduler, 1000 + frame * 1000);
+        maximumPatternX += result.queuedX;
+        maximumPatternY += result.queuedY;
+        maximumPatternFrame = std::max(maximumPatternFrame, result.queuedY);
+    }
+    expect(maximumPatternX == -508 && maximumPatternY == 2032 &&
+        maximumPatternFrame <= 127,
+        "combined pattern and optic boost emits the full correction safely");
     const float jitteredDistance =
         10.0f * ZeroSenseMotion::intervalScale(7360) +
         10.0f * ZeroSenseMotion::intervalScale(8640);

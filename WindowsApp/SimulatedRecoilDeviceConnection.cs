@@ -45,6 +45,7 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
     public int LastRapidFireRoundsPerMinute { get; private set; }
     public bool LastGeneralTimingVarianceEnabled { get; private set; }
     public bool LastDeltaNoiseEnabled { get; private set; }
+    public float LastFirstBulletKickMultiplier { get; private set; } = 1.0f;
     public string? LastCommand { get; private set; }
     public uint LastConfigurationHash { get; private set; }
 
@@ -77,6 +78,7 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
         int rapidFireRoundsPerMinute,
         bool generalTimingVarianceEnabled,
         bool deltaNoiseEnabled,
+        float firstBulletKickMultiplier,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(profile);
@@ -92,7 +94,8 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
                 rapidFireEnabled,
                 rapidFireRoundsPerMinute,
                 generalTimingVarianceEnabled,
-                deltaNoiseEnabled);
+                deltaNoiseEnabled,
+                firstBulletKickMultiplier);
             _ = SerialProtocol.BuildConfigurationBeginCommand(transactionId, configurationHash);
             Interlocked.Increment(ref _commandsSent);
             // Build every packet the real transport would send. This catches
@@ -114,6 +117,8 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
                 generalTimingVarianceEnabled,
                 deltaNoiseEnabled);
             Interlocked.Increment(ref _commandsSent);
+            _ = SerialProtocol.BuildFirstBulletKickCommand(firstBulletKickMultiplier);
+            Interlocked.Increment(ref _commandsSent);
             _ = SerialProtocol.BuildConfigurationCommitCommand(transactionId, configurationHash);
             Interlocked.Increment(ref _commandsSent);
 
@@ -125,6 +130,7 @@ public sealed class SimulatedRecoilDeviceConnection : IRecoilDeviceConnection
             LastRapidFireRoundsPerMinute = rapidFireRoundsPerMinute;
             LastGeneralTimingVarianceEnabled = generalTimingVarianceEnabled;
             LastDeltaNoiseEnabled = deltaNoiseEnabled;
+            LastFirstBulletKickMultiplier = firstBulletKickMultiplier;
             LastConfigurationHash = configurationHash;
             RecordAcknowledgement(Stopwatch.GetTimestamp() - started);
             RaiseCommandReceived("SIMULATOR:CONFIGURATION_ACCEPTED");

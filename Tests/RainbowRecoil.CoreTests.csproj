@@ -25,6 +25,7 @@
     <Compile Include="..\WindowsApp\SerialProtocol.cs" Link="Source\SerialProtocol.cs" />
     <Compile Include="..\WindowsApp\SerialReliabilityPolicy.cs" Link="Source\SerialReliabilityPolicy.cs" />
     <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />
+    <Compile Include="..\WindowsApp\FirmwareTransportMonitor.cs" Link="Source\FirmwareTransportMonitor.cs" />
     <Compile Include="..\WindowsApp\FirmwareContract.cs" Link="Source\FirmwareContract.cs" />
     <Compile Include="..\WindowsApp\MeasuredProfileStore.cs" Link="Source\MeasuredProfileStore.cs" />
     <Compile Include="..\WindowsApp\ReleaseUpdateService.cs" Link="Source\ReleaseUpdateService.cs" />

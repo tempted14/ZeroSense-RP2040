@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 16;
+    public const int CurrentCalibrationVersion = 17;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -269,6 +269,11 @@ public sealed class Settings
     public Dictionary<string, double> WeaponOutputStrengths { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
 
+    // A post-profile multiplier for only the first automatic-pattern shot.
+    [JsonPropertyName("weaponFirstBulletKickMultipliers")]
+    public Dictionary<string, double> WeaponFirstBulletKickMultipliers { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
     [JsonPropertyName("weaponHorizontalTunings")]
     public Dictionary<string, HorizontalRecoilTuning> WeaponHorizontalTunings { get; set; } =
         new(StringComparer.OrdinalIgnoreCase);
@@ -280,6 +285,11 @@ public sealed class Settings
     // This remains separate from master gain, whose pattern values cap at 127.
     [JsonPropertyName("twoPointFiveAutoVerticalBoost")]
     public double TwoPointFiveAutoVerticalBoost { get; set; } = 1.0;
+
+    // Scales both axes of stock estimated patterns in Original mode after the
+    // Q8.8 profile has been decoded. Modified/measured profiles remain neutral.
+    [JsonPropertyName("originalPatternOutputMultiplier")]
+    public double OriginalPatternOutputMultiplier { get; set; } = 2.0;
 
     // Kept for backward-compatible deserialization of the unfinished v4 setting.
     [JsonPropertyName("autoOperatorTrackingEnabled")]
@@ -507,6 +517,15 @@ public sealed class Settings
                 RecoilStrengthModel.Normalize(group.Last().Value)))
             .Where(pair => Math.Abs(pair.Value - RecoilStrengthModel.Default) > 0.0001)
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+        WeaponFirstBulletKickMultipliers ??= new Dictionary<string, double>(
+            StringComparer.OrdinalIgnoreCase);
+        WeaponFirstBulletKickMultipliers = WeaponFirstBulletKickMultipliers
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key))
+            .GroupBy(pair => pair.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new KeyValuePair<string, double>(
+                group.Key, NormalizeFirstBulletKick(group.Last().Value)))
+            .Where(pair => Math.Abs(pair.Value - 1.0) > 0.0001)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
         WeaponHorizontalTunings ??= new Dictionary<string, HorizontalRecoilTuning>(
             StringComparer.OrdinalIgnoreCase);
         WeaponHorizontalTunings = WeaponHorizontalTunings
@@ -521,6 +540,9 @@ public sealed class Settings
         TwoPointFiveAutoVerticalBoost = double.IsFinite(TwoPointFiveAutoVerticalBoost)
             ? Math.Clamp(TwoPointFiveAutoVerticalBoost, 1.0, 4.0)
             : 1.0;
+        OriginalPatternOutputMultiplier = double.IsFinite(OriginalPatternOutputMultiplier)
+            ? Math.Clamp(OriginalPatternOutputMultiplier, 1.0, 4.0)
+            : 2.0;
 
         OperatorDetectionConfidence = double.IsFinite(OperatorDetectionConfidence)
             ? Math.Clamp(OperatorDetectionConfidence, 0.55, 1.0)
@@ -585,6 +607,30 @@ public sealed class Settings
     public double GetEffectiveOutputGain(string weaponName) =>
         RecoilStrengthModel.Combine(MasterRecoilGain, GetWeaponOutputStrength(weaponName));
 
+    public float GetWeaponFirstBulletKick(string weaponName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        return (float)(WeaponFirstBulletKickMultipliers.TryGetValue(weaponName, out var value)
+            ? NormalizeFirstBulletKick(value) : 1.0);
+    }
+
+    public void SetWeaponFirstBulletKick(string weaponName, double requestedMultiplier)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        var value = NormalizeFirstBulletKick(requestedMultiplier);
+        if (Math.Abs(value - 1.0) <= 0.0001)
+        {
+            WeaponFirstBulletKickMultipliers.Remove(weaponName);
+        }
+        else
+        {
+            WeaponFirstBulletKickMultipliers[weaponName] = value;
+        }
+    }
+
+    private static double NormalizeFirstBulletKick(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 1.0, 4.0) : 1.0;
+
     public HorizontalRecoilTuning GetWeaponHorizontalTuning(string weaponName)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
@@ -620,7 +666,9 @@ public sealed class Settings
         }
     }
 
-    public SensitivityScale CalculateSensitivityScale(WeaponProfile? profile = null)
+    public SensitivityScale CalculateSensitivityScale(
+        WeaponProfile? profile = null,
+        CompensationMode? mode = null)
     {
         const float referenceHipGain = 55.0f * 0.001f;
 
@@ -635,10 +683,16 @@ public sealed class Settings
             ActiveMagnification.Equals("2.5x", StringComparison.OrdinalIgnoreCase)
             ? TwoPointFiveAutoVerticalBoost
             : 1.0;
+        var patternMultiplier = mode == RainbowRecoil.CompensationMode.WeaponPattern &&
+            profile is { IsBaseline: true, HasWeaponPattern: true,
+                PatternDataQuality: PatternDataQuality.VideoDerivedEstimate }
+            ? OriginalPatternOutputMultiplier
+            : 1.0;
 
         return new SensitivityScale(
-            referenceHipGain / horizontalGain * adsScale,
-            (float)(referenceHipGain / verticalGain * adsScale * verticalBoost));
+            (float)(referenceHipGain / horizontalGain * adsScale * patternMultiplier),
+            (float)(referenceHipGain / verticalGain * adsScale *
+                patternMultiplier * verticalBoost));
     }
 
     [JsonIgnore]

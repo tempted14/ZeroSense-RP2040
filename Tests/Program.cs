@@ -17,11 +17,13 @@ var tests = new (string Name, Action Run)[]
     ("research estimate is isolated and normalized", ResearchEstimateIsIsolatedAndNormalized),
     ("profile source switching preserves optic-specific references", ProfileSourceSwitchingIsExact),
     ("per-weapon output strength is isolated and bounded", WeaponOutputStrengthIsSafe),
+    ("operator-specific multipliers and first bullet kick are isolated", OperatorFirstBulletKickIsIsolated),
     ("horizontal recoil overrides are isolated and customizable", HorizontalRecoilOverridesAreSafe),
     ("experimental tuning is isolated and stage-specific", ExperimentalTuningIsIsolated),
     ("operator attachment overrides are isolated", OperatorOverridesAreIsolated),
     ("settings normalization and scaling are safe", SettingsNormalizationIsSafe),
     ("2.5x automatic boost survives the 127-point profile limit", TwoPointFiveBoostIsScoped),
+    ("original pattern output multiplier is scoped and combines safely", OriginalPatternMultiplierIsScoped),
     ("operator OCR matching tolerates realistic noise", OperatorOcrMatchingIsRobust),
     ("detection settings normalize safely", DetectionSettingsNormalizeSafely),
     ("weapon slots and defaults are deterministic", WeaponSlotsAndDefaultsAreDeterministic),
@@ -43,6 +45,7 @@ var tests = new (string Name, Action Run)[]
     ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
     ("configuration validator rejects unsafe output", ConfigurationValidationFailsClosed),
     ("firmware status identifies both boards and proxy mouse state", FirmwareStatusIsParsed),
+    ("USB diagnostics distinguish recent faults, idle input and counter resets", TransportDiagnosticsAreAccurate),
     ("RP2040 simulator exercises the complete configuration path", SimulatorExercisesConfigurationPath),
     ("release updates report assets without assuming a signature", ReleaseUpdatesAreReportedTruthfully)
 };
@@ -364,6 +367,9 @@ static void ProfileSourceSwitchingIsExact()
         "original source selects exact measured optic");
     True(original.Pattern.SequenceEqual(measuredPoints),
         "original source preserves measured points");
+    Equal(1.0f, originalSettings.CalculateSensitivityScale(
+        original, CompensationMode.WeaponPattern).Vertical,
+        "measured optic source does not receive the estimated-pattern multiplier");
 
     var researchSettings = new Settings
     {
@@ -442,6 +448,58 @@ static void WeaponOutputStrengthIsSafe()
         "master and weapon gains combine proportionally");
     Equal(RecoilStrengthModel.EffectiveMaximum, RecoilStrengthModel.Combine(100, 2),
         "combined custom gain caps at the representable device limit");
+}
+
+static void OperatorFirstBulletKickIsIsolated()
+{
+    var settings = new Settings
+    {
+        MasterRecoilGain = 2.0,
+        ActiveMagnification = "2.5x",
+        CompensationMode = CompensationMode.WeaponPattern,
+        TwoPointFiveAutoVerticalBoost = 1.5,
+        OriginalPatternOutputMultiplier = 2.0
+    };
+    settings.SetWeaponOutputStrength("C8-SFW", 1.5);
+    settings.SetWeaponFirstBulletKick("C8-SFW", 2.0);
+    settings.Normalize();
+    Equal(3.0, settings.GetEffectiveOutputGain("C8-SFW"),
+        "Buck's C8-SFW combines master and weapon gains");
+    Equal(2.0, settings.GetEffectiveOutputGain("MP7"),
+        "Bandit's MP7 retains only the master gain");
+    Equal(2.0f, settings.GetWeaponFirstBulletKick("C8-SFW"),
+        "C8-SFW retains its first-shot setting");
+    Equal(1.0f, settings.GetWeaponFirstBulletKick("MP7"),
+        "MP7 does not inherit C8-SFW first-shot tuning");
+
+    var c8 = WeaponProfile.FindByName("C8-SFW")!;
+    var source = c8.Pattern.ToArray();
+    var selected = RecoilProfileResolver.Build(c8, "Buck", settings);
+    True(selected.HasWeaponPattern, "Buck's selected automatic profile has a pattern");
+    Equal("C8-SFW", selected.Name, "operator loadout resolves the selected gun");
+    True(source.SequenceEqual(c8.Pattern), "original C8-SFW pattern is not edited");
+    var scale = settings.CalculateSensitivityScale(selected, CompensationMode.WeaponPattern);
+    True(scale.Vertical >= 1.5f, "selected optic vertical boost reaches output scale");
+
+    var roundTrip = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))!;
+    roundTrip.Normalize();
+    Equal(2.0f, roundTrip.GetWeaponFirstBulletKick("C8-SFW"),
+        "first bullet setting survives settings persistence");
+    Equal(1.0f, roundTrip.GetWeaponFirstBulletKick("MP7"),
+        "neutral guns stay neutral after persistence");
+    var neutralHash = SerialProtocol.ComputeConfigurationHash(
+        selected, CompensationMode.WeaponPattern, scale, false, 0,
+        firstBulletKick: 1.0f);
+    var kickHash = SerialProtocol.ComputeConfigurationHash(
+        selected, CompensationMode.WeaponPattern, scale, false, 0,
+        firstBulletKick: roundTrip.GetWeaponFirstBulletKick("C8-SFW"));
+    True(neutralHash != kickHash, "first bullet kick is included in exact device hash");
+    roundTrip.SetWeaponFirstBulletKick("C8-SFW", double.PositiveInfinity);
+    Equal(1.0f, roundTrip.GetWeaponFirstBulletKick("C8-SFW"),
+        "invalid first-shot tuning fails to neutral");
+    roundTrip.SetWeaponFirstBulletKick("C8-SFW", 999.0);
+    Equal(4.0f, roundTrip.GetWeaponFirstBulletKick("C8-SFW"),
+        "first-shot tuning respects the firmware's upper bound");
 }
 
 static void ExperimentalTuningIsIsolated()
@@ -709,6 +767,92 @@ static void TwoPointFiveBoostIsScoped()
     settings.TwoPointFiveAutoVerticalBoost = double.NaN;
     settings.Normalize();
     Equal(1.0, settings.TwoPointFiveAutoVerticalBoost, "invalid boost defaults to neutral");
+}
+
+static void OriginalPatternMultiplierIsScoped()
+{
+    var source = new WeaponProfile
+    {
+        Name = "Original test",
+        WeaponType = "Assault Rifle",
+        VerticalCompensation = 2.0,
+        HorizontalCompensation = -2.0,
+        RoundsPerMinute = 800,
+        MagazineSize = 30,
+        PatternDataQuality = PatternDataQuality.VideoDerivedEstimate,
+        Pattern = [new RecoilPatternPoint(-2.0f, 2.0f)]
+    };
+    var saturated = source.WithCombinedOutputStrength(127.0, 1.0);
+    Equal(new RecoilPatternPoint(-127.0f, 127.0f), saturated.Pattern[0],
+        "the original source saturates at the Q8.8 profile limit");
+    Equal(new RecoilPatternPoint(-2.0f, 2.0f), source.Pattern[0],
+        "the source pattern remains unchanged");
+
+    var settings = new Settings { ActiveMagnification = "1.0x" };
+    settings.Normalize();
+    Equal(2.0, settings.OriginalPatternOutputMultiplier,
+        "new and migrated settings default to double output");
+    var originalScale = settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern);
+    Equal(2.0f, originalScale.Horizontal, "original pattern doubles horizontal output");
+    Equal(2.0f, originalScale.Vertical, "original pattern doubles vertical output");
+    var packet = SerialProtocol.BuildSensitivityCommand(originalScale);
+    Equal(2.0f, BinaryPrimitives.ReadSingleLittleEndian(packet.AsSpan(7, 4)),
+        "horizontal multiplier reaches the firmware command");
+    Equal(2.0f, BinaryPrimitives.ReadSingleLittleEndian(packet.AsSpan(11, 4)),
+        "vertical multiplier reaches the firmware command");
+
+    foreach (var mode in new[]
+    {
+        CompensationMode.General,
+        CompensationMode.Experimental,
+        CompensationMode.ResearchEstimate
+    })
+    {
+        var neutral = settings.CalculateSensitivityScale(saturated, mode);
+        Equal(1.0f, neutral.Horizontal, $"{mode} horizontal remains neutral");
+        Equal(1.0f, neutral.Vertical, $"{mode} vertical remains neutral");
+    }
+    Equal(1.0f, settings.CalculateSensitivityScale(new WeaponProfile
+    {
+        WeaponType = "Marksman Rifle"
+    }, CompensationMode.WeaponPattern).Vertical,
+        "semi-automatic profiles do not receive original-pattern gain");
+    saturated.PatternDataQuality = PatternDataQuality.Measured;
+    Equal(1.0f, settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern).Vertical,
+        "measured profiles remain at their calibrated output");
+    saturated.PatternDataQuality = PatternDataQuality.VideoDerivedEstimate;
+    saturated.IsBaseline = false;
+    Equal(1.0f, settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern).Vertical,
+        "user-modified estimates remain at their chosen output");
+    saturated.IsBaseline = true;
+
+    settings.ActiveMagnification = "2.5x";
+    settings.TwoPointFiveAutoVerticalBoost = 4.0;
+    settings.OriginalPatternOutputMultiplier = 4.0;
+    settings.Normalize();
+    var combined = settings.CalculateSensitivityScale(
+        saturated, CompensationMode.WeaponPattern);
+    Equal(4.0f, combined.Horizontal, "independent optic boost leaves pattern X alone");
+    Equal(16.0f, combined.Vertical, "pattern and optic multipliers combine");
+    True(ConfigurationValidator.Validate(
+        settings, saturated, CompensationMode.WeaponPattern, false).IsValid,
+        "maximum combined scale fits the updated firmware contract");
+    _ = SerialProtocol.BuildSensitivityCommand(combined);
+
+    settings.OriginalPatternOutputMultiplier = 999.0;
+    settings.Normalize();
+    Equal(4.0, settings.OriginalPatternOutputMultiplier, "pattern multiplier upper clamp");
+    var restored = JsonSerializer.Deserialize<Settings>(JsonSerializer.Serialize(settings))
+        ?? throw new InvalidOperationException("pattern settings round-trip returned null");
+    restored.Normalize();
+    Equal(4.0, restored.OriginalPatternOutputMultiplier, "pattern multiplier persists");
+    settings.OriginalPatternOutputMultiplier = double.NaN;
+    settings.Normalize();
+    Equal(2.0, settings.OriginalPatternOutputMultiplier,
+        "invalid pattern multiplier returns to the default");
 }
 
 static void ProfilePersistenceRoundTrips()
@@ -1080,6 +1224,7 @@ static void SerialProtocolCoverageIsComplete()
         ["CONFIG_ABORT"] = 0xFB,
         ["STATUS"] = 0xFC,
         ["GENERAL_SETTINGS"] = 0xFD,
+        ["FIRST_BULLET_KICK"] = 0xFE,
         ["RESET"] = 0xFF
     };
     foreach (var (name, identifier) in commands)
@@ -1109,6 +1254,17 @@ static void SerialProtocolCoverageIsComplete()
     True(!FirmwareContract.GeneralSettingsAcknowledgementMatches(
         "GENERAL_SETTINGS:TIMING_VARIANCE=OFF:DELTA_NOISE=ON", true, true),
         "opposite general movement readback is rejected");
+    var kick = SerialProtocol.BuildFirstBulletKickCommand(2.5f);
+    Equal((byte)0xFE, kick[5], "first-bullet command identifier");
+    Equal((byte)4, kick[6], "first-bullet command payload length");
+    Equal(2.5f, BinaryPrimitives.ReadSingleLittleEndian(kick.AsSpan(7, 4)),
+        "first-bullet multiplier transfers exactly");
+    True(FirmwareContract.FirstBulletKickAcknowledgementMatches(
+        "FIRST_BULLET_KICK:V=2.500", 2.5f), "first-bullet exact readback");
+    True(!FirmwareContract.FirstBulletKickAcknowledgementMatches(
+        "FIRST_BULLET_KICK:V=2.499", 2.5f), "first-bullet mismatch rejected");
+    Throws<ArgumentOutOfRangeException>(() =>
+        SerialProtocol.BuildFirstBulletKickCommand(float.NaN));
 
     var points = Enumerable.Range(0, 31)
         .Select(index => new RecoilPatternPoint(index == 0 ? 127.0f : index / 10.0f, index / 5.0f))
@@ -1177,7 +1333,7 @@ static void ConfigurationTransactionsAreDeterministic()
         scale,
         true,
         600);
-    Equal(0xCD470D73u, hash, "independent FNV-1a vector");
+    Equal(0x56638B07u, hash, "independent FNV-1a vector including neutral first bullet kick");
     Equal(hash, SerialProtocol.ComputeConfigurationHash(
         profile, CompensationMode.General, scale, true, 600), "stable hash");
 
@@ -1523,6 +1679,35 @@ static void FirmwareStatusIsParsed()
     Equal(2u, recovery.HostMouseUnmounts, "host unmounts");
     Equal(150u, recovery.HostTaskAgeMs, "host task age");
     Equal(3u, recovery.CdcDroppedMessages, "dropped CDC replies");
+    const string pioMetrics = recoveryMetrics +
+        ":PIO_TX_TIMEOUTS=1:PIO_RX_FLAG_TIMEOUTS=30:" +
+        "PIO_RX_PACKET_TIMEOUTS=2:PIO_SE0_GLITCHES=4";
+    True(FirmwareStatusParser.TryParse(pioMetrics, out var pioStatus),
+        "host-stall test telemetry parses as metrics rather than a raw UI status line");
+    Equal(1u, pioStatus.PioTxTimeouts, "PIO TX timeouts");
+    Equal(30u, pioStatus.PioRxFlagTimeouts, "PIO RX flag timeouts");
+    Equal(2u, pioStatus.PioRxPacketTimeouts, "PIO RX packet timeouts");
+    Equal(4u, pioStatus.PioSe0Glitches, "filtered PIO SE0 glitches");
+    const string guardedMetrics = pioMetrics + ":HOST_EMPTY_REPORTS=246:PIO_RX_OVERSIZE=7";
+    True(FirmwareStatusParser.TryParse(guardedMetrics, out var guardedStatus),
+        "baseline-guards telemetry is recognized without overwriting connection state");
+    Equal(246u, guardedStatus.HostEmptyReports, "empty callbacks are distinct from decode errors");
+    Equal(7u, guardedStatus.PioRxOversize, "oversized USB packets");
+    Equal(30u, guardedStatus.PioRxFlagTimeouts, "new metrics retain older PIO fields");
+    foreach (var malformed in new[] {
+        guardedMetrics.Replace("HOST_EMPTY_REPORTS=246", "HOST_EMPTY_REPORTS=-1"),
+        guardedMetrics.Replace("PIO_RX_OVERSIZE=7", "PIO_RX_OVERSIZE=4294967296"),
+        guardedMetrics.Replace(":PIO_RX_OVERSIZE=7", ""),
+        guardedMetrics.Replace("PIO_TX_TIMEOUTS=1", "PIO_TX_TIMEOUTS=bad") })
+    {
+        True(!FirmwareStatusParser.TryParse(malformed, out _), "invalid extended telemetry rejected");
+    }
+    True(!FirmwareStatusParser.TryParse(
+        pioMetrics.Replace("PIO_RX_FLAG_TIMEOUTS=30", "PIO_RX_FLAG_TIMEOUTS=bad"), out _),
+        "malformed PIO telemetry is rejected");
+    True(!FirmwareStatusParser.TryParse(
+        pioMetrics.Replace(":PIO_SE0_GLITCHES=4", ""), out _),
+        "incomplete PIO telemetry is rejected");
     True(!FirmwareStatusParser.TryParse(
         recoveryMetrics.Replace("HOST_TASK_AGE_MS=150", "HOST_TASK_AGE_MS=-1"), out _),
         "negative host task age rejected");
@@ -1549,6 +1734,53 @@ static void FirmwareStatusIsParsed()
         "malformed metrics must fail closed");
 }
 
+static void TransportDiagnosticsAreAccurate()
+{
+    var monitor = new FirmwareTransportMonitor();
+    var initial = new FirmwareStatusUpdate(FirmwareStatusKind.TransportMetrics,
+        HidReportsSent: 100, HostReportsReceived: 200, HostDecodeErrors: 10,
+        HostEmptyReports: 5, HostTaskAgeMs: 0);
+    True(monitor.Observe(initial, 10, true).AcceptedReportsPerSecond is null,
+        "first sample never invents a rate");
+    var current = initial with { HidReportsSent = 1700, HostReportsReceived = 2200,
+        HostDecodeErrors = 210, HostEmptyReports = 145 };
+    var active = monitor.Observe(current, 12, true);
+    Equal(900d, active.AcceptedReportsPerSecond!.Value, "rate excludes rejected callbacks");
+    Equal(70d, active.EmptyCallbacksPerSecond!.Value, "empty completion rate is separate");
+    Equal(800d, active.HidReportsPerSecond!.Value, "outgoing rate uses actual elapsed time");
+    True(active.Warning, "new errors warn");
+    var idle = monitor.Observe(current, 14, true);
+    Equal(0d, idle.AcceptedReportsPerSecond!.Value, "idle rate is zero");
+    True(!idle.Warning && idle.Summary.Contains("idle", StringComparison.Ordinal),
+        "no traffic alone is not labeled a disconnect and old faults are not new faults");
+    var stalled = monitor.Observe(current with { HostTaskAgeMs = 1500 }, 16, true);
+    True(stalled.Warning && stalled.Summary.Contains("stalled", StringComparison.Ordinal),
+        "frozen host core is distinct from healthy serial connection");
+    var reboot = monitor.Observe(initial, 18, true);
+    True(reboot.AcceptedReportsPerSecond is null, "counter reset rebaselines without a rate spike");
+    var longGap = monitor.Observe(current, 100, true);
+    True(longGap.AcceptedReportsPerSecond is null, "long gaps do not claim current polling");
+    monitor.Reset();
+    True(monitor.Observe(initial, 101, false).AcceptedReportsPerSecond is null,
+        "explicit reconnect discards previous rate history");
+    var rp2040 = monitor.Observe(initial with { HidReportsSent = 1100, HostTaskAgeMs = 6000 }, 103, false);
+    True(!rp2040.Warning && !rp2040.Summary.Contains("mouse reports", StringComparison.Ordinal),
+        "RP2040 output-only mode does not claim a downstream mouse rate or host stall");
+    monitor.Reset();
+    monitor.Observe(initial with { HostReportsReceived = uint.MaxValue }, 200, true);
+    True(monitor.Observe(initial, 202, true).AcceptedReportsPerSecond is null,
+        "32-bit counter wrap rebaselines safely");
+    monitor.Reset();
+    monitor.Observe(initial, 300, true);
+    True(monitor.Observe(initial, 300.01, true).AcceptedReportsPerSecond is null,
+        "closely-spaced config responses do not generate a rate spike");
+    Equal(900d, monitor.Observe(current, 302, true).AcceptedReportsPerSecond!.Value,
+        "rapid responses do not discard the original rate baseline");
+    var inconsistent = current with { HostDecodeErrors = current.HostDecodeErrors + 1 };
+    Equal(0d, monitor.Observe(inconsistent, 304, true).AcceptedReportsPerSecond!.Value,
+        "cross-core snapshot skew cannot produce a negative rate");
+}
+
 static void SimulatorExercisesConfigurationPath()
 {
     using var simulator = new SimulatedRecoilDeviceConnection();
@@ -1563,6 +1795,7 @@ static void SimulatorExercisesConfigurationPath()
         0,
         true,
         true,
+        2.0f,
         CancellationToken.None).GetAwaiter().GetResult();
     simulator.SendCommand("START");
     simulator.SendCommand("STOP");
@@ -1571,6 +1804,8 @@ static void SimulatorExercisesConfigurationPath()
     Equal(CompensationMode.WeaponPattern, simulator.LastMode, "simulated mode");
     True(simulator.LastGeneralTimingVarianceEnabled, "simulated timing variance setting");
     True(simulator.LastDeltaNoiseEnabled, "simulated delta noise setting");
+    Equal(2.0f, simulator.LastFirstBulletKickMultiplier,
+        "simulated first bullet kick setting");
     Equal("STOP", simulator.LastCommand, "simulated safety command");
     var metrics = simulator.GetMetrics();
     True(metrics.CommandsSent >= 4, "simulator should count encoded commands");
