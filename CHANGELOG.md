@@ -1,5 +1,20 @@
 # Changelog
 
+## 2.1.0 - 2026-09-24 (validation prerelease)
+
+- Give the RP2040-Zero its full descriptor-advertised ±127 relative HID range
+  rather than clipping each generated report at ±100. Saturate the generated
+  queue so extreme General settings cannot wrap its sign.
+- Check the HID endpoint at sub-frame granularity on both boards; the selected
+  1/2/4 ms report pacing and all recoil/profile controls remain unchanged.
+- Move Windows COM open/close work off the UI dispatcher, bound stalled opens,
+  and serialize reconnect attempts against incomplete native opens/closes.
+  Add fake-driver regression coverage for stuck COM operations.
+- Clarify that RP2040-Zero is a separate CDC+HID output device; the physical
+  mouse stays connected directly to Windows. RP2350 remains the only proxy.
+- Both UF2s and the Windows build pass software checks; physical RP2040 and
+  RP2350 acceptance tests are still required.
+
 ## Unreleased (1.8.0 candidate)
 
 - Add a persistent, adjustable 1–4× Original weapon pattern output multiplier,
