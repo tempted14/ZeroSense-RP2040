@@ -1,5 +1,17 @@
 # Changelog
 
+## 2.1.1 - 2026-09-24 (validation prerelease)
+
+- Track M1 and M2 per physical Raw Input mouse on Windows. RP2040-generated
+  left-button releases can no longer cancel a held physical M1+M2 trigger;
+  this keeps the semi-auto recoil schedule active across rapid-fire pulses.
+- Add a two-mouse regression test for trigger activation, synthetic releases,
+  physical release, and device removal. The RP2040 firmware itself is unchanged.
+- This does not make a separate RP2040 USB mouse a true mouse proxy. Games that
+  merge or consume multiple mouse buttons differently may still not register
+  rapid-fire clicks while physical M1 remains held. Hardware/game acceptance
+  remains required before calling rapid fire functional on RP2040.
+
 ## 2.1.0 - 2026-09-24 (validation prerelease)
 
 - Give the RP2040-Zero its full descriptor-advertised ±127 relative HID range

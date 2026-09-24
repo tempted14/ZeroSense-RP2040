@@ -17,6 +17,7 @@
     <Compile Include="..\WindowsApp\DiagnosticLog.cs" Link="Source\DiagnosticLog.cs" />
     <Compile Include="..\WindowsApp\OperatorNameMatcher.cs" Link="Source\OperatorNameMatcher.cs" />
     <Compile Include="..\WindowsApp\OpticMagnificationPolicy.cs" Link="Source\OpticMagnificationPolicy.cs" />
+    <Compile Include="..\WindowsApp\PhysicalMouseButtonState.cs" Link="Source\PhysicalMouseButtonState.cs" />
     <Compile Include="..\WindowsApp\RecoilAttachmentModel.cs" Link="Source\RecoilAttachmentModel.cs" />
     <Compile Include="..\WindowsApp\RecoilStrengthModel.cs" Link="Source\RecoilStrengthModel.cs" />
     <Compile Include="..\WindowsApp\RecoilProfileResolver.cs" Link="Source\RecoilProfileResolver.cs" />

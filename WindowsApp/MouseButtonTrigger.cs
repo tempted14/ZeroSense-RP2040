@@ -6,8 +6,8 @@ using System.Runtime.InteropServices;
 namespace RainbowRecoil;
 
 /// <summary>
-/// Polls the physical mouse buttons without suppressing or modifying the user's
-/// normal mouse input. A burst is active only while aim and fire are both held.
+/// Reads per-device physical mouse buttons without suppressing normal input.
+/// RP2040 synthetic left-button releases cannot cancel a held physical trigger.
 /// </summary>
 public sealed class MouseButtonTrigger : IDisposable
 {
@@ -15,6 +15,8 @@ public sealed class MouseButtonTrigger : IDisposable
     private const int VirtualKeyRightButton = 0x02;
 
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromMilliseconds(4) };
+    private readonly RawMouseInputMonitor _rawInput = new();
+    private bool _rawInputAttached;
     private bool _lastPressed;
     private long _lastHeartbeatTimestamp;
 
@@ -26,6 +28,12 @@ public sealed class MouseButtonTrigger : IDisposable
     public MouseButtonTrigger()
     {
         _timer.Tick += OnTick;
+    }
+
+    public bool Attach(nint window)
+    {
+        _rawInputAttached = _rawInput.Attach(window);
+        return _rawInputAttached;
     }
 
     public void Start()
@@ -46,7 +54,9 @@ public sealed class MouseButtonTrigger : IDisposable
 
     private void Poll()
     {
-        IsPressed = IsDown(VirtualKeyLeftButton) && IsDown(VirtualKeyRightButton);
+        IsPressed = _rawInputAttached
+            ? _rawInput.AimAndFireHeld
+            : IsDown(VirtualKeyLeftButton) && IsDown(VirtualKeyRightButton);
         if (IsPressed == _lastPressed)
         {
             if (IsPressed &&
@@ -73,5 +83,6 @@ public sealed class MouseButtonTrigger : IDisposable
     {
         Stop();
         _timer.Tick -= OnTick;
+        _rawInput.Dispose();
     }
 }
