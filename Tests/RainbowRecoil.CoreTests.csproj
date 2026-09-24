@@ -24,6 +24,7 @@
     <Compile Include="..\WindowsApp\RapidFireCatalog.cs" Link="Source\RapidFireCatalog.cs" />
     <Compile Include="..\WindowsApp\SerialProtocol.cs" Link="Source\SerialProtocol.cs" />
     <Compile Include="..\WindowsApp\SerialReliabilityPolicy.cs" Link="Source\SerialReliabilityPolicy.cs" />
+    <Compile Include="..\WindowsApp\SerialPortOpenGate.cs" Link="Source\SerialPortOpenGate.cs" />
     <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />
     <Compile Include="..\WindowsApp\FirmwareTransportMonitor.cs" Link="Source\FirmwareTransportMonitor.cs" />
     <Compile Include="..\WindowsApp\FirmwareContract.cs" Link="Source\FirmwareContract.cs" />

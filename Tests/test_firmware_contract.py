@@ -17,6 +17,9 @@ CORRECTION_SCHEDULER = (
 DELTA_NOISE = (
     ROOT / "RP2040_Firmware" / "rainbow_recoil" / "delta_noise.h"
 ).read_text()
+HID_OUTPUT_MATH = (
+    ROOT / "RP2040_Firmware" / "rainbow_recoil" / "hid_output_math.h"
+).read_text()
 CS_PROTOCOL = (ROOT / "WindowsApp" / "SerialProtocol.cs").read_text()
 CS_CONNECTION = (ROOT / "WindowsApp" / "SerialConnection.cs").read_text()
 PLATFORMIO = (ROOT / "RP2040_Firmware" / "platformio.ini").read_text()
@@ -87,6 +90,8 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("hostDecodeErrors.fetch_add", FIRMWARE)
         self.assertIn("hostAccumulatorSaturations.fetch_add", FIRMWARE)
         self.assertIn("HOST_RECOVERIES=%lu", FIRMWARE)
+        self.assertIn("delayMicroseconds(100);", FIRMWARE)
+        self.assertNotIn("delay(1);", FIRMWARE[loop_position:FIRMWARE.index("void setup1()")])
 
     def test_upstream_disconnect_immediately_clears_generated_output(self) -> None:
         fail_safe = re.search(
@@ -105,10 +110,14 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertLess(fail_safe_call, movement_call)
 
     def test_fractional_movement_reaches_pending_reports(self) -> None:
-        self.assertIn("pendingMouseX += queuedX;", FIRMWARE)
-        self.assertIn("pendingMouseY += queuedY;", FIRMWARE)
+        self.assertIn("ZeroSenseHidOutput::addPending(pendingMouseX, queuedX)", FIRMWARE)
+        self.assertIn("ZeroSenseHidOutput::addPending(pendingMouseY, queuedY)", FIRMWARE)
         self.assertIn("pendingMouseX -= baseDx;", FIRMWARE)
         self.assertIn("pendingMouseY -= baseDy;", FIRMWARE)
+
+    def test_rp2040_uses_full_hid_delta_range(self) -> None:
+        self.assertIn("return ZeroSenseHidOutput::reportDelta(value);", FIRMWARE)
+        self.assertNotIn("std::clamp<int64_t>(value, -100, 100)", FIRMWARE)
 
     def test_rapid_fire_release_does_not_disable_the_mode(self) -> None:
         release = re.search(
@@ -128,8 +137,8 @@ class FirmwareContractTests(unittest.TestCase):
 
     def test_zero_delta_reports_cannot_create_cursor_drift(self) -> None:
         self.assertIn(
-            "std::clamp<int64_t>(value, -100, 100)",
-            FIRMWARE,
+            "std::clamp<int64_t>(value, -127, 127)",
+            HID_OUTPUT_MATH,
         )
         self.assertNotIn("DELTA_NOISE_RANGE", FIRMWARE)
 
@@ -388,7 +397,7 @@ class FirmwareContractTests(unittest.TestCase):
         tx = PIO_HOST.split("static bool __no_inline_not_in_flash_func(send_pre)", 1)[1]
         tx = tx.split("void __no_inline_not_in_flash_func(pio_usb_bus_prepare_receive)", 1)[0]
         self.assertNotIn("get_time_us_32", tx)
-        self.assertIn("BUILD:V2.0-HOST-WATCHDOG-20260923", FIRMWARE)
+        self.assertIn('protocol_println("BUILD:', FIRMWARE)
 
     def test_rx_detector_restart_is_restricted_to_exhausted_guards(self) -> None:
         recovery = PIO_HOST.split(

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -13,6 +14,10 @@ namespace RainbowRecoil;
 /// <summary>Thread-safe USB CDC transport for the ZeroSense firmware protocol.</summary>
 public sealed class SerialConnection : IRecoilDeviceConnection
 {
+    private static readonly ConcurrentDictionary<string, SerialPortOpenGate> OpenGates =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(3);
+
     private readonly string _portName;
     private readonly object _stateLock = new();
     private readonly object _writeLock = new();
@@ -80,9 +85,13 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             Encoding = new UTF8Encoding(false, true)
         };
 
+        var portOwnershipReturned = false;
         try
         {
-            port.Open();
+            await OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate())
+                .OpenAsync(port.Open, () => CloseAndDispose(port), OpenTimeout, cancellationToken)
+                .ConfigureAwait(false);
+            portOwnershipReturned = true;
             await Task.Delay(75, cancellationToken).ConfigureAwait(false);
             await Task.Run(() => PerformHandshake(port, cancellationToken), cancellationToken)
                 .ConfigureAwait(false);
@@ -100,14 +109,20 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         }
         catch (UnauthorizedAccessException ex)
         {
-            CloseAndDispose(port);
+            if (portOwnershipReturned)
+            {
+                await Task.Run(() => CloseAndDispose(port)).ConfigureAwait(false);
+            }
             throw new InvalidOperationException(
                 $"Cannot open {_portName}; another program may already be using it.",
                 ex);
         }
         catch
         {
-            CloseAndDispose(port);
+            if (portOwnershipReturned)
+            {
+                await Task.Run(() => CloseAndDispose(port)).ConfigureAwait(false);
+            }
             throw;
         }
     }
@@ -466,6 +481,13 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         {
             lock (_writeLock)
             {
+                lock (_stateLock)
+                {
+                    if (!ReferenceEquals(_serialPort, port))
+                    {
+                        throw new IOException("The device CDC port was disconnected.");
+                    }
+                }
                 if (!port.IsOpen)
                 {
                     throw new IOException("The device CDC port was disconnected.");
@@ -485,10 +507,12 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     {
         SerialPort? port;
         CancellationTokenSource? cancellation;
+        Task? readTask;
         lock (_stateLock)
         {
             port = _serialPort;
             cancellation = _readCancellation;
+            readTask = _readTask;
             _serialPort = null;
             _readCancellation = null;
             _readTask = null;
@@ -500,29 +524,53 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             return;
         }
 
-        try
+        cancellation?.Cancel();
+        FailPendingResponse(new IOException("The device CDC port was disconnected."));
+        RaiseStatusChanged("Disconnected");
+
+        // Windows can stall both Write() and Close() after a USB/CDC fault.
+        // Neither may block the WinUI dispatcher during disconnect/reconnect.
+        _ = OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate()).CloseAsync(() =>
         {
-            if (port.IsOpen)
+            try
             {
-                lock (_writeLock)
+                if (port.IsOpen)
                 {
-                    var stop = SerialProtocol.BuildCommand("STOP");
-                    port.Write(stop, 0, stop.Length);
+                    lock (_writeLock)
+                    {
+                        var stop = SerialProtocol.BuildCommand("STOP");
+                        port.Write(stop, 0, stop.Length);
+                    }
                 }
             }
-        }
-        catch
-        {
-            // The device may already have been unplugged.
-        }
-        finally
-        {
-            cancellation?.Cancel();
-            CloseAndDispose(port);
-            cancellation?.Dispose();
-            FailPendingResponse(new IOException("The device CDC port was disconnected."));
-            RaiseStatusChanged("Disconnected");
-        }
+            catch
+            {
+                // The device may already have been unplugged; its own output
+                // watchdog also expires if the STOP packet cannot be delivered.
+            }
+            finally
+            {
+                try
+                {
+                    CloseAndDispose(port);
+                }
+                finally
+                {
+                    if (readTask is null)
+                    {
+                        cancellation?.Dispose();
+                    }
+                    else
+                    {
+                        _ = readTask.ContinueWith(
+                            _ => cancellation?.Dispose(),
+                            CancellationToken.None,
+                            TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
+                    }
+                }
+            }
+        });
     }
 
     private async Task SendAndAwaitAsync(
@@ -682,7 +730,14 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         }
         finally
         {
-            port.Dispose();
+            try
+            {
+                port.Dispose();
+            }
+            catch
+            {
+                // USB removal can invalidate the native handle mid-dispose.
+            }
         }
     }
 

@@ -6,7 +6,7 @@ RP2350-USB-C (SKU 34641). Paths are relative to the `RainbowRecoil` directory.
 
 ## Recommended release install (no developer tools)
 
-1. Open the [latest release](https://github.com/tempted14/ZeroSense-RP2040/releases/latest).
+1. Open the [releases page](https://github.com/tempted14/ZeroSense-RP2040/releases) and select the intended version. Validation prereleases may not appear under GitHub's `/latest` link.
 2. Download `SHA256SUMS.txt` and the recommended
    `ZeroSense-<version>-Starter-Bundle.zip`. It contains the portable app,
    `START_HERE.txt`, and both board images. The same app and firmware files are
