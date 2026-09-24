@@ -27,6 +27,12 @@ an RP2040 image to an RP2350.
 5. Open the ZeroSense folder and run zerosense.exe. Select Scan for device and
    verify that the Device page identifies the board you flashed.
 
+RP2040-Zero users: keep your normal mouse connected directly to the PC. The
+RP2040 is a second USB HID output device; it cannot host or pass through your
+mouse. Select a profile, arm output, then hold physical M1+M2 while the game is
+foreground. The desktop app detects those buttons and sends the start/keepalive
+commands. If the app or board disconnects, generated output stops.
+
 RP2350 users: connect the PC to the USB-C port beside BOOT/RESET and the mouse
 to the opposite female port. Confirm the board's CC1/CC2 selectors are in the
 silkscreen's 1 / Source position before connecting the mouse. Read the bundled

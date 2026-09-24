@@ -473,11 +473,9 @@ public sealed partial class MainPage : UserControl, IDisposable
         _isConnecting = true;
         SetConnectButtonsEnabled(false);
         ConnectSimulatorButton.Content = "Use simulator";
-        if (_isArmed)
-        {
-            TrySendCommand("STOP");
-        }
         SetArmControls(false, false);
+        // DisconnectCurrentDevice sends STOP through the bounded background
+        // close path; an extra foreground serial write can freeze the UI.
         DisconnectCurrentDevice();
         SetConnectionStatus("Scanning for device…", "Checking available serial ports.", WarningBrush);
 
@@ -2870,10 +2868,8 @@ public sealed partial class MainPage : UserControl, IDisposable
         _mouseButtonTrigger.AimAndFireChanged -= MouseButtonTrigger_AimAndFireChanged;
         _mouseButtonTrigger.AimAndFireHeartbeat -= MouseButtonTrigger_AimAndFireHeartbeat;
         _mouseButtonTrigger.Dispose();
-        if (_isArmed)
-        {
-            TrySendCommand("STOP");
-        }
+        // Disconnect sends STOP off the UI dispatcher. Firmware watchdogs
+        // expire output if the USB driver cannot accept that final packet.
         DisconnectCurrentDevice();
         _lifetimeCancellation.Dispose();
     }
