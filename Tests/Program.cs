@@ -33,6 +33,7 @@ var tests = new (string Name, Action Run)[]
     ("weapon OCR matching handles loadout text", WeaponOcrMatchingIsRobust),
     ("continuous OCR changes require consecutive matches", DetectionDebounceIsSafe),
     ("semi-automatic profiles expose rapid fire and recoil", SemiAutomaticProfilesAreActive),
+    ("raw mouse trigger ignores the RP2040's synthetic clicks", RawMouseTriggerIgnoresDeviceFeedback),
     ("profile persistence round-trips", ProfilePersistenceRoundTrips),
     ("profile backup recovers a corrupt primary", ProfileBackupRecoversCorruption),
     ("malformed profile files fail closed", MalformedProfileFilesFailClosed),
@@ -1121,14 +1122,27 @@ static void WeaponSlotHotkeysAreEdgeTriggered()
 
 static void SemiAutomaticProfilesAreActive()
 {
-    foreach (var name in new[] { "417", "P226 MK 25", "LFP586", "M1014", "OTs-03", "GLAIVE-12" })
+    var supported = WeaponProfile.DefaultProfiles
+        .Where(profile => profile.SupportsRapidFire)
+        .ToArray();
+    True(supported.Length > 20, "semi-auto catalog is populated");
+    var settings = new Settings { CompensationMode = CompensationMode.WeaponPattern };
+    foreach (var profile in supported)
     {
-        var profile = WeaponProfile.FindByName(name)
-            ?? throw new InvalidOperationException($"{name} profile is missing.");
-        True(profile.SupportsRapidFire, $"{name} rapid-fire support");
-        True(profile.RapidFireRoundsPerMinute is >= 60 and <= 1200, $"{name} rapid-fire rate");
-        True(profile.VerticalCompensation > 0, $"{name} per-shot recoil compensation");
+        var effective = RecoilProfileResolver.Build(profile, profile.Operators.FirstOrDefault(), settings);
+        True(effective.RapidFireRoundsPerMinute is >= 60 and <= 1200,
+            $"{profile.Name} rapid-fire rate");
+        True(effective.VerticalCompensation > 0,
+            $"{profile.Name} per-shot recoil compensation");
+        var packet = SerialProtocol.BuildProfileCommand(effective, settings.CompensationMode);
+        Equal((byte)CompensationMode.General, packet[8],
+            $"{profile.Name} uses General-mode per-shot firmware correction");
+        _ = SerialProtocol.ComputeConfigurationHash(
+            effective, settings.CompensationMode,
+            settings.CalculateSensitivityScale(effective, settings.CompensationMode),
+            true, effective.RapidFireRoundsPerMinute);
     }
+    True(supported.Any(profile => profile.Name == "TCSG12"), "TCSG12 is supported");
 
     True(!WeaponProfile.FindByName("F2")!.SupportsRapidFire, "automatic rifle exclusion");
     True(!WeaponProfile.FindByName("CSRX 300")!.SupportsRapidFire, "bolt-action exclusion");
@@ -1407,6 +1421,25 @@ static void SerialReliabilityIsBounded()
         "temporary closed-state reads are transient candidates");
     True(!SerialReliabilityPolicy.IsTransientReadFailure(new UnauthorizedAccessException()),
         "access failures remain terminal");
+}
+
+static void RawMouseTriggerIgnoresDeviceFeedback()
+{
+    var input = new PhysicalMouseButtonState();
+    var physical = (nint)101;
+    var rp2040 = (nint)202;
+    input.Apply(physical, 0x0004); // physical M2 down
+    input.Apply(rp2040, 0x0001); // board-generated M1 down alone
+    True(!input.AimAndFireHeld, "separate mice must not jointly activate output");
+    input.Apply(physical, 0x0001); // physical M1 down
+    True(input.AimAndFireHeld, "physical M1+M2 activates output");
+    input.Apply(rp2040, 0x0002); // board-generated M1 release
+    True(input.AimAndFireHeld, "synthetic release must not stop per-shot recoil");
+    input.Apply(physical, 0x0002);
+    True(!input.AimAndFireHeld, "physical M1 release stops output");
+    input.Apply(physical, 0x0001);
+    input.Remove(physical);
+    True(!input.AimAndFireHeld, "mouse removal stops output");
 }
 
 static void StalledSerialOpensStayBounded()
