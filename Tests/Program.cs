@@ -40,6 +40,7 @@ var tests = new (string Name, Action Run)[]
     ("attachment math is applied once", AttachmentMathIsConsistent),
     ("serial packets preserve framing and UTF-8", SerialPacketsAreValid),
     ("serial reliability tolerates isolated read and acknowledgement stalls", SerialReliabilityIsBounded),
+    ("stalled COM opens time out without overlapping retries", StalledSerialOpensStayBounded),
     ("all commands and pattern chunks encode exactly", SerialProtocolCoverageIsComplete),
     ("configuration hashes and transactions are deterministic", ConfigurationTransactionsAreDeterministic),
     ("measured packs require and preserve exact loadouts", MeasuredProfilePacksAreExact),
@@ -1406,6 +1407,74 @@ static void SerialReliabilityIsBounded()
         "temporary closed-state reads are transient candidates");
     True(!SerialReliabilityPolicy.IsTransientReadFailure(new UnauthorizedAccessException()),
         "access failures remain terminal");
+}
+
+static void StalledSerialOpensStayBounded()
+{
+    var gate = new SerialPortOpenGate();
+    using var entered = new ManualResetEventSlim(false);
+    using var release = new ManualResetEventSlim(false);
+    var abandonedDisposals = 0;
+    var overlappingOpens = 0;
+
+    var first = gate.OpenAsync(
+        () => { entered.Set(); release.Wait(); },
+        () => Interlocked.Increment(ref abandonedDisposals),
+        TimeSpan.FromMilliseconds(500), CancellationToken.None);
+    True(entered.Wait(TimeSpan.FromSeconds(2)), "native open worker started");
+    try
+    {
+        first.GetAwaiter().GetResult();
+        throw new Exception("stalled native open unexpectedly succeeded");
+    }
+    catch (TimeoutException)
+    {
+        // The UI-facing task finishes while the fake driver remains blocked.
+    }
+
+    var second = gate.OpenAsync(
+        () => Interlocked.Increment(ref overlappingOpens),
+        () => Interlocked.Increment(ref abandonedDisposals),
+        TimeSpan.FromMilliseconds(100), CancellationToken.None);
+    try
+    {
+        second.GetAwaiter().GetResult();
+        throw new Exception("a second open bypassed the held gate");
+    }
+    catch (TimeoutException)
+    {
+        // Retrying does not create a second native open against the same port.
+    }
+
+    release.Set();
+    True(SpinWait.SpinUntil(() => Volatile.Read(ref abandonedDisposals) == 2,
+        TimeSpan.FromSeconds(2)), "timed-out ports were disposed after the driver returned");
+    Equal(0, overlappingOpens, "no overlapping native opens");
+    gate.OpenAsync(
+        () => Interlocked.Increment(ref overlappingOpens),
+        () => throw new Exception("successful open was incorrectly disposed"),
+        TimeSpan.FromSeconds(1), CancellationToken.None).GetAwaiter().GetResult();
+    Equal(1, overlappingOpens, "later open succeeds after cleanup");
+
+    using var closeEntered = new ManualResetEventSlim(false);
+    using var closeRelease = new ManualResetEventSlim(false);
+    var close = gate.CloseAsync(() => { closeEntered.Set(); closeRelease.Wait(); });
+    True(closeEntered.Wait(TimeSpan.FromSeconds(2)), "native close worker started");
+    try
+    {
+        gate.OpenAsync(
+            () => Interlocked.Increment(ref overlappingOpens),
+            () => Interlocked.Increment(ref abandonedDisposals),
+            TimeSpan.FromMilliseconds(100), CancellationToken.None).GetAwaiter().GetResult();
+        throw new Exception("new open bypassed a pending COM-port close");
+    }
+    catch (TimeoutException)
+    {
+        // A reconnect waits for the old native handle to finish closing.
+    }
+    closeRelease.Set();
+    close.GetAwaiter().GetResult();
+    Equal(1, overlappingOpens, "close and open never overlapped");
 }
 
 static void MeasuredProfilePacksAreExact()

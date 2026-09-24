@@ -18,6 +18,7 @@
 #include "delta_noise.h"
 #include "motion_math.h"
 #include "first_bullet_kick.h"
+#include "hid_output_math.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
@@ -792,8 +793,10 @@ static void complete_pattern_output() {
         return;
     }
 
-    pendingMouseX += round_q16_to_integer(correctionScheduler.fractionXQ16);
-    pendingMouseY += round_q16_to_integer(correctionScheduler.fractionYQ16);
+    pendingMouseX = ZeroSenseHidOutput::addPending(
+        pendingMouseX, round_q16_to_integer(correctionScheduler.fractionXQ16));
+    pendingMouseY = ZeroSenseHidOutput::addPending(
+        pendingMouseY, round_q16_to_integer(correctionScheduler.fractionYQ16));
     ZeroSenseCorrection::resetOutput(correctionScheduler);
     sim.velocityX = 0.0f;
     sim.velocityY = 0.0f;
@@ -965,7 +968,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:V2.0-HOST-WATCHDOG-20260923");
+    protocol_println("BUILD:V2.1-RP2040-HID-20260924");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (lastResetWasHostWatchdog) {
@@ -1648,11 +1651,7 @@ static void service_serial() {
 }
 
 static int8_t report_delta(int64_t value) {
-#ifdef ZEROSENSE_RP2350_USB_C
-    return static_cast<int8_t>(std::clamp<int64_t>(value, -127, 127));
-#else
-    return static_cast<int8_t>(std::clamp<int64_t>(value, -100, 100));
-#endif
+    return ZeroSenseHidOutput::reportDelta(value);
 }
 
 static int8_t random_delta_noise() {
@@ -1907,8 +1906,8 @@ static void queue_mouse_movement(
     const int32_t queuedY = static_cast<int32_t>(fractionalMouseY);
     fractionalMouseX -= static_cast<float>(queuedX);
     fractionalMouseY -= static_cast<float>(queuedY);
-    pendingMouseX += queuedX;
-    pendingMouseY += queuedY;
+    pendingMouseX = ZeroSenseHidOutput::addPending(pendingMouseX, queuedX);
+    pendingMouseY = ZeroSenseHidOutput::addPending(pendingMouseY, queuedY);
 }
 
 static void schedule_pattern_correction(
@@ -1932,8 +1931,8 @@ static void service_scheduled_correction() {
 
     const uint32_t now = micros();
     const auto result = ZeroSenseCorrection::service(correctionScheduler, now);
-    pendingMouseX += result.queuedX;
-    pendingMouseY += result.queuedY;
+    pendingMouseX = ZeroSenseHidOutput::addPending(pendingMouseX, result.queuedX);
+    pendingMouseY = ZeroSenseHidOutput::addPending(pendingMouseY, result.queuedY);
 
     if (correctionScheduler.frames == 0) {
         if (fireActive && !rapidFireActive &&
@@ -2271,14 +2270,10 @@ void loop() {
             }
         }
     }
-#ifdef ZEROSENSE_RP2350_USB_C
-    // A one-millisecond loop sleep can miss the next full-speed HID slot once
-    // application work is added. Poll at sub-frame granularity on the proxy;
-    // service_hid() still enforces the one-millisecond send interval.
+    // A one-millisecond loop sleep can miss the next full-speed HID slot on
+    // either board. Service at sub-frame granularity; service_hid() still
+    // enforces the selected 1/2/4 ms report interval.
     delayMicroseconds(100);
-#else
-    delay(1);
-#endif
 }
 
 #ifdef ZEROSENSE_RP2350_USB_C

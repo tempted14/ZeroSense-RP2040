@@ -9,6 +9,7 @@
 #include "../../RP2040_Firmware/rainbow_recoil/host_receive_recovery.h"
 #include "../../RP2040_Firmware/rainbow_recoil/motion_math.h"
 #include "../../RP2040_Firmware/rainbow_recoil/first_bullet_kick.h"
+#include "../../RP2040_Firmware/rainbow_recoil/hid_output_math.h"
 #include "../../RP2040_Firmware/rainbow_recoil/protocol_output.h"
 #include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_timing.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_core_health.h"
@@ -29,6 +30,16 @@ void expect(bool condition, const char* name) {
 int main() {
     using namespace ZeroSenseHid;
     testPioHostGuards();
+
+    expect(ZeroSenseHidOutput::reportDelta(127) == 127 &&
+        ZeroSenseHidOutput::reportDelta(-127) == -127,
+        "RP2040 and RP2350 use the full declared HID X/Y range");
+    expect(ZeroSenseHidOutput::reportDelta(10000) == 127 &&
+        ZeroSenseHidOutput::reportDelta(-10000) == -127,
+        "large queued deltas remain bounded to one signed-byte report");
+    expect(ZeroSenseHidOutput::addPending(INT32_MAX - 2, 50) == INT32_MAX &&
+        ZeroSenseHidOutput::addPending(INT32_MIN + 2, -50) == INT32_MIN,
+        "extreme General-mode output never wraps its pending HID queue");
 
     expect(ZeroSenseFirstBullet::verticalForShot(127.0f, 0, 2.0f) == 254.0f,
         "first bullet kick applies after Q8.8 profile saturation");
