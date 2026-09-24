@@ -2434,6 +2434,17 @@ public sealed partial class MainPage : UserControl, IDisposable
         UpdateFirstBulletKickUi(settings);
     }
 
+    public void AttachPhysicalMouseInput(nint window)
+    {
+        if (!_mouseButtonTrigger.Attach(window))
+        {
+            DiagnosticLog.Record(
+                "input-warning",
+                "Per-device Raw Input registration failed; M1+M2 uses legacy polling " +
+                "and RP2040 rapid-fire activation may stop after one pulse.");
+        }
+    }
+
     private void UpdateFirstBulletKickUi(Settings settings)
     {
         var selected = WeaponSelector.SelectedItem as WeaponProfileViewModel;

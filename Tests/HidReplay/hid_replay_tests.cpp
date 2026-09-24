@@ -169,6 +169,30 @@ int main() {
     expect(finalBatch.servicedFrames == 4 && scheduler.frames == 0,
         "later fake-clock service preserves all remaining frames");
 
+    // TCSG12-like semi-auto cadence: each generated shot schedules a complete
+    // interval of General-mode recoil; releasing the synthetic button between
+    // shots must not reset the correction scheduler.
+    scheduler = {};
+    const uint32_t semiIntervalUs = 60000000U / 490U;
+    int32_t semiOutputY = 0;
+    for (uint32_t shot = 0; shot < 2; ++shot) {
+        const uint32_t shotStartUs = 1000U + shot * semiIntervalUs;
+        ZeroSenseCorrection::schedule(
+            scheduler, 0.0f,
+            ZeroSenseMotion::shotIntervalScale(semiIntervalUs),
+            semiIntervalUs, shotStartUs);
+        for (uint32_t now = shotStartUs;
+             now < shotStartUs + ZeroSenseCorrection::framesForInterval(semiIntervalUs) * 1000U;
+             now += 1000U) {
+            semiOutputY += ZeroSenseCorrection::service(scheduler, now).queuedY;
+        }
+        expect(scheduler.frames == 0,
+            "semi-auto shot's recoil envelope drains before next shot");
+    }
+    semiOutputY += ZeroSenseCorrection::roundedFraction(scheduler.fractionYQ16);
+    expect(semiOutputY == 31,
+        "two semi-auto shots preserve their full scheduled recoil");
+
     const uint8_t bootDescriptor[] = {
         0x05,0x01,0x09,0x02,0xA1,0x01,0x09,0x01,0xA1,0x00,
         0x05,0x09,0x19,0x01,0x29,0x03,0x15,0x00,0x25,0x01,

@@ -37,6 +37,7 @@ public partial class App : Application
         _window.AppWindow.Closing += AppWindow_Closing;
         _window.AppWindow.Resize(new SizeInt32(1180, 800));
         _window.Activate();
+        _mainPage.AttachPhysicalMouseInput(WinRT.Interop.WindowNative.GetWindowHandle(_window));
 
         if (Array.Exists(
             Environment.GetCommandLineArgs(),
