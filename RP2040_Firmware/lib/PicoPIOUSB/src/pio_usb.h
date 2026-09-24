@@ -15,6 +15,8 @@ void pio_usb_host_task(void);
 void pio_usb_host_stop(void);
 void pio_usb_host_restart(void);
 uint32_t pio_usb_host_get_frame_number(void);
+uint32_t pio_usb_host_in_attempt_count(void);
+uint32_t pio_usb_host_in_nak_count(void);
 uint32_t pio_usb_host_tx_timeout_count(void);
 uint32_t pio_usb_host_rx_flag_timeout_count(void);
 uint32_t pio_usb_host_rx_packet_timeout_count(void);

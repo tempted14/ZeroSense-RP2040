@@ -50,6 +50,12 @@ int main() {
         "host watchdog distinguishes a delayed task from a stalled one");
     expect(ZeroSenseHostHealth::stalled(UINT32_MAX - 200, 400, 500),
         "host watchdog timeout survives millis wrap");
+    expect(!ZeroSenseHostHealth::restartDue(0, 100000) &&
+        !ZeroSenseHostHealth::restartDue(2000, 5000) &&
+        ZeroSenseHostHealth::restartDue(2000, 5001),
+        "host restart needs a prior heartbeat and more than three seconds without progress");
+    expect(ZeroSenseHostHealth::restartDue(UINT32_MAX - 200, 2900),
+        "host restart timeout survives millis wrap");
 
     expect(std::abs(ZeroSenseMotion::intervalScale(7360) - 0.92f) < 0.0001f,
         "negative timing jitter scale");

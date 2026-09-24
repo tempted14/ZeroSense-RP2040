@@ -1694,6 +1694,17 @@ static void FirmwareStatusIsParsed()
     Equal(246u, guardedStatus.HostEmptyReports, "empty callbacks are distinct from decode errors");
     Equal(7u, guardedStatus.PioRxOversize, "oversized USB packets");
     Equal(30u, guardedStatus.PioRxFlagTimeouts, "new metrics retain older PIO fields");
+    const string busMetrics = guardedMetrics +
+        ":HOST_SOF_FRAMES=2000:HOST_IN_ATTEMPTS=1750:HOST_IN_NAKS=250";
+    True(FirmwareStatusParser.TryParse(busMetrics, out var busStatus),
+        "v2 host bus counters parse without breaking older metrics");
+    True(busStatus.HasHostBusMetrics, "bus metric availability is explicit");
+    Equal(2000u, busStatus.HostSofFrames, "PIO frames");
+    Equal(1750u, busStatus.HostInAttempts, "host IN attempts");
+    Equal(250u, busStatus.HostInNaks, "mouse NAKs");
+    True(!guardedStatus.HasHostBusMetrics, "v1.9 metrics do not invent host polling counts");
+    True(!FirmwareStatusParser.TryParse(busMetrics.Replace("HOST_IN_NAKS=250", "HOST_IN_NAKS=-1"), out _),
+        "invalid host bus counters are rejected");
     foreach (var malformed in new[] {
         guardedMetrics.Replace("HOST_EMPTY_REPORTS=246", "HOST_EMPTY_REPORTS=-1"),
         guardedMetrics.Replace("PIO_RX_OVERSIZE=7", "PIO_RX_OVERSIZE=4294967296"),
@@ -1749,6 +1760,19 @@ static void TransportDiagnosticsAreAccurate()
     Equal(70d, active.EmptyCallbacksPerSecond!.Value, "empty completion rate is separate");
     Equal(800d, active.HidReportsPerSecond!.Value, "outgoing rate uses actual elapsed time");
     True(active.Warning, "new errors warn");
+    monitor.Reset();
+    var busInitial = initial with { HasHostBusMetrics = true,
+        HostSofFrames = 10000, HostInAttempts = 9000, HostInNaks = 1000 };
+    monitor.Observe(busInitial, 10, true);
+    var busCurrent = current with { HasHostBusMetrics = true,
+        HostSofFrames = 12000, HostInAttempts = 10800, HostInNaks = 1800 };
+    var busActive = monitor.Observe(busCurrent, 12, true);
+    Equal(900d, busActive.HostInAttemptsPerSecond!.Value, "host attempted polling rate is separate from reports");
+    True(busActive.Summary.Contains("PIO frames/s 1000", StringComparison.Ordinal),
+        "diagnostics expose the physical host frame cadence");
+    monitor.Reset();
+    monitor.Observe(initial, 10, true);
+    monitor.Observe(current, 12, true);
     var idle = monitor.Observe(current, 14, true);
     Equal(0d, idle.AcceptedReportsPerSecond!.Value, "idle rate is zero");
     True(!idle.Warning && idle.Summary.Contains("idle", StringComparison.Ordinal),

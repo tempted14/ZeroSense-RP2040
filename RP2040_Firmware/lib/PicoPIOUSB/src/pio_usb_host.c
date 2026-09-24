@@ -27,6 +27,8 @@ static alarm_pool_t *_alarm_pool = NULL;
 static repeating_timer_t sof_rt;
 // The sof_count may be incremented and then read on different cores.
 static volatile uint32_t sof_count = 0;
+static uint32_t host_in_attempts = 0;
+static uint32_t host_in_naks = 0;
 static bool timer_active;
 
 static volatile bool cancel_timer_flag;
@@ -355,10 +357,11 @@ void __not_in_flash_func(pio_usb_host_frame)(void) {
     }
   }
 
-  sof_count++;
+  uint32_t const completed_frames =
+      __atomic_add_fetch(&sof_count, 1u, __ATOMIC_RELAXED);
 
   // SOF counter is 11-bit
-  uint16_t const sof_count_11b = sof_count & 0x7ff;
+  uint16_t const sof_count_11b = completed_frames & 0x7ff;
   sof_packet[2] = sof_count_11b & 0xff;
   sof_packet[3] = (calc_usb_crc5(sof_count_11b) << 3) | (sof_count_11b >> 8);
   sof_packet_encoded_len =
@@ -378,7 +381,15 @@ static bool __no_inline_not_in_flash_func(sof_timer)(repeating_timer_t *_rt) {
 //--------------------------------------------------------------------+
 
 uint32_t pio_usb_host_get_frame_number(void) {
-  return sof_count;
+  return __atomic_load_n(&sof_count, __ATOMIC_RELAXED);
+}
+
+uint32_t pio_usb_host_in_attempt_count(void) {
+  return __atomic_load_n(&host_in_attempts, __ATOMIC_RELAXED);
+}
+
+uint32_t pio_usb_host_in_nak_count(void) {
+  return __atomic_load_n(&host_in_naks, __ATOMIC_RELAXED);
 }
 
 void pio_usb_host_port_reset_start(uint8_t root_idx) {
@@ -542,6 +553,7 @@ bool pio_usb_host_endpoint_abort_transfer(uint8_t root_idx, uint8_t device_addre
 static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
                                                              endpoint_t *ep) {
   int res = 0;
+  __atomic_fetch_add(&host_in_attempts, 1u, __ATOMIC_RELAXED);
   uint8_t expect_pid = (ep->data_id == 1) ? USB_PID_DATA1 : USB_PID_DATA0;
 
   pio_usb_bus_prepare_receive(pp);
@@ -567,6 +579,7 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
     }
   } else if (receive_pid == USB_PID_NAK) {
     // NAK try again next frame
+    __atomic_fetch_add(&host_in_naks, 1u, __ATOMIC_RELAXED);
   } else if (receive_pid == USB_PID_STALL) {
     pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_STALLED_BITS);
   } else {

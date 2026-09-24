@@ -5,7 +5,8 @@ namespace RainbowRecoil;
 
 internal readonly record struct TransportSnapshot(
     string Summary, bool Warning, double? AcceptedReportsPerSecond = null,
-    double? EmptyCallbacksPerSecond = null, double? HidReportsPerSecond = null);
+    double? EmptyCallbacksPerSecond = null, double? HidReportsPerSecond = null,
+    double? HostInAttemptsPerSecond = null);
 
 /// <summary>
 /// Observational only: never arms, resets or disconnects the device. Rates are
@@ -32,7 +33,12 @@ internal sealed class FirmwareTransportMonitor
             current.HostReportsReceived >= last.HostReportsReceived &&
             current.HostDecodeErrors >= last.HostDecodeErrors &&
             current.HostEmptyReports >= last.HostEmptyReports &&
-            current.HidReportsSent >= last.HidReportsSent;
+            current.HidReportsSent >= last.HidReportsSent &&
+            current.HasHostBusMetrics == last.HasHostBusMetrics &&
+            (!current.HasHostBusMetrics ||
+             (current.HostSofFrames >= last.HostSofFrames &&
+              current.HostInAttempts >= last.HostInAttempts &&
+              current.HostInNaks >= last.HostInNaks));
 
         if (!comparable)
         {
@@ -56,6 +62,12 @@ internal sealed class FirmwareTransportMonitor
         double acceptedRate = Math.Max(0, received - rejected) / elapsed;
         double emptyRate = (current.HostEmptyReports - prior.HostEmptyReports) / elapsed;
         double hidRate = (current.HidReportsSent - prior.HidReportsSent) / elapsed;
+        double? inRate = current.HasHostBusMetrics
+            ? (current.HostInAttempts - prior.HostInAttempts) / elapsed : null;
+        double? nakRate = current.HasHostBusMetrics
+            ? (current.HostInNaks - prior.HostInNaks) / elapsed : null;
+        double? frameRate = current.HasHostBusMetrics
+            ? (current.HostSofFrames - prior.HostSofFrames) / elapsed : null;
         bool faults = rejected > 0 || current.PioTxTimeouts > prior.PioTxTimeouts ||
             current.PioRxFlagTimeouts > prior.PioRxFlagTimeouts ||
             current.PioRxPacketTimeouts > prior.PioRxPacketTimeouts ||
@@ -73,9 +85,14 @@ internal sealed class FirmwareTransportMonitor
             ? string.Create(CultureInfo.InvariantCulture,
                 $"Approx. {acceptedRate:F0} accepted mouse reports/s; {emptyRate:F0} empty callbacks/s; {hidRate:F0} outgoing HID reports/s.")
             : string.Create(CultureInfo.InvariantCulture, $"Approx. {hidRate:F0} outgoing HID reports/s.");
+        if (mouseProxy && inRate is { } hostIn && nakRate is { } naks && frameRate is { } frames)
+        {
+            rates += string.Create(CultureInfo.InvariantCulture,
+                $" PIO frames/s {frames:F0}; host IN attempts/s {hostIn:F0}; NAKs/s {naks:F0} (NAK can mean no new mouse report).");
+        }
         string idle = mouseProxy && received == 0 && !stalled
             ? " No input reports can mean the mouse is idle; move it to check." : "";
         return new($"{state}. {rates}{idle}", stalled || faults,
-            acceptedRate, emptyRate, hidRate);
+            acceptedRate, emptyRate, hidRate, inRate);
     }
 }
