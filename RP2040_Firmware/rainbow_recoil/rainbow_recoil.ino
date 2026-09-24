@@ -21,6 +21,7 @@
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
+#include "hardware/watchdog.h"
 #include "hid_report_decoder.h"
 #include "host_receive_recovery.h"
 #include "host_core_health.h"
@@ -325,6 +326,8 @@ static std::atomic<uint32_t> hostReceiveQueueFailures{0};
 static std::atomic<uint32_t> hostMouseUnmounts{0};
 static std::atomic<uint32_t> hostTaskLastAtMs{0};
 static std::atomic<bool> hostCoreStalled{false};
+static constexpr uint32_t hostWatchdogRebootMagic = 0x5A485354;
+static bool lastResetWasHostWatchdog = false;
 
 // Parse the standard HID short-item format so report-ID, 16-bit movement, and
 // ordinary gaming-mouse descriptors work without assuming a fixed byte layout.
@@ -962,9 +965,12 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:V1.9-FIRST-KICK-20260923");
+    protocol_println("BUILD:V2.0-HOST-WATCHDOG-20260923");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
+    if (lastResetWasHostWatchdog) {
+        protocol_println("LAST_RESET:HOST_WATCHDOG");
+    }
     if (hostCoreStalled.load(std::memory_order_acquire)) {
         protocol_println("MOUSE:HOST_ERROR");
     } else if (hostMouseConnected.load(std::memory_order_acquire)) {
@@ -1433,11 +1439,17 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 uint32_t pioFilteredDisconnects = 0;
                 uint32_t hostEmpty = 0;
                 uint32_t pioRxOversize = 0;
+                uint32_t hostSofFrames = 0;
+                uint32_t hostInAttempts = 0;
+                uint32_t hostInNaks = 0;
 #ifdef ZEROSENSE_RP2350_USB_C
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
                 hostEmpty = hostEmptyReports.load(std::memory_order_relaxed);
                 pioRxOversize = pio_usb_host_rx_oversize_count();
+                hostSofFrames = pio_usb_host_get_frame_number();
+                hostInAttempts = pio_usb_host_in_attempt_count();
+                hostInNaks = pio_usb_host_in_nak_count();
                 hostSaturations =
                     hostAccumulatorSaturations.load(std::memory_order_relaxed);
                 hostRecoveries = hostReceiveRecoveries.load(std::memory_order_relaxed);
@@ -1470,7 +1482,8 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     "HOST_TASK_AGE_MS=%lu:CDC_DROPPED=%lu:"
                     "PIO_TX_TIMEOUTS=%lu:PIO_RX_FLAG_TIMEOUTS=%lu:"
                     "PIO_RX_PACKET_TIMEOUTS=%lu:PIO_SE0_GLITCHES=%lu:"
-                    "HOST_EMPTY_REPORTS=%lu:PIO_RX_OVERSIZE=%lu\n",
+                    "HOST_EMPTY_REPORTS=%lu:PIO_RX_OVERSIZE=%lu:"
+                    "HOST_SOF_FRAMES=%lu:HOST_IN_ATTEMPTS=%lu:HOST_IN_NAKS=%lu\n",
                     static_cast<unsigned long>(hidReportsSent),
                     static_cast<unsigned long>(hidBusyDeferrals),
                     static_cast<unsigned long>(maximumQueuedDelta),
@@ -1494,7 +1507,10 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                     static_cast<unsigned long>(pioRxPacketTimeouts),
                     static_cast<unsigned long>(pioFilteredDisconnects),
                     static_cast<unsigned long>(hostEmpty),
-                    static_cast<unsigned long>(pioRxOversize));
+                    static_cast<unsigned long>(pioRxOversize),
+                    static_cast<unsigned long>(hostSofFrames),
+                    static_cast<unsigned long>(hostInAttempts),
+                    static_cast<unsigned long>(hostInNaks));
             }
             break;
 
@@ -1739,26 +1755,40 @@ static uint8_t current_output_buttons() {
 
 static void service_host_core_watchdog() {
     const uint32_t last = hostTaskLastAtMs.load(std::memory_order_acquire);
-    if (!ZeroSenseHostHealth::stalled(last, millis(), 500) ||
-        hostCoreStalled.exchange(true, std::memory_order_acq_rel)) {
+    const uint32_t now = millis();
+    if (!ZeroSenseHostHealth::stalled(last, now, 500)) {
         return;
     }
 
-    // Core 1 is no longer servicing the mouse. Release any cached physical
-    // inputs so the PC does not retain a stuck click, and disarm output.
-    // Restarting core 1 here could interrupt PIO IRQ/DMA in an unknown state.
-    hostMouseButtons.store(0, std::memory_order_release);
-    hostMouseX.store(0, std::memory_order_release);
-    hostMouseY.store(0, std::memory_order_release);
-    hostMouseWheel.store(0, std::memory_order_release);
-    hostMousePan.store(0, std::memory_order_release);
-    pendingPhysicalMouseX = 0;
-    pendingPhysicalMouseY = 0;
-    pendingPhysicalWheel = 0;
-    pendingPhysicalPan = 0;
-    hidStateDirty = true;
-    hostMouseFaultPending.store(true, std::memory_order_release);
-    mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
+    if (!hostCoreStalled.exchange(true, std::memory_order_acq_rel)) {
+        // Core 1 is no longer servicing the mouse. Release cached input and
+        // disarm output before considering any recovery action.
+        hostMouseButtons.store(0, std::memory_order_release);
+        hostMouseX.store(0, std::memory_order_release);
+        hostMouseY.store(0, std::memory_order_release);
+        hostMouseWheel.store(0, std::memory_order_release);
+        hostMousePan.store(0, std::memory_order_release);
+        pendingPhysicalMouseX = 0;
+        pendingPhysicalMouseY = 0;
+        pendingPhysicalWheel = 0;
+        pendingPhysicalPan = 0;
+        hidStateDirty = true;
+        hostMouseFaultPending.store(true, std::memory_order_release);
+        mouseProxyEvent.store(MouseProxyEvent::HostError, std::memory_order_release);
+    }
+
+    // A core-only restart is unsafe while a PIO timer IRQ or DMA transfer may
+    // be wedged. If the host task cannot recover for three seconds, request a
+    // one-shot whole-board reset instead of leaving passthrough dead forever.
+    // This is a fallback, not proof that the underlying USB fault is fixed.
+    static bool rebootScheduled = false;
+    if (!rebootScheduled && ZeroSenseHostHealth::restartDue(last, now)) {
+        rebootScheduled = true;
+        protocol_println("MOUSE:HOST_WATCHDOG_REBOOT");
+        service_protocol_output();
+        watchdog_hw->scratch[0] = hostWatchdogRebootMagic;
+        watchdog_reboot(0, 0, 100);
+    }
 }
 
 static void service_mouse_proxy_status() {
@@ -2166,6 +2196,9 @@ static void service_upstream_usb_fail_safe() {
 
 void setup() {
 #ifdef ZEROSENSE_RP2350_USB_C
+    lastResetWasHostWatchdog =
+        watchdog_hw->scratch[0] == hostWatchdogRebootMagic;
+    watchdog_hw->scratch[0] = 0;
     TinyUSBDevice.setManufacturerDescriptor("Waveshare");
     TinyUSBDevice.setProductDescriptor("ZeroSense RP2350 Mouse Proxy");
 #else
@@ -2238,7 +2271,14 @@ void loop() {
             }
         }
     }
+#ifdef ZEROSENSE_RP2350_USB_C
+    // A one-millisecond loop sleep can miss the next full-speed HID slot once
+    // application work is added. Poll at sub-frame granularity on the proxy;
+    // service_hid() still enforces the one-millisecond send interval.
+    delayMicroseconds(100);
+#else
     delay(1);
+#endif
 }
 
 #ifdef ZEROSENSE_RP2350_USB_C
