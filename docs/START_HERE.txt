@@ -31,7 +31,9 @@ RP2350 users: connect the PC to the USB-C port beside BOOT/RESET and the mouse
 to the opposite female port. Confirm the board's CC1/CC2 selectors are in the
 silkscreen's 1 / Source position before connecting the mouse. Read the bundled
 RP2350_MOUSE_PROXY.md guide and complete its desktop pass-through test before
-arming output.
+arming output. For hardware-validation prereleases, keep a backup mouse connected
+directly to the PC and the previously usable UF2 available: software tests
+cannot guarantee this board and mouse will never freeze.
 
 If Windows blocks or cannot launch the app, read the bundled TROUBLESHOOTING.md.
 An unsigned portable ZIP may still show a Windows reputation warning; a user
