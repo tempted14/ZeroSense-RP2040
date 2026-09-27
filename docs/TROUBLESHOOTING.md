@@ -121,7 +121,28 @@ If HID appears but CDC does not, or CDC appears but HID does not:
 - Check the port with the `Win32_SerialPort` command above. The PNP device ID should contain `VID_2E8A`.
 - Restart the app after the runtime COM port is present.
 
-The app does not search for a bridge-chip description. It considers active COM ports associated with VID `2E8A`, prefers the last working port, and tries every current candidate until one replies `PONG:RAINBOW-RECOIL:4`. A message that no port passed the firmware handshake usually means the board is running an older or unrelated sketch; flash the matching v1.3-or-newer UF2 again.
+The app does not search for a bridge-chip description. It considers active COM ports associated with VID `2E8A`, prefers the last working port, and tries every current candidate until one replies `PONG:RAINBOW-RECOIL:4`. A failed handshake can mean incompatible firmware, another process holding the port, or a stalled CDC/driver session; it does not by itself prove the UF2 is wrong.
+
+### COM remains visible, but output stops or reconnect fails
+
+Use the v2.1.2 Windows app together with the matching board UF2. This patch
+retries lost startup probes, resets partial firmware sessions on DTR changes,
+and serializes failed-port cleanup before reconnecting. It preserves your
+saved profiles and keeps output stopped until the app synchronizes and arms.
+
+- Export the app's diagnostic report before closing it. Preserve the exact
+  connection error, error code, BUILD line, and whether COM disappears.
+- Close other serial readers. Only one program can own the COM port.
+- If the message says an earlier open/handshake/close is still finishing, the
+  app is waiting for Windows to release the previous handle. A permanently
+  stuck driver operation may require one board unplug/replug.
+- No unplug sound and COM remaining present do not rule out cabling, power,
+  or controller faults. If it recurs, compare a known-good data cable and a
+  direct PC USB port, changing one variable at a time.
+
+RP2040-Zero is not a passthrough board: keep the physical mouse plugged into
+the PC. Its firmware marker for this patch is
+`BUILD:V2.1.2-CDC-RECOVERY-20260927`.
 
 ## The COM number changed
 

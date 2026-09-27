@@ -968,7 +968,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:V2.1-RP2040-HID-20260924");
+    protocol_println("BUILD:V2.1.2-CDC-RECOVERY-20260927");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (lastResetWasHostWatchdog) {
@@ -1540,6 +1540,31 @@ static void service_configuration_transaction() {
             "CONFIG:ROLLBACK:TIMEOUT:TX=%08lX\n",
             static_cast<unsigned long>(transactionId));
     }
+}
+
+// A COM close does not necessarily unmount the USB device. Treat DTR changes
+// as protocol-session boundaries so a reconnect cannot inherit a partial frame,
+// staged configuration, generated movement, or replies from the old session.
+static bool service_cdc_session() {
+    static bool wasConnected = false;
+    const bool connected = tud_cdc_connected();
+    if (connected != wasConnected) {
+        stop_output();
+        rollback_configuration_transaction();
+        reset_parser();
+        protocolOutput.clear();
+        if (!connected && TinyUSBDevice.mounted()) {
+            // Flush once on close, not on every idle HID-loop iteration.
+            tud_cdc_read_flush();
+        }
+#ifdef ZEROSENSE_RP2350_USB_C
+        rp2350ArmLeaseEnabled = false;
+        rp2350TriggerLatched = true;
+#endif
+        wasConnected = connected;
+    }
+    // Preserve a first PING already buffered when DTR rises.
+    return connected;
 }
 
 static void service_serial() {
@@ -2241,7 +2266,9 @@ void loop() {
 #ifdef TINYUSB_NEED_POLLING_TASK
     TinyUSBDevice.task();
 #endif
-    service_serial();
+    if (service_cdc_session()) {
+        service_serial();
+    }
     service_configuration_transaction();
     service_upstream_usb_fail_safe();
 #ifdef ZEROSENSE_RP2350_USB_C

@@ -8,6 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="System.IO.Ports" Version="8.0.0" />
     <Compile Remove="OcrProbe\**\*.cs" />
     <Compile Include="..\WindowsApp\HotkeyChord.cs" Link="Source\HotkeyChord.cs" />
     <Compile Include="..\WindowsApp\HorizontalRecoilModel.cs" Link="Source\HorizontalRecoilModel.cs" />
@@ -26,6 +27,10 @@
     <Compile Include="..\WindowsApp\SerialProtocol.cs" Link="Source\SerialProtocol.cs" />
     <Compile Include="..\WindowsApp\SerialReliabilityPolicy.cs" Link="Source\SerialReliabilityPolicy.cs" />
     <Compile Include="..\WindowsApp\SerialPortOpenGate.cs" Link="Source\SerialPortOpenGate.cs" />
+    <Compile Include="..\WindowsApp\SerialConnection.cs" Link="Source\SerialConnection.cs" />
+    <Compile Include="..\WindowsApp\SerialPortTransport.cs" Link="Source\SerialPortTransport.cs" />
+    <Compile Include="..\WindowsApp\SerialLineReader.cs" Link="Source\SerialLineReader.cs" />
+    <Compile Include="..\WindowsApp\FirmwareHandshake.cs" Link="Source\FirmwareHandshake.cs" />
     <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />
     <Compile Include="..\WindowsApp\FirmwareTransportMonitor.cs" Link="Source\FirmwareTransportMonitor.cs" />
     <Compile Include="..\WindowsApp\FirmwareContract.cs" Link="Source\FirmwareContract.cs" />
