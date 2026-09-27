@@ -541,15 +541,16 @@ public sealed partial class MainPage : UserControl, IDisposable
                     candidate.OnStatusChanged -= Connection_StatusChanged;
                     candidate.Dispose();
                     errors.Add($"{portName}: {ex.Message}");
-                    DiagnosticLog.Record("device-error", $"{portName} connection failed: {ex.Message}");
+                    DiagnosticLog.Record("device-error",
+                        $"{portName} connection failed: {ex.GetType().Name} (0x{ex.HResult:X8}): {ex.Message}");
                 }
             }
 
             SetConnectionStatus(
-                "Firmware handshake failed",
+                "Device connection failed",
                 string.Join("  ", errors),
                 DisconnectedBrush);
-            DiagnosticLog.Record("device-error", "All firmware handshake attempts failed.");
+            DiagnosticLog.Record("device-error", "All device connection attempts failed; details: " + string.Join(" | ", errors));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

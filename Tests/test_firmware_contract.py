@@ -72,7 +72,21 @@ class FirmwareContractTests(unittest.TestCase):
         )
 
     def test_exact_profile_readback_uses_utf8(self) -> None:
-        self.assertIn("Encoding = new UTF8Encoding(false, true)", CS_CONNECTION)
+        reader = (ROOT / "WindowsApp" / "SerialLineReader.cs").read_text()
+        self.assertIn("new UTF8Encoding(false, true)", reader)
+        self.assertIn("reader.ReadLine(port)", CS_CONNECTION)
+
+    def test_cdc_session_resets_before_accepting_commands(self) -> None:
+        session = FIRMWARE.split("static bool service_cdc_session() {", 1)[1].split(
+            "static void service_serial()", 1
+        )[0]
+        for reset in ("stop_output();", "rollback_configuration_transaction();",
+                      "reset_parser();", "protocolOutput.clear();",
+                      "rp2350ArmLeaseEnabled = false;"):
+            self.assertIn(reset, session)
+        self.assertIn("if (connected != wasConnected)", session)
+        self.assertIn("if (!connected && TinyUSBDevice.mounted())", session)
+        self.assertIn("if (service_cdc_session()) {\n        service_serial();", FIRMWARE)
 
     def test_firmware_build_retains_float_readback_support(self) -> None:
         self.assertEqual(2, PLATFORMIO.count("-Wl,-u,_printf_float"))
