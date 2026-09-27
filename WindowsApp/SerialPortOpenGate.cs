@@ -26,11 +26,22 @@ internal sealed class SerialPortOpenGate
             throw new ArgumentOutOfRangeException(nameof(timeout));
         }
 
-        if (!await _gate.WaitAsync(timeout, cancellationToken).ConfigureAwait(false))
+        bool acquired;
+        try
+        {
+            acquired = await _gate.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // This port was never opened and has no worker that could own cleanup.
+            _ = Task.Run(disposeAbandonedPort);
+            throw;
+        }
+        if (!acquired)
         {
             // No worker owns this newly constructed port.
-            await Task.Run(disposeAbandonedPort).ConfigureAwait(false);
-            throw new TimeoutException("A previous COM-port open is still stalled.");
+            _ = Task.Run(disposeAbandonedPort);
+            throw new TimeoutException("A previous COM-port open, handshake, or close is still finishing.");
         }
 
         Task openTask;
@@ -61,8 +72,9 @@ internal sealed class SerialPortOpenGate
             // If Open() is stuck inside the OS driver, closing this port now
             // could race it. Transfer cleanup ownership to its completion.
             _ = openTask.ContinueWith(
-                _ => Task.Run(() =>
+                completed => Task.Run(() =>
                 {
+                    _ = completed.Exception; // Observe faults that arrive after the timeout.
                     try { disposeAbandonedPort(); }
                     finally { _gate.Release(); }
                 }),
