@@ -3,9 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.IO.Ports;
 using System.Security.Cryptography;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -16,14 +14,17 @@ public sealed class SerialConnection : IRecoilDeviceConnection
 {
     private static readonly ConcurrentDictionary<string, SerialPortOpenGate> OpenGates =
         new(StringComparer.OrdinalIgnoreCase);
-    private static readonly TimeSpan OpenTimeout = TimeSpan.FromSeconds(3);
+    // Bounds the native open plus handshake. A stalled operation keeps the
+    // per-port gate until cleanup finishes, while the UI-facing await expires.
+    private static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(6);
 
     private readonly string _portName;
+    private readonly Func<ISerialPortTransport> _portFactory;
     private readonly object _stateLock = new();
     private readonly object _writeLock = new();
     private readonly object _responseLock = new();
     private readonly SemaphoreSlim _configurationLock = new(1, 1);
-    private SerialPort? _serialPort;
+    private ISerialPortTransport? _serialPort;
     private CancellationTokenSource? _readCancellation;
     private Task? _readTask;
     private bool _disposed;
@@ -52,7 +53,11 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     public string PortName => _portName;
     public bool IsSimulator => false;
 
-    public SerialConnection(string portName)
+    public SerialConnection(string portName) : this(portName, () => new SerialPortTransport(portName.Trim()))
+    {
+    }
+
+    internal SerialConnection(string portName, Func<ISerialPortTransport> portFactory)
     {
         if (string.IsNullOrWhiteSpace(portName))
         {
@@ -60,6 +65,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         }
 
         _portName = portName.Trim();
+        _portFactory = portFactory ?? throw new ArgumentNullException(nameof(portFactory));
     }
 
     public Task Connect() => ConnectAsync(CancellationToken.None);
@@ -75,34 +81,33 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             }
         }
 
-        var port = new SerialPort(_portName, 115200)
-        {
-            ReadTimeout = 100,
-            WriteTimeout = 500,
-            DtrEnable = true,
-            RtsEnable = false,
-            NewLine = "\n",
-            Encoding = new UTF8Encoding(false, true)
-        };
+        var port = _portFactory();
+        var reader = new SerialLineReader();
+        var gate = OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate());
 
         var portOwnershipReturned = false;
         try
         {
-            await OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate())
-                .OpenAsync(port.Open, () => CloseAndDispose(port), OpenTimeout, cancellationToken)
+            await gate.OpenAsync(() =>
+                {
+                    port.Open();
+                    if (cancellationToken.WaitHandle.WaitOne(75))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                    }
+                    FirmwareHandshake.Run(port, reader, cancellationToken);
+                }, () => CloseAndDispose(port), ConnectTimeout, cancellationToken)
                 .ConfigureAwait(false);
             portOwnershipReturned = true;
-            await Task.Delay(75, cancellationToken).ConfigureAwait(false);
-            await Task.Run(() => PerformHandshake(port, cancellationToken), cancellationToken)
-                .ConfigureAwait(false);
 
-            var readCancellation = new CancellationTokenSource();
             lock (_stateLock)
             {
                 ObjectDisposedException.ThrowIf(_disposed, this);
+                cancellationToken.ThrowIfCancellationRequested();
+                var readCancellation = new CancellationTokenSource();
                 _serialPort = port;
                 _readCancellation = readCancellation;
-                _readTask = Task.Run(() => ReadLoop(port, readCancellation.Token));
+                _readTask = Task.Run(() => ReadLoop(port, reader, readCancellation.Token));
                 _connectedAt = DateTimeOffset.UtcNow;
             }
             RaiseStatusChanged("Connected");
@@ -111,7 +116,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         {
             if (portOwnershipReturned)
             {
-                await Task.Run(() => CloseAndDispose(port)).ConfigureAwait(false);
+                _ = gate.CloseAsync(() => CloseAndDispose(port));
             }
             throw new InvalidOperationException(
                 $"Cannot open {_portName}; another program may already be using it.",
@@ -121,41 +126,13 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         {
             if (portOwnershipReturned)
             {
-                await Task.Run(() => CloseAndDispose(port)).ConfigureAwait(false);
+                _ = gate.CloseAsync(() => CloseAndDispose(port));
             }
             throw;
         }
     }
 
-    private static void PerformHandshake(SerialPort port, CancellationToken cancellationToken)
-    {
-        port.DiscardInBuffer();
-        var ping = SerialProtocol.BuildCommand("PING");
-        port.Write(ping, 0, ping.Length);
-
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-        while (DateTime.UtcNow < deadline)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            try
-            {
-                var line = port.ReadLine().TrimEnd('\r');
-                if (line.Equals("PONG:RAINBOW-RECOIL:4", StringComparison.Ordinal))
-                {
-                    return;
-                }
-            }
-            catch (TimeoutException)
-            {
-                // A short timeout keeps cancellation and the overall deadline responsive.
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"{port.PortName} did not identify as Rainbow Recoil firmware.");
-    }
-
-    private void ReadLoop(SerialPort port, CancellationToken cancellationToken)
+    private void ReadLoop(ISerialPortTransport port, SerialLineReader reader, CancellationToken cancellationToken)
     {
         var consecutiveReadFailures = 0;
         try
@@ -164,10 +141,15 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             {
                 try
                 {
-                    var line = port.ReadLine().TrimEnd('\r');
-                    if (line.Length > 0)
+                    var rejectedBefore = reader.RejectedLines;
+                    var line = reader.ReadLine(port);
+                    consecutiveReadFailures = 0;
+                    if (reader.RejectedLines != rejectedBefore)
                     {
-                        consecutiveReadFailures = 0;
+                        DiagnosticLog.Record("serial", $"{_portName}: discarded a malformed/oversized response line; retaining the connection.");
+                    }
+                    if (line is not null)
+                    {
                         CompletePendingResponse(line);
                         RaiseCommandReceived(line);
                     }
@@ -182,12 +164,16 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                     SerialReliabilityPolicy.IsTransientReadFailure(ex))
                 {
                     ++consecutiveReadFailures;
+                    DiagnosticLog.Record("serial-error",
+                        $"{_portName}: read failure {consecutiveReadFailures}, {ex.GetType().Name} " +
+                        $"(0x{ex.HResult:X8}): {ex.Message}");
                     if (!port.IsOpen ||
                         SerialReliabilityPolicy.ShouldDisconnectAfterReadFailure(
                             consecutiveReadFailures))
                     {
                         throw new IOException(
-                            $"The device CDC read failed {consecutiveReadFailures} times consecutively.",
+                            $"{_portName}: CDC read failed {consecutiveReadFailures} times: " +
+                            $"{ex.Message} (0x{ex.HResult:X8}).",
                             ex);
                     }
 
@@ -198,31 +184,46 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                     }
                 }
             }
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                throw new IOException("The device CDC port closed unexpectedly.");
+            }
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            MarkConnectionFailed(port);
-            RaiseStatusChanged($"Disconnected: {ex.Message}");
+            if (MarkConnectionFailed(port))
+            {
+                RaiseStatusChanged($"Disconnected: {ex.Message}");
+            }
+        }
+        catch (Exception) when (cancellationToken.IsCancellationRequested)
+        {
+            // Closing the native port is allowed to interrupt a pending read.
         }
     }
 
-    private void MarkConnectionFailed(SerialPort failedPort)
+    private bool MarkConnectionFailed(ISerialPortTransport failedPort)
     {
+        CancellationTokenSource? cancellation;
+        Task? readTask;
         lock (_stateLock)
         {
             if (!ReferenceEquals(_serialPort, failedPort))
             {
-                return;
+                return false;
             }
 
             _serialPort = null;
-            _readCancellation?.Dispose();
+            cancellation = _readCancellation;
+            readTask = _readTask;
             _readCancellation = null;
             _readTask = null;
+            cancellation?.Cancel();
+            QueuePortClose(failedPort, cancellation, readTask, sendStop: false);
         }
 
-        CloseAndDispose(failedPort);
         FailPendingResponse(new IOException("The device CDC port was disconnected."));
+        return true;
     }
 
     public byte[] BuildCommand(string commandType, string payload) =>
@@ -469,7 +470,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     {
         ArgumentNullException.ThrowIfNull(data);
 
-        SerialPort port;
+        ISerialPortTransport port;
         lock (_stateLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -496,16 +497,18 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             }
             Interlocked.Increment(ref _commandsSent);
         }
-        catch
+        catch (Exception ex)
         {
             Interlocked.Increment(ref _failedCommands);
+            DiagnosticLog.Record("serial-error",
+                $"{_portName}: write failed, {ex.GetType().Name} (0x{ex.HResult:X8}): {ex.Message}");
             throw;
         }
     }
 
     public void Disconnect()
     {
-        SerialPort? port;
+        ISerialPortTransport? port;
         CancellationTokenSource? cancellation;
         Task? readTask;
         lock (_stateLock)
@@ -516,6 +519,12 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             _serialPort = null;
             _readCancellation = null;
             _readTask = null;
+            cancellation?.Cancel();
+            if (port is not null)
+            {
+                // Reserve cleanup before exposing a disconnected session.
+                QueuePortClose(port, cancellation, readTask, sendStop: true);
+            }
         }
 
         if (port is null)
@@ -524,17 +533,21 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             return;
         }
 
-        cancellation?.Cancel();
         FailPendingResponse(new IOException("The device CDC port was disconnected."));
         RaiseStatusChanged("Disconnected");
+    }
 
+    private void QueuePortClose(
+        ISerialPortTransport port, CancellationTokenSource? cancellation,
+        Task? readTask, bool sendStop)
+    {
         // Windows can stall both Write() and Close() after a USB/CDC fault.
         // Neither may block the WinUI dispatcher during disconnect/reconnect.
         _ = OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate()).CloseAsync(() =>
         {
             try
             {
-                if (port.IsOpen)
+                if (sendStop && port.IsOpen)
                 {
                     lock (_writeLock)
                     {
@@ -556,18 +569,17 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                 }
                 finally
                 {
-                    if (readTask is null)
+                    try
                     {
-                        cancellation?.Dispose();
+                        // The old reader must exit before a new session on this
+                        // COM port can consume responses. This runs off the UI.
+                        readTask?.GetAwaiter().GetResult();
                     }
-                    else
+                    catch
                     {
-                        _ = readTask.ContinueWith(
-                            _ => cancellation?.Dispose(),
-                            CancellationToken.None,
-                            TaskContinuationOptions.ExecuteSynchronously,
-                            TaskScheduler.Default);
+                        // Native Close can abort the old reader with an I/O error.
                     }
+                    finally { cancellation?.Dispose(); }
                 }
             }
         });
@@ -716,7 +728,7 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         }
     }
 
-    private static void CloseAndDispose(SerialPort port)
+    private static void CloseAndDispose(ISerialPortTransport port)
     {
         try
         {

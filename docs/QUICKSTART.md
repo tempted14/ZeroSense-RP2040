@@ -158,7 +158,13 @@ STATUS samples. The command does not arm or configure output. Save the output,
 and note whether unplugging only the mouse restores movement or the board needs
 a reset. `docs/AUDIT_2026-09-22.md` explains the counters. The extended fields
 require the diagnostic firmware build and cannot diagnose freezes retroactively.
-The v2.1.0 firmware identifies itself as `BUILD:V2.1-RP2040-HID-20260924`.
+The v2.1.2 firmware identifies itself as `BUILD:V2.1.2-CDC-RECOVERY-20260927`.
+Use its matching Windows app for bounded handshake retries and serialized
+COM-port cleanup. If the COM port remains listed but connection fails, export
+the app diagnostics: the error now includes the native error type/code. Close
+other serial monitors before reconnecting. A Windows driver operation that
+never completes may still require unplugging/replugging the board; COM being
+listed does not prove its CDC session is responsive.
 If the mouse freezes, capture STATUS before unplugging anything. A growing
 `HOST_TASK_AGE_MS` indicates a stopped host loop; a low task age with unchanged
 mouse report counts while moving points to a different downstream failure.

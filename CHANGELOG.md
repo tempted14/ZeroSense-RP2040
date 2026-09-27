@@ -1,5 +1,23 @@
 # Changelog
 
+## 2.1.2 - 2026-09-27 (validation prerelease)
+
+- Retry read-only firmware handshake probes within a three-second deadline;
+  a lost first reply no longer exhausts the entire connection attempt.
+- Keep failed handshakes and reader-fault cleanup behind the per-port gate.
+  Notify the app promptly, keep native close off the UI thread, and prevent
+  reconnect from opening the COM port before the old handle and reader finish.
+- Preserve partial serial lines across timeouts and discard malformed UTF-8 or
+  oversized replies without disconnecting a live transport. Exact configuration
+  readback, CRC validation, and transaction hashes remain required.
+- Reset the firmware parser, pending protocol replies, generated output, and
+  uncommitted configuration on CDC/DTR session changes, even while USB remains
+  mounted. Keep committed settings and physical RP2350 passthrough intact.
+- Add transport fault-injection regression tests and detailed serial error
+  logging. No recoil-strength, jitter, delta-noise, or polling changes.
+- Physical intermittent-disconnect validation is still required; software
+  tests cannot rule out a cable, USB port, driver, or board fault.
+
 ## 2.1.1 - 2026-09-24 (validation prerelease)
 
 - Track M1 and M2 per physical Raw Input mouse on Windows. RP2040-generated
