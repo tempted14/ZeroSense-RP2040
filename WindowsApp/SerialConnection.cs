@@ -21,12 +21,12 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     private readonly string _portName;
     private readonly Func<ISerialPortTransport> _portFactory;
     private readonly object _stateLock = new();
-    private readonly object _writeLock = new();
     private readonly object _responseLock = new();
     private readonly SemaphoreSlim _configurationLock = new(1, 1);
     private ISerialPortTransport? _serialPort;
     private CancellationTokenSource? _readCancellation;
     private Task? _readTask;
+    private SerialWritePump? _writer;
     private bool _disposed;
     private PendingResponse? _pendingResponse;
     private long _commandsSent;
@@ -107,6 +107,10 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                 var readCancellation = new CancellationTokenSource();
                 _serialPort = port;
                 _readCancellation = readCancellation;
+                _writer = new SerialWritePump(
+                    data => port.Write(data, 0, data.Length),
+                    () => Interlocked.Increment(ref _commandsSent),
+                    error => HandleWriteFailure(port, error));
                 _readTask = Task.Run(() => ReadLoop(port, reader, readCancellation.Token));
                 _connectedAt = DateTimeOffset.UtcNow;
             }
@@ -219,7 +223,10 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             _readCancellation = null;
             _readTask = null;
             cancellation?.Cancel();
-            QueuePortClose(failedPort, cancellation, readTask, sendStop: false);
+            var writer = _writer;
+            _writer = null;
+            writer?.Stop();
+            QueuePortClose(failedPort, cancellation, readTask, writer, sendStop: false);
         }
 
         FailPendingResponse(new IOException("The device CDC port was disconnected."));
@@ -471,39 +478,36 @@ public sealed class SerialConnection : IRecoilDeviceConnection
         ArgumentNullException.ThrowIfNull(data);
 
         ISerialPortTransport port;
+        SerialWritePump writer;
         lock (_stateLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             port = _serialPort ?? throw new InvalidOperationException(
                 "The device CDC port is not connected.");
+            writer = _writer ?? throw new IOException("The CDC writer is not connected.");
         }
 
         try
         {
-            lock (_writeLock)
-            {
-                lock (_stateLock)
-                {
-                    if (!ReferenceEquals(_serialPort, port))
-                    {
-                        throw new IOException("The device CDC port was disconnected.");
-                    }
-                }
-                if (!port.IsOpen)
-                {
-                    throw new IOException("The device CDC port was disconnected.");
-                }
-                port.Write(data, 0, data.Length);
-            }
-            Interlocked.Increment(ref _commandsSent);
+            // This may run on the WinUI dispatcher. Only enqueue here; never
+            // enter a native Write or wait behind a writer blocked in Windows.
+            // Configuration success still requires exact firmware readback.
+            writer.Enqueue(data);
         }
         catch (Exception ex)
         {
-            Interlocked.Increment(ref _failedCommands);
-            DiagnosticLog.Record("serial-error",
-                $"{_portName}: write failed, {ex.GetType().Name} (0x{ex.HResult:X8}): {ex.Message}");
+            HandleWriteFailure(port, ex);
             throw;
         }
+    }
+
+    private void HandleWriteFailure(ISerialPortTransport port, Exception error)
+    {
+        if (!MarkConnectionFailed(port)) return;
+        Interlocked.Increment(ref _failedCommands);
+        DiagnosticLog.Record("serial-error",
+            $"{_portName}: write failed, {error.GetType().Name} (0x{error.HResult:X8}): {error.Message}");
+        RaiseStatusChanged($"Disconnected: {error.Message}");
     }
 
     public void Disconnect()
@@ -520,10 +524,13 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             _readCancellation = null;
             _readTask = null;
             cancellation?.Cancel();
+            var writer = _writer;
+            _writer = null;
+            writer?.Stop();
             if (port is not null)
             {
                 // Reserve cleanup before exposing a disconnected session.
-                QueuePortClose(port, cancellation, readTask, sendStop: true);
+                QueuePortClose(port, cancellation, readTask, writer, sendStop: true);
             }
         }
 
@@ -539,21 +546,25 @@ public sealed class SerialConnection : IRecoilDeviceConnection
 
     private void QueuePortClose(
         ISerialPortTransport port, CancellationTokenSource? cancellation,
-        Task? readTask, bool sendStop)
+        Task? readTask, SerialWritePump? writer, bool sendStop)
     {
         // Windows can stall both Write() and Close() after a USB/CDC fault.
         // Neither may block the WinUI dispatcher during disconnect/reconnect.
         _ = OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate()).CloseAsync(() =>
         {
+            Task? stopWrite = null;
             try
             {
-                if (sendStop && port.IsOpen)
+                // Only send a best-effort STOP after the single writer exits.
+                // If it is stuck, close now to interrupt it; DTR and the device
+                // watchdog stop output without queueing more driver writes.
+                if (sendStop && (writer is null || writer.Completion.Wait(100)) && port.IsOpen)
                 {
-                    lock (_writeLock)
-                    {
-                        var stop = SerialProtocol.BuildCommand("STOP");
-                        port.Write(stop, 0, stop.Length);
-                    }
+                    var stop = SerialProtocol.BuildCommand("STOP");
+                    stopWrite = Task.Run(() => port.Write(stop, 0, stop.Length));
+                    // Even the final safety packet can stall in the driver.
+                    // Still attempt Close instead of waiting forever to do so.
+                    stopWrite.Wait(SerialWritePump.WriteDeadline);
                 }
             }
             catch
@@ -579,7 +590,17 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                     {
                         // Native Close can abort the old reader with an I/O error.
                     }
-                    finally { cancellation?.Dispose(); }
+                    finally
+                    {
+                        try { writer?.Completion.GetAwaiter().GetResult(); }
+                        catch { /* Write failures already raised the disconnect. */ }
+                        finally
+                        {
+                            try { stopWrite?.GetAwaiter().GetResult(); }
+                            catch { /* Close may interrupt the best-effort STOP. */ }
+                            finally { cancellation?.Dispose(); }
+                        }
+                    }
                 }
             }
         });

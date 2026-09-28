@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Text;
 using RainbowRecoil;
 
@@ -135,6 +136,165 @@ internal static class SerialTransportTests
         }
     }
 
+    public static void StalledWriteDoesNotBlockOrReplay()
+    {
+        var name = "stalled-write-" + Guid.NewGuid();
+        using var oldPort = new FakePort(name);
+        using var newPort = new FakePort(name);
+        using var writing = new ManualResetEventSlim();
+        using var releaseWrite = new ManualResetEventSlim();
+        using var disconnected = new ManualResetEventSlim();
+        oldPort.OnCommandWrite = _ => { writing.Set(); releaseWrite.Wait(); };
+        using var connection = new SerialConnection(name, () => oldPort);
+        using var replacement = new SerialConnection(name, () => newPort);
+        connection.OnStatusChanged += (_, status) =>
+        {
+            if (status.StartsWith("Disconnected", StringComparison.Ordinal)) disconnected.Set();
+        };
+        try
+        {
+            connection.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+            Task.Run(() => connection.SendCommand("STATUS"))
+                .WaitAsync(TimeSpan.FromMilliseconds(500)).GetAwaiter().GetResult();
+            Check(writing.Wait(TimeSpan.FromSeconds(2)), "native write fault was reached");
+            connection.SendCommand("START");
+            connection.SendCommand("KEEPALIVE");
+            connection.SendCommand("STOP");
+            Check(connection.GetMetrics().CommandsSent == 0, "enqueue is not counted as a completed write");
+            Check(disconnected.Wait(TimeSpan.FromSeconds(3)), "stalled write reports failure without waiting for the driver");
+            Check(!connection.IsConnected, "stalled writer invalidates the session even if COM remains listed");
+
+            var reconnect = replacement.ConnectAsync(CancellationToken.None);
+            Thread.Sleep(100);
+            Check(newPort.OpenCalls == 0, "timeout alone cannot release native write ownership");
+            releaseWrite.Set();
+            reconnect.WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+            Check(oldPort.NonPingWrites == 1, "queued START/KEEPALIVE/STOP must not replay after a stall");
+            Check(replacement.IsConnected, "reconnect succeeds after the old writer actually finishes");
+        }
+        finally
+        {
+            releaseWrite.Set();
+            connection.Disconnect();
+            replacement.Disconnect();
+            SpinWait.SpinUntil(() => oldPort.Disposed && newPort.Disposed, TimeSpan.FromSeconds(2));
+        }
+    }
+
+    public static void WriteQueueIsBoundedAndOrdered()
+    {
+        using var writing = new ManualResetEventSlim();
+        using var releaseWrite = new ManualResetEventSlim();
+        var sent = new ConcurrentQueue<byte>();
+        Exception? failure = null;
+        var writer = new SerialWritePump(bytes =>
+        {
+            if (bytes[0] == 0) { writing.Set(); releaseWrite.Wait(); }
+            sent.Enqueue(bytes[0]);
+        }, () => { }, error => failure = error);
+        try
+        {
+            writer.Enqueue([0]);
+            Check(writing.Wait(TimeSpan.FromSeconds(2)), "writer starts off the caller thread");
+            // More than the maximum 11 pattern chunks; preserve every frame.
+            for (byte value = 1; value <= SerialWritePump.Capacity; ++value)
+            {
+                byte[] packet = [value];
+                writer.Enqueue(packet);
+                packet[0] = 255; // Enqueue must snapshot caller-owned bytes.
+            }
+            try { writer.Enqueue([200]); throw new Exception("full queue silently accepted a frame"); }
+            catch (IOException) { }
+            releaseWrite.Set();
+            Check(SpinWait.SpinUntil(() => sent.Count == SerialWritePump.Capacity + 1,
+                TimeSpan.FromSeconds(2)), "all accepted frames are written");
+            Check(sent.SequenceEqual(Enumerable.Range(0, SerialWritePump.Capacity + 1).Select(x => (byte)x)),
+                "packet order and copied bytes survive background writes");
+            Check(failure is null, "healthy writes do not report a fault");
+        }
+        finally
+        {
+            releaseWrite.Set();
+            writer.Stop();
+            writer.Completion.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        }
+    }
+
+    public static void StaleWriteQueueFailsClosed()
+    {
+        using var writing = new ManualResetEventSlim();
+        using var releaseWrite = new ManualResetEventSlim();
+        using var failed = new ManualResetEventSlim();
+        long now = 0;
+        var sent = 0;
+        var writer = new SerialWritePump(_ =>
+        {
+            Interlocked.Increment(ref sent);
+            writing.Set();
+            releaseWrite.Wait();
+        }, () => { }, _ => failed.Set(), () => Interlocked.Read(ref now));
+        try
+        {
+            writer.Enqueue([1]);
+            Check(writing.Wait(TimeSpan.FromSeconds(2)), "first command entered the driver");
+            writer.Enqueue([2]);
+            Interlocked.Exchange(ref now, Stopwatch.Frequency); // One second in the fake clock.
+            releaseWrite.Set();
+            Check(failed.Wait(TimeSpan.FromSeconds(2)), "stale queued command faults the transport");
+            writer.Completion.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+            Check(sent == 1, "stale command never enters the driver");
+        }
+        finally
+        {
+            releaseWrite.Set();
+            writer.Stop();
+            writer.Completion.WaitAsync(TimeSpan.FromSeconds(2)).GetAwaiter().GetResult();
+        }
+    }
+
+    public static void DisconnectDiscardsPendingOutput()
+    {
+        var name = "cancel-write-" + Guid.NewGuid();
+        using var port = new FakePort(name);
+        using var writing = new ManualResetEventSlim();
+        using var releaseWrite = new ManualResetEventSlim();
+        port.OnCommandWrite = _ => { writing.Set(); releaseWrite.Wait(); };
+        using var connection = new SerialConnection(name, () => port);
+        try
+        {
+            connection.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+            connection.SendCommand("STATUS");
+            Check(writing.Wait(TimeSpan.FromSeconds(2)), "first command entered the driver");
+            connection.SendCommand("START");
+            Task.Run(connection.Disconnect).WaitAsync(TimeSpan.FromMilliseconds(500)).GetAwaiter().GetResult();
+            Check(!connection.IsConnected, "disconnect returns while a native write is blocked");
+            Check(SpinWait.SpinUntil(() => port.Disposed, TimeSpan.FromSeconds(2)), "close tries to interrupt the hung write");
+            releaseWrite.Set();
+            Thread.Sleep(100);
+            Check(port.NonPingWrites == 1, "disconnect discarded queued START without a competing STOP write");
+        }
+        finally { releaseWrite.Set(); connection.Disconnect(); }
+    }
+
+    public static void StalledFinalStopStillClosesPort()
+    {
+        var name = "stalled-stop-" + Guid.NewGuid();
+        using var port = new FakePort(name);
+        using var writing = new ManualResetEventSlim();
+        using var releaseWrite = new ManualResetEventSlim();
+        port.OnCommandWrite = _ => { writing.Set(); releaseWrite.Wait(); };
+        using var connection = new SerialConnection(name, () => port);
+        try
+        {
+            connection.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+            Task.Run(connection.Disconnect).WaitAsync(TimeSpan.FromMilliseconds(500)).GetAwaiter().GetResult();
+            Check(writing.Wait(TimeSpan.FromSeconds(2)), "best-effort final STOP was sent");
+            Check(SpinWait.SpinUntil(() => port.Disposed, TimeSpan.FromSeconds(3)),
+                "stalled final STOP must not prevent attempting native close");
+        }
+        finally { releaseWrite.Set(); connection.Disconnect(); }
+    }
+
     private static void Check(bool condition, string message)
     {
         if (!condition) throw new Exception(message);
@@ -152,6 +312,7 @@ internal static class SerialTransportTests
         public string ReplyText = "PONG:RAINBOW-RECOIL:4\n";
         public Action? OnClose;
         public Action? OnEmptyRead;
+        public Action<byte>? OnCommandWrite;
         public volatile bool FailReads;
         public bool FailPing;
         public volatile bool Disposed;
@@ -184,7 +345,11 @@ internal static class SerialTransportTests
                 if (FailPing) throw new IOException("Injected handshake write failure");
                 if (++Probes >= ReplyAfterProbe) Input.Enqueue(Encoding.UTF8.GetBytes(ReplyText));
             }
-            else ++NonPingWrites;
+            else
+            {
+                Interlocked.Increment(ref NonPingWrites);
+                OnCommandWrite?.Invoke(buffer[offset + 5]);
+            }
         }
     }
 }

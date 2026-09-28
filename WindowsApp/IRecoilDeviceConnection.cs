@@ -31,6 +31,9 @@ public interface IRecoilDeviceConnection : IDisposable
         float firstBulletKickMultiplier,
         CancellationToken cancellationToken);
 
+    // Hardware transports enqueue these without entering the driver on the UI
+    // thread. Later write faults raise OnStatusChanged; configuration still
+    // awaits exact device acknowledgements before reporting success.
     void SendCommand(string commandType);
     void SendArmLease(bool enabled);
     DeviceConnectionMetrics GetMetrics();
