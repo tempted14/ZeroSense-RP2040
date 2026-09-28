@@ -207,7 +207,7 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertIn("shotIntervalScale(shotIntervalUs)", body)
         self.assertIn("intervalUs + FrameIntervalUs - 1U", CORRECTION_SCHEDULER)
 
-    def test_pattern_and_rapid_fire_schedules_are_phase_locked(self) -> None:
+    def test_pattern_is_phase_locked_and_rapid_fire_has_independent_variance(self) -> None:
         self.assertIn(
             "next_rpm_interval(activeRoundsPerMinute, movementIntervalRemainder)",
             FIRMWARE,
@@ -219,7 +219,12 @@ class FirmwareContractTests(unittest.TestCase):
             "            rapidIntervalRemainder)",
             FIRMWARE,
         )
-        self.assertIn("nextRapidShotAtUs += shot_interval;", FIRMWARE)
+        self.assertIn("ZeroSenseRapidFire::variedInterval(", FIRMWARE)
+        self.assertIn("ZeroSenseRapidFire::afterPressSubmitted(now, rapidShotIntervalUs)", FIRMWARE)
+        self.assertIn("rapidButtonDown, hidStateDirty, now", FIRMWARE)
+        self.assertIn("nextRapidShotAtUs = now + shot_interval;", FIRMWARE)
+        rapid = FIRMWARE.split("static void service_rapid_fire() {", 1)[1].split("\n}", 1)[0]
+        self.assertNotIn("generalTimingJitterEnabled", rapid)
         self.assertIn("remainderAccumulator += 60000000UL % roundsPerMinute", FIRMWARE)
         self.assertIn("framesForInterval(shotIntervalUs)", CORRECTION_SCHEDULER)
         self.assertNotIn("nextCorrectionFrameAtUs = now + 1000U", FIRMWARE)

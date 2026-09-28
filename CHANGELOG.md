@@ -1,5 +1,22 @@
 # Changelog
 
+## 2.1.4 - 2026-09-28 (validation prerelease)
+
+- Raise supported semi-automatic click-repeat requests to 960 RPM / 16 CPS.
+  Keep automatic and manually cycled weapon eligibility unchanged.
+- Add independent ±8% interval variance to each rapid-fire click: nominal
+  57.5–67.5 ms intervals, approximately 14.8–17.4 CPS before USB overhead.
+  The existing General movement-variance toggle stays separate.
+- Wait for each HID press/release to be accepted before generating its opposite;
+  anchor hold/gap deadlines to accepted presses so busy USB cannot merge edges
+  or produce catch-up bursts. Preserve the eight-millisecond button hold.
+- Schedule recoil using the same varied interval. Preserve time-normalized
+  correction strength, saved multipliers, delta noise, automatic patterns,
+  and the v2.1.3 serial freeze fixes.
+- Show CPS and click variance in the app. Both the new app and matching board
+  UF2 are required. Actual game shots remain limited by weapon/input handling;
+  the RP2040 two-mouse M1 limitation is unchanged.
+
 ## 2.1.3 - 2026-09-28 (validation prerelease)
 
 - Fix the remaining major Windows freeze path: live commands, arm leases,

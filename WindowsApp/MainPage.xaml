@@ -488,7 +488,7 @@
                                                           OnContent="On — varied cadence"
                                                           AutomationProperties.Name="General mode timing variance"
                                                           Toggled="GeneralTimingVarianceToggle_Toggled" />
-                                            <TextBlock Text="Optional for General mode only. Pattern and rapid-fire shot timing always remain exact."
+                                            <TextBlock Text="This toggle affects General movement only. Automatic patterns remain exact; rapid-fire clicks have independent ±8% interval variance with v2.1.4 firmware."
                                                        Style="{StaticResource MutedTextStyle}"
                                                        TextWrapping="Wrap" />
                                             <ToggleSwitch x:Name="DeltaNoiseToggle"
