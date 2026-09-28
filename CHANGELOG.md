@@ -1,5 +1,24 @@
 # Changelog
 
+## 2.1.3 - 2026-09-28 (validation prerelease)
+
+- Fix the remaining major Windows freeze path: live commands, arm leases,
+  heartbeats, and configuration writes no longer enter the USB driver on the
+  UI thread. One bounded background writer preserves frame order.
+- Stop the serial session after a stalled write, queue overflow, or stale
+  command backlog. Discard pending output instead of replaying delayed START
+  or keepalive packets. Reconnect cannot overlap an unfinished native write.
+- Bound the final best-effort STOP during disconnect so a stuck safety write
+  cannot prevent attempting native port close. Driver cleanup stays off the UI.
+- Count commands as sent only after the driver write succeeds; configuration
+  acceptance still requires exact firmware acknowledgements and commit hash.
+- Add executable fault tests for stuck writes, pending-output cancellation,
+  stale queues, frame ordering/copying, and stuck final STOP cleanup.
+- Firmware, USB polling, recoil profiles/gains, jitter, and delta noise are
+  unchanged from v2.1.2. Its board-specific UF2s are rebuilt for convenience.
+- Hardware/driver stalls are not claimed eliminated; physical soak testing
+  remains necessary, and a permanently stuck driver may require replugging.
+
 ## 2.1.2 - 2026-09-27 (validation prerelease)
 
 - Retry read-only firmware handshake probes within a three-second deadline;
