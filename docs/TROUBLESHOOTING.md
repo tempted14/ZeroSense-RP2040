@@ -125,10 +125,15 @@ The app does not search for a bridge-chip description. It considers active COM p
 
 ### COM remains visible, but output stops or reconnect fails
 
-Use the v2.1.2 Windows app together with the matching board UF2. This patch
-retries lost startup probes, resets partial firmware sessions on DTR changes,
-and serializes failed-port cleanup before reconnecting. It preserves your
+Use the v2.1.3 Windows app together with v2.1.2-or-newer board firmware. Together
+they retry lost startup probes, reset partial firmware sessions on DTR changes,
+and serialize failed-port cleanup before reconnecting. This preserves your
 saved profiles and keeps output stopped until the app synchronizes and arms.
+
+The v2.1.3 app additionally moves live command writes off the UI, detects hung
+writes, and discards stale/pending output on failure. Even if the board stops
+responding, the app should remain usable for copying diagnostics. A timeout
+does not forcibly cancel Windows' native operation; reconnect waits for cleanup.
 
 - Export the app's diagnostic report before closing it. Preserve the exact
   connection error, error code, BUILD line, and whether COM disappears.

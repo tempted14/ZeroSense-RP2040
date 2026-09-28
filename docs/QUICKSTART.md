@@ -159,8 +159,9 @@ and note whether unplugging only the mouse restores movement or the board needs
 a reset. `docs/AUDIT_2026-09-22.md` explains the counters. The extended fields
 require the diagnostic firmware build and cannot diagnose freezes retroactively.
 The v2.1.2 firmware identifies itself as `BUILD:V2.1.2-CDC-RECOVERY-20260927`.
-Use its matching Windows app for bounded handshake retries and serialized
-COM-port cleanup. If the COM port remains listed but connection fails, export
+Use the v2.1.3 Windows app for bounded handshake retries, background live writes,
+and serialized COM-port cleanup. The v2.1.3 UF2s use the same firmware/BUILD marker
+as v2.1.2. If the COM port remains listed but connection fails, export
 the app diagnostics: the error now includes the native error type/code. Close
 other serial monitors before reconnecting. A Windows driver operation that
 never completes may still require unplugging/replugging the board; COM being
