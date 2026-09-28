@@ -28,6 +28,7 @@
     <Compile Include="..\WindowsApp\SerialReliabilityPolicy.cs" Link="Source\SerialReliabilityPolicy.cs" />
     <Compile Include="..\WindowsApp\SerialPortOpenGate.cs" Link="Source\SerialPortOpenGate.cs" />
     <Compile Include="..\WindowsApp\SerialConnection.cs" Link="Source\SerialConnection.cs" />
+    <Compile Include="..\WindowsApp\SerialWritePump.cs" Link="Source\SerialWritePump.cs" />
     <Compile Include="..\WindowsApp\SerialPortTransport.cs" Link="Source\SerialPortTransport.cs" />
     <Compile Include="..\WindowsApp\SerialLineReader.cs" Link="Source\SerialLineReader.cs" />
     <Compile Include="..\WindowsApp\FirmwareHandshake.cs" Link="Source\FirmwareHandshake.cs" />

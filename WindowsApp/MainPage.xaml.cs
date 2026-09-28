@@ -1418,8 +1418,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         var safeForeground = connection.IsSimulator || ScreenCaptureService.IsRainbowSixForeground();
         if (isPressed && _isArmed && safeForeground)
         {
-            TrySendCommand("START");
-            _outputActive = true;
+            _outputActive = TrySendCommand("START");
             return;
         }
 
@@ -1446,8 +1445,7 @@ public sealed partial class MainPage : UserControl, IDisposable
 
         if (connection.IsSimulator || ScreenCaptureService.IsRainbowSixForeground())
         {
-            TrySendCommand("KEEPALIVE");
-            _outputActive = true;
+            _outputActive = TrySendCommand("KEEPALIVE");
         }
         else if (_outputActive)
         {
@@ -2247,23 +2245,24 @@ public sealed partial class MainPage : UserControl, IDisposable
                         ScreenCaptureService.IsRainbowSixForeground();
                     if (safeForeground)
                     {
-                        TrySendCommand("START");
-                        _outputActive = true;
+                        _outputActive = TrySendCommand("START");
                     }
                 }
             }
         }
     }
 
-    private void TrySendCommand(string command)
+    private bool TrySendCommand(string command)
     {
         try
         {
             _connection?.SendCommand(command);
+            return _connection?.IsConnected == true;
         }
         catch (Exception ex)
         {
             HandleConnectionLost(ex.Message);
+            return false;
         }
     }
 
