@@ -19,6 +19,7 @@
 #include "motion_math.h"
 #include "first_bullet_kick.h"
 #include "hid_output_math.h"
+#include "rapid_fire_timing.h"
 
 #ifdef ZEROSENSE_RP2350_USB_C
 #include "pio_usb.h"
@@ -105,8 +106,8 @@ static constexpr uint32_t POLL_NORMAL_US = 2000; // 500 Hz normal operation
 // 1 kHz; normal host/controller overhead yields roughly 900 Hz in practice.
 static constexpr uint32_t POLL_HIGH_US   = 1000;
 
-// General-mode cadence variation is opt-in. Pattern and rapid-fire timing use
-// exact RPM intervals so their configured shot sequence does not drift.
+// General-mode movement cadence variation is opt-in. Automatic pattern timing
+// stays exact; rapid-fire clicks have their own bounded interval variance.
 static bool generalTimingJitterEnabled = false;
 static constexpr float TIMING_JITTER_PCT = 8.0f;   // ±8% when explicitly enabled
 
@@ -170,6 +171,7 @@ static bool hidStateDirty = false;
 static uint16_t rapidFireRoundsPerMinute = 0;
 static uint32_t nextRapidShotAtUs = 0;
 static uint32_t rapidIntervalRemainder = 0;
+static uint32_t rapidShotIntervalUs = 0;
 static uint32_t lastHostKeepAliveAtMs = 0;
 
 static constexpr uint8_t configurationSchemaVersion = 4;
@@ -968,7 +970,7 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:V2.1.2-CDC-RECOVERY-20260927");
+    protocol_println("BUILD:V2.1.4-RAPID-CADENCE-20260928");
 #ifdef ZEROSENSE_RP2350_USB_C
     protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
     if (lastResetWasHostWatchdog) {
@@ -2046,6 +2048,14 @@ static void service_hid() {
     const int8_t pan = report_delta(pendingPhysicalPan);
 
     if (usbHid.mouseReport(0, buttons, dx, dy, wheel, pan)) {
+        if (rapidFireActive && rapidButtonDown &&
+            !(lastSentButtons & MOUSE_BUTTON_LEFT)) {
+            // Anchor hold/gap to the accepted M1-down report, not a request
+            // that might have waited on a busy HID endpoint.
+            const auto deadlines = ZeroSenseRapidFire::afterPressSubmitted(now, rapidShotIntervalUs);
+            rapidButtonReleaseAtUs = deadlines.releaseAt;
+            nextRapidShotAtUs = deadlines.nextPressAt;
+        }
         ZeroSenseDeltaNoise::recordAppliedDelta(deltaNoiseX, noisyX.appliedNoise);
         ZeroSenseDeltaNoise::recordAppliedDelta(deltaNoiseY, noisyY.appliedNoise);
 #ifdef ZEROSENSE_RP2350_USB_C
@@ -2156,38 +2166,39 @@ static void service_movement() {
     }
 }
 
-// Service rapid fire with an exact, phase-locked RPM interval.
+// Vary each click interval around the nominal rate, preserving real HID edges.
 static void service_rapid_fire() {
     if (!fireActive || !rapidFireActive || rapidFireRoundsPerMinute == 0) {
         return;
     }
 
     const uint32_t now = micros();
+    const auto action = ZeroSenseRapidFire::nextAction(
+        rapidButtonDown, hidStateDirty, now, rapidButtonReleaseAtUs, nextRapidShotAtUs);
 
     // Rapid button release handling
-    if (rapidButtonDown && static_cast<int32_t>(now - rapidButtonReleaseAtUs) >= 0) {
+    if (action == ZeroSenseRapidFire::Action::Release) {
         set_rapid_button(false);
         sim.velocityX *= sim.friction * 0.5f;
         sim.velocityY *= sim.friction * 0.5f;
+        return; // Give service_hid() a chance to transmit M1-up before M1-down.
     }
 
-    // Schedule the next shot from the prior deadline to avoid cumulative drift.
-    if (!rapidButtonDown && static_cast<int32_t>(now - nextRapidShotAtUs) >= 0) {
+    // Schedule the next shot from the actual press, never in a catch-up burst.
+    if (action == ZeroSenseRapidFire::Action::Press) {
         set_rapid_button(true);
-        const uint32_t shot_interval = next_rpm_interval(
+        const uint32_t nominal_interval = next_rpm_interval(
             rapidFireRoundsPerMinute,
             rapidIntervalRemainder);
+        const uint32_t shot_interval = ZeroSenseRapidFire::variedInterval(
+            nominal_interval, rng_next());
+        rapidShotIntervalUs = shot_interval;
         generate_movement(shot_interval);
         if (!fireActive) {
             return;
         }
-        rapidButtonReleaseAtUs = now + 8000;
-
-        nextRapidShotAtUs += shot_interval;
-
-        if (static_cast<int32_t>(now - nextRapidShotAtUs) >= 0) {
-            nextRapidShotAtUs = now + shot_interval;
-        }
+        rapidButtonReleaseAtUs = now + ZeroSenseRapidFire::ButtonHoldUs;
+        nextRapidShotAtUs = now + shot_interval;
     }
 }
 

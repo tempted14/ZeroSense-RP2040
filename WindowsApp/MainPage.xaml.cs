@@ -2328,7 +2328,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         RapidFireToggle.IsEnabled = rapidAvailable;
         RapidFireStatusText.Text = rapidAvailable
             ? settings.RapidFireEnabled
-                ? $"ON · {selected.Profile.RapidFireRoundsPerMinute} RPM · recoil applied per shot"
+                ? $"ON · {selected.Profile.RapidFireRoundsPerMinute / 60.0:0.#} CPS nominal · ±8% click-interval variance (v2.1.4 firmware) · recoil applied per click"
                 : "OFF · physical trigger uses normal General-mode correction while held"
             : "Automatic weapon · rapid fire not applicable";
         AttachmentNoteText.Text = setup.Note ?? string.Empty;

@@ -111,7 +111,7 @@ vertical-only output. Strength, mode, and enabled state are saved per weapon;
 the original source profile is never edited. Catalog directions are estimates
 unless the selected loadout has an exact measured X/Y profile.
 
-The recoil settings also include **General timing variance (±8%)**. It is off by default for repeatable compensation. Turning it on varies only the General-mode update cadence; Pattern and rapid-fire RPM timing stay exact. The app saves the choice and requires an exact firmware acknowledgement when synchronizing it.
+The recoil settings also include **General timing variance (±8%)**. It is off by default and controls General movement timing only. Automatic Pattern timing remains exact. With the v2.1.4 app and firmware, supported semi-autos request 16 CPS nominal with separate, always-active ±8% rapid-fire click-interval variance (approximately 14.8–17.4 CPS before USB overhead). This is a USB click rate, not a guarantee of in-game shots per second. The General toggle is still saved and acknowledged exactly.
 
 **Delta noise (±2–3 counts)** is also off by default. When enabled, firmware adds small paired offsets only to generated recoil reports and repays the offset before adding a new one. This avoids cumulative cursor drift and leaves the RP2350's physical mouse deltas unchanged. HID counts are device input units and are not guaranteed to equal Windows screen pixels.
 
@@ -158,10 +158,10 @@ STATUS samples. The command does not arm or configure output. Save the output,
 and note whether unplugging only the mouse restores movement or the board needs
 a reset. `docs/AUDIT_2026-09-22.md` explains the counters. The extended fields
 require the diagnostic firmware build and cannot diagnose freezes retroactively.
-The v2.1.2 firmware identifies itself as `BUILD:V2.1.2-CDC-RECOVERY-20260927`.
-Use the v2.1.3 Windows app for bounded handshake retries, background live writes,
-and serialized COM-port cleanup. The v2.1.3 UF2s use the same firmware/BUILD marker
-as v2.1.2. If the COM port remains listed but connection fails, export
+The v2.1.4 firmware identifies itself as `BUILD:V2.1.4-RAPID-CADENCE-20260928`.
+Use the v2.1.4 Windows app and matching UF2 for the new faster, varied rapid fire.
+It also retains bounded handshake retries, background live writes, and serialized
+COM-port cleanup. If the COM port remains listed but connection fails, export
 the app diagnostics: the error now includes the native error type/code. Close
 other serial monitors before reconnecting. A Windows driver operation that
 never completes may still require unplugging/replugging the board; COM being

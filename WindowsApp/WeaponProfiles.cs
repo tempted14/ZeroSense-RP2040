@@ -608,7 +608,7 @@ public sealed class WeaponProfileViewModel
     public string Description => $"{ProfileStatus} | " + (Profile.SupportsContinuousCompensation
         ? $"{WeaponType} | {Profile.RoundsPerMinute} RPM, {Profile.MagazineSize} rounds | baseline V {Profile.VerticalCompensation:0.000}, H {Profile.HorizontalCompensation:0.000} | {Attachments}"
         : Profile.SupportsRapidFire
-            ? $"{WeaponType} | semi-auto rapid fire {Profile.RapidFireRoundsPerMinute} RPM | per-shot recoil V {Profile.VerticalCompensation:0.000}, H {Profile.HorizontalCompensation:0.000}"
+            ? $"{WeaponType} | semi-auto rapid fire {Profile.RapidFireRoundsPerMinute / 60.0:0.#} CPS nominal | per-click recoil V {Profile.VerticalCompensation:0.000}, H {Profile.HorizontalCompensation:0.000}"
             : $"{WeaponType} | listed for complete loadout selection; automatic output disabled");
 
     public WeaponProfileViewModel(WeaponProfile profile)

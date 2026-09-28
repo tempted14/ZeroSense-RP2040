@@ -1139,8 +1139,15 @@ static void SemiAutomaticProfilesAreActive()
     foreach (var profile in supported)
     {
         var effective = RecoilProfileResolver.Build(profile, profile.Operators.FirstOrDefault(), settings);
-        True(effective.RapidFireRoundsPerMinute is >= 60 and <= 1200,
-            $"{profile.Name} rapid-fire rate");
+        Equal(960, effective.RapidFireRoundsPerMinute,
+            $"{profile.Name} requests 16 CPS nominal rapid fire");
+        var rapidPacket = SerialProtocol.BuildRapidFireCommand(true, effective.RapidFireRoundsPerMinute);
+        Equal((ushort)960, BinaryPrimitives.ReadUInt16LittleEndian(rapidPacket.AsSpan(8, 2)),
+            $"{profile.Name} encodes the faster nominal rate");
+        True(FirmwareContract.RapidFireAcknowledgementMatches("RAPID_FIRE:ON:RPM=960", true, 960),
+            "faster rate still requires exact readback");
+        True(!FirmwareContract.RapidFireAcknowledgementMatches("RAPID_FIRE:ON:RPM=480", true, 960),
+            "old slow acknowledgement cannot satisfy the new rate");
         True(effective.VerticalCompensation > 0,
             $"{profile.Name} per-shot recoil compensation");
         var packet = SerialProtocol.BuildProfileCommand(effective, settings.CompensationMode);
