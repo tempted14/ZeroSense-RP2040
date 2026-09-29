@@ -24,6 +24,19 @@ delta noise, automatic-weapon pattern timing, passthrough behavior, and the
 v2.1.3 Windows freeze fixes are retained. Automatic and manually cycled weapons
 are still excluded from rapid fire as before.
 
+## COM-port recovery
+
+The RP2040 diagnostic report supplied for v2.1.3 showed a Windows COM write
+failing with `0x80070079` (semaphore timeout) while COM6 stayed listed. The
+following reconnect attempts could not pass cleanup of the old session. On a
+write fault, v2.1.4 asks Windows to abort queued transmit data before closing
+the old handle. If Windows still stalls, the app identifies whether it is
+aborting output, closing the handle, or waiting for the previous reader/writer.
+It deliberately will not open a second COM6 session while an old native call
+may still be active; unplug/replug may still be required. This mitigates the
+recovery path, but the diagnostic report does not establish whether the first
+fault came from the cable, USB port, board, firmware, or Windows driver.
+
 ## Installation
 
 Download `ZeroSense-2.1.4-Starter-Bundle.zip`, extract it completely, close older
@@ -45,8 +58,9 @@ does not remove that hardware/input-path limitation.
 
 Regression checks cover every supported profile's 960-RPM encoding and exact
 readback, variance bounds/mean interval, recoil time scaling, busy HID edges,
-eight-millisecond hold timing, timer wraparound, and the existing serial freeze
-tests. CI builds Windows and both UF2 targets and runs native HID replay tests.
+eight-millisecond hold timing, timer wraparound, and serial fault injection,
+including transmit-purge recovery. CI builds Windows and both UF2 targets and
+runs native HID replay tests.
 This remains a validation prerelease; no physical board/game soak test was
 performed here.
 

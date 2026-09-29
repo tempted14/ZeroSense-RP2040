@@ -550,16 +550,31 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     {
         // Windows can stall both Write() and Close() after a USB/CDC fault.
         // Neither may block the WinUI dispatcher during disconnect/reconnect.
-        _ = OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate()).CloseAsync(() =>
+        var gate = OpenGates.GetOrAdd(_portName, _ => new SerialPortOpenGate());
+        _ = gate.CloseAsync(() =>
         {
             Task? stopWrite = null;
             try
             {
+                if (!sendStop && port.IsOpen)
+                {
+                    gate.UpdatePhase("aborting the old transmit queue");
+                    // A failed CDC write may leave a pending operation in the
+                    // Windows transmit queue. Abort it before Close, which can
+                    // otherwise wait for that operation indefinitely.
+                    try { port.DiscardOutBuffer(); }
+                    catch (Exception ex)
+                    {
+                        DiagnosticLog.Record("serial-cleanup",
+                            $"{_portName}: transmit purge failed: {ex.Message}");
+                    }
+                }
                 // Only send a best-effort STOP after the single writer exits.
                 // If it is stuck, close now to interrupt it; DTR and the device
                 // watchdog stop output without queueing more driver writes.
                 if (sendStop && (writer is null || writer.Completion.Wait(100)) && port.IsOpen)
                 {
+                    gate.UpdatePhase("sending the final STOP");
                     var stop = SerialProtocol.BuildCommand("STOP");
                     stopWrite = Task.Run(() => port.Write(stop, 0, stop.Length));
                     // Even the final safety packet can stall in the driver.
@@ -576,12 +591,16 @@ public sealed class SerialConnection : IRecoilDeviceConnection
             {
                 try
                 {
+                    gate.UpdatePhase("closing the old CDC handle");
+                    DiagnosticLog.Record("serial-cleanup", $"{_portName}: closing old CDC handle.");
                     CloseAndDispose(port);
+                    DiagnosticLog.Record("serial-cleanup", $"{_portName}: old CDC handle disposed.");
                 }
                 finally
                 {
                     try
                     {
+                        gate.UpdatePhase("waiting for the old reader");
                         // The old reader must exit before a new session on this
                         // COM port can consume responses. This runs off the UI.
                         readTask?.GetAwaiter().GetResult();
@@ -592,11 +611,19 @@ public sealed class SerialConnection : IRecoilDeviceConnection
                     }
                     finally
                     {
-                        try { writer?.Completion.GetAwaiter().GetResult(); }
+                        try
+                        {
+                            gate.UpdatePhase("waiting for the old writer");
+                            writer?.Completion.GetAwaiter().GetResult();
+                        }
                         catch { /* Write failures already raised the disconnect. */ }
                         finally
                         {
-                            try { stopWrite?.GetAwaiter().GetResult(); }
+                            try
+                            {
+                                gate.UpdatePhase("waiting for the final STOP");
+                                stopWrite?.GetAwaiter().GetResult();
+                            }
                             catch { /* Close may interrupt the best-effort STOP. */ }
                             finally { cancellation?.Dispose(); }
                         }
