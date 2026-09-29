@@ -12,6 +12,7 @@ internal interface ISerialPortTransport : IDisposable
     void Open();
     void Close();
     void DiscardInBuffer();
+    void DiscardOutBuffer();
     int Read(byte[] buffer, int offset, int count);
     void Write(byte[] buffer, int offset, int count);
 }
@@ -36,6 +37,7 @@ internal sealed class SerialPortTransport : ISerialPortTransport
     public void Open() => _port.Open();
     public void Close() => _port.Close();
     public void DiscardInBuffer() => _port.DiscardInBuffer();
+    public void DiscardOutBuffer() => _port.DiscardOutBuffer();
     public int Read(byte[] buffer, int offset, int count) => _port.Read(buffer, offset, count);
     public void Write(byte[] buffer, int offset, int count) => _port.Write(buffer, offset, count);
     public void Dispose() => _port.Dispose();

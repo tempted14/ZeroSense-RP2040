@@ -16,6 +16,10 @@
 - Show CPS and click variance in the app. Both the new app and matching board
   UF2 are required. Actual game shots remain limited by weapon/input handling;
   the RP2040 two-mouse M1 limitation is unchanged.
+- On a CDC write fault, abort pending Windows transmit data before closing the
+  old COM handle. Report the exact cleanup phase if Windows still holds it;
+  never overlap a new session with unfinished native I/O. A persistent driver
+  or hardware stall can still require replugging the board.
 
 ## 2.1.3 - 2026-09-28 (validation prerelease)
 
