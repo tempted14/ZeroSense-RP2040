@@ -11,6 +11,7 @@
 #include "../../RP2040_Firmware/rainbow_recoil/first_bullet_kick.h"
 #include "../../RP2040_Firmware/rainbow_recoil/hid_output_math.h"
 #include "../../RP2040_Firmware/rainbow_recoil/protocol_output.h"
+#include "../../RP2040_Firmware/rainbow_recoil/rapid_fire_timing.h"
 #include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_timing.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_core_health.h"
 
@@ -30,6 +31,49 @@ void expect(bool condition, const char* name) {
 int main() {
     using namespace ZeroSenseHid;
     testPioHostGuards();
+
+    // Exercise the same click timing/edge policy used by both firmware builds.
+    using RapidAction = ZeroSenseRapidFire::Action;
+    expect(ZeroSenseRapidFire::variedInterval(62500, -0.5f) == 57500 &&
+        ZeroSenseRapidFire::variedInterval(62500, 0.5f) == 67500,
+        "16 CPS rapid fire retains bounded 8 percent interval variance");
+    uint64_t rapidTotal = 0;
+    for (int sample = 0; sample <= 1000; ++sample) {
+        const auto interval = ZeroSenseRapidFire::variedInterval(62500, sample / 1000.0f - 0.5f);
+        expect(interval >= 57500 && interval <= 67500,
+            "rapid-fire generated intervals stay inside the requested CPS band");
+        rapidTotal += interval;
+        // The same varied duration drives both the click and its recoil envelope.
+        expect(std::fabs(ZeroSenseMotion::shotIntervalScale(interval) * 8000.0f - interval) < 0.02f,
+            "varied click interval preserves recoil counts per unit time");
+    }
+    expect(rapidTotal == 62500ULL * 1001,
+        "symmetric rapid-fire variance preserves the nominal mean interval");
+    expect(ZeroSenseRapidFire::variedInterval(50000, -0.5f) >
+        ZeroSenseRapidFire::ButtonHoldUs * 2,
+        "maximum protocol RPM still has distinct click hold and release time");
+    expect(ZeroSenseRapidFire::nextAction(false, false, 100, 0, 100) == RapidAction::Press,
+        "rapid fire starts on its deadline");
+    expect(ZeroSenseRapidFire::nextAction(true, true, 100000, 8000, 62500) == RapidAction::None,
+        "a busy HID endpoint cannot erase an unsent press");
+    const auto delayedPress = ZeroSenseRapidFire::afterPressSubmitted(100000, 62500);
+    expect(delayedPress.releaseAt == 108000 && delayedPress.nextPressAt == 162500,
+        "a delayed accepted press gets a full hold and fresh next-click interval");
+    expect(ZeroSenseRapidFire::nextAction(true, false, 107999,
+        delayedPress.releaseAt, delayedPress.nextPressAt) == RapidAction::None,
+        "press is held for eight milliseconds after actual HID submission");
+    expect(ZeroSenseRapidFire::nextAction(true, false, 108000,
+        delayedPress.releaseAt, delayedPress.nextPressAt) == RapidAction::Release,
+        "rapid-fire release occurs after its hold");
+    expect(ZeroSenseRapidFire::nextAction(false, true, 200000,
+        delayedPress.releaseAt, delayedPress.nextPressAt) == RapidAction::None,
+        "unsent release cannot collapse into a new press even after a long stall");
+    const auto wrappedPress = ZeroSenseRapidFire::afterPressSubmitted(UINT32_MAX - 4000, 62500);
+    expect(ZeroSenseRapidFire::nextAction(true, false, wrappedPress.releaseAt - 1,
+        wrappedPress.releaseAt, wrappedPress.nextPressAt) == RapidAction::None &&
+        ZeroSenseRapidFire::nextAction(true, false, wrappedPress.releaseAt,
+        wrappedPress.releaseAt, wrappedPress.nextPressAt) == RapidAction::Release,
+        "rapid-fire deadlines survive micros wraparound");
 
     expect(ZeroSenseHidOutput::reportDelta(127) == 127 &&
         ZeroSenseHidOutput::reportDelta(-127) == -127,

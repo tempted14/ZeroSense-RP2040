@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -12,6 +13,16 @@ namespace RainbowRecoil;
 internal sealed class SerialPortOpenGate
 {
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private string _phase = "idle";
+    private long _phaseStartedAt;
+
+    // Called only by the worker that owns the gate. Exposing the phase makes
+    // a stuck Windows driver distinguishable from an app retry loop.
+    internal void UpdatePhase(string phase)
+    {
+        Volatile.Write(ref _phase, phase);
+        Interlocked.Exchange(ref _phaseStartedAt, Stopwatch.GetTimestamp());
+    }
 
     public async Task OpenAsync(
         Action open,
@@ -41,8 +52,17 @@ internal sealed class SerialPortOpenGate
         {
             // No worker owns this newly constructed port.
             _ = Task.Run(disposeAbandonedPort);
-            throw new TimeoutException("A previous COM-port open, handshake, or close is still finishing.");
+            var startedAt = Interlocked.Read(ref _phaseStartedAt);
+            var elapsed = startedAt == 0
+                ? ""
+                : $" for {Stopwatch.GetElapsedTime(startedAt).TotalSeconds:0} s";
+            throw new TimeoutException(
+                $"A previous COM-port operation is still {Volatile.Read(ref _phase)}{elapsed}. " +
+                "Windows has not released the old session; reconnecting in parallel is unsafe. " +
+                "If it remains stuck, unplug and replug the board.");
         }
+
+        UpdatePhase("opening or handshaking");
 
         Task openTask;
         try
@@ -57,6 +77,7 @@ internal sealed class SerialPortOpenGate
             }
             finally
             {
+                UpdatePhase("idle");
                 _gate.Release();
             }
             throw;
@@ -65,6 +86,7 @@ internal sealed class SerialPortOpenGate
         try
         {
             await openTask.WaitAsync(timeout, cancellationToken).ConfigureAwait(false);
+            UpdatePhase("idle");
             _gate.Release();
         }
         catch
@@ -76,7 +98,11 @@ internal sealed class SerialPortOpenGate
                 {
                     _ = completed.Exception; // Observe faults that arrive after the timeout.
                     try { disposeAbandonedPort(); }
-                    finally { _gate.Release(); }
+                    finally
+                    {
+                        UpdatePhase("idle");
+                        _gate.Release();
+                    }
                 }),
                 CancellationToken.None,
                 TaskContinuationOptions.ExecuteSynchronously,
@@ -89,6 +115,7 @@ internal sealed class SerialPortOpenGate
     {
         ArgumentNullException.ThrowIfNull(close);
         await _gate.WaitAsync().ConfigureAwait(false);
+        UpdatePhase("closing the old connection");
         try
         {
             // Acquiring the gate happens before the caller starts a reconnect;
@@ -97,6 +124,7 @@ internal sealed class SerialPortOpenGate
         }
         finally
         {
+            UpdatePhase("idle");
             _gate.Release();
         }
     }
