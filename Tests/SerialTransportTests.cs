@@ -181,6 +181,45 @@ internal static class SerialTransportTests
         }
     }
 
+    public static void FailedWritePurgesBeforeReconnect()
+    {
+        var name = "purged-write-" + Guid.NewGuid();
+        using var oldPort = new FakePort(name);
+        using var newPort = new FakePort(name);
+        using var writing = new ManualResetEventSlim();
+        using var purged = new ManualResetEventSlim();
+        using var disconnected = new ManualResetEventSlim();
+        var closedBeforePurge = false;
+        oldPort.OnCommandWrite = _ => { writing.Set(); purged.Wait(); };
+        oldPort.OnDiscardOutBuffer = () => purged.Set();
+        oldPort.OnClose = () => closedBeforePurge = !purged.IsSet;
+        using var connection = new SerialConnection(name, () => oldPort);
+        using var replacement = new SerialConnection(name, () => newPort);
+        connection.OnStatusChanged += (_, status) =>
+        {
+            if (status.StartsWith("Disconnected", StringComparison.Ordinal)) disconnected.Set();
+        };
+        try
+        {
+            connection.ConnectAsync(CancellationToken.None).GetAwaiter().GetResult();
+            connection.SendCommand("STATUS");
+            Check(writing.Wait(TimeSpan.FromSeconds(2)), "write entered the simulated stalled driver");
+            Check(disconnected.Wait(TimeSpan.FromSeconds(3)), "stalled write faults the session");
+            Check(purged.Wait(TimeSpan.FromSeconds(2)), "fault cleanup aborts pending transmit data");
+            replacement.ConnectAsync(CancellationToken.None)
+                .WaitAsync(TimeSpan.FromSeconds(3)).GetAwaiter().GetResult();
+            Check(!closedBeforePurge && oldPort.Disposed,
+                "transmit queue was purged before old handle disposal");
+            Check(replacement.IsConnected, "new session reconnects after cooperative driver recovery");
+        }
+        finally
+        {
+            purged.Set();
+            connection.Disconnect();
+            replacement.Disconnect();
+        }
+    }
+
     public static void WriteQueueIsBoundedAndOrdered()
     {
         using var writing = new ManualResetEventSlim();
@@ -311,6 +350,7 @@ internal static class SerialTransportTests
         public int ReplyAfterProbe = 1;
         public string ReplyText = "PONG:RAINBOW-RECOIL:4\n";
         public Action? OnClose;
+        public Action? OnDiscardOutBuffer;
         public Action? OnEmptyRead;
         public Action<byte>? OnCommandWrite;
         public volatile bool FailReads;
@@ -323,6 +363,7 @@ internal static class SerialTransportTests
         public void Close() { OnClose?.Invoke(); _open = false; }
         public void Dispose() { Disposed = true; _open = false; }
         public void DiscardInBuffer() { }
+        public void DiscardOutBuffer() { OnDiscardOutBuffer?.Invoke(); }
         public int Read(byte[] buffer, int offset, int count)
         {
             if (FailReads) throw new IOException("Injected CDC read failure");

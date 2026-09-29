@@ -47,6 +47,7 @@ var tests = new (string Name, Action Run)[]
     ("failed serial reader reports promptly and closes before reconnect", SerialTransportTests.FailedReaderClosesBeforeReconnect),
     ("failed handshake returns without waiting on stalled cleanup", SerialTransportTests.FailedHandshakeCleanupIsBounded),
     ("stalled writes keep the caller responsive and cannot replay output", SerialTransportTests.StalledWriteDoesNotBlockOrReplay),
+    ("failed CDC writes purge pending output before reconnect", SerialTransportTests.FailedWritePurgesBeforeReconnect),
     ("background write queue is bounded, ordered, and snapshots frames", SerialTransportTests.WriteQueueIsBoundedAndOrdered),
     ("stale queued output fails closed", SerialTransportTests.StaleWriteQueueFailsClosed),
     ("disconnect cancels queued output without waiting on a stuck write", SerialTransportTests.DisconnectDiscardsPendingOutput),
@@ -1139,8 +1140,15 @@ static void SemiAutomaticProfilesAreActive()
     foreach (var profile in supported)
     {
         var effective = RecoilProfileResolver.Build(profile, profile.Operators.FirstOrDefault(), settings);
-        True(effective.RapidFireRoundsPerMinute is >= 60 and <= 1200,
-            $"{profile.Name} rapid-fire rate");
+        Equal(960, effective.RapidFireRoundsPerMinute,
+            $"{profile.Name} requests 16 CPS nominal rapid fire");
+        var rapidPacket = SerialProtocol.BuildRapidFireCommand(true, effective.RapidFireRoundsPerMinute);
+        Equal((ushort)960, BinaryPrimitives.ReadUInt16LittleEndian(rapidPacket.AsSpan(8, 2)),
+            $"{profile.Name} encodes the faster nominal rate");
+        True(FirmwareContract.RapidFireAcknowledgementMatches("RAPID_FIRE:ON:RPM=960", true, 960),
+            "faster rate still requires exact readback");
+        True(!FirmwareContract.RapidFireAcknowledgementMatches("RAPID_FIRE:ON:RPM=480", true, 960),
+            "old slow acknowledgement cannot satisfy the new rate");
         True(effective.VerticalCompensation > 0,
             $"{profile.Name} per-shot recoil compensation");
         var packet = SerialProtocol.BuildProfileCommand(effective, settings.CompensationMode);
@@ -1483,9 +1491,11 @@ static void StalledSerialOpensStayBounded()
         second.GetAwaiter().GetResult();
         throw new Exception("a second open bypassed the held gate");
     }
-    catch (TimeoutException)
+    catch (TimeoutException ex)
     {
         // Retrying does not create a second native open against the same port.
+        True(ex.Message.Contains("opening or handshaking", StringComparison.Ordinal),
+            "a blocked open identifies its recovery phase");
     }
 
     release.Set();
@@ -1510,9 +1520,11 @@ static void StalledSerialOpensStayBounded()
             TimeSpan.FromMilliseconds(100), CancellationToken.None).GetAwaiter().GetResult();
         throw new Exception("new open bypassed a pending COM-port close");
     }
-    catch (TimeoutException)
+    catch (TimeoutException ex)
     {
         // A reconnect waits for the old native handle to finish closing.
+        True(ex.Message.Contains("closing the old connection", StringComparison.Ordinal),
+            "a blocked close identifies its recovery phase");
     }
     closeRelease.Set();
     close.GetAwaiter().GetResult();
