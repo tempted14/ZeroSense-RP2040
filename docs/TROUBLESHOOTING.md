@@ -156,7 +156,7 @@ restart is reported as `LAST_RESET:MAIN_LOOP_WATCHDOG` or
 
 RP2040-Zero is not a passthrough board: keep the physical mouse plugged into
 the PC. The recovery candidate's firmware marker is
-`BUILD:V2.2.0-USB-RECOVERY-20261007`.
+`BUILD:V2.3.0-PER-GUN-PATTERN-20261019` for v2.3.
 
 ### Capture status without an indefinitely stalled console
 

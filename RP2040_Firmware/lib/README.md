@@ -34,7 +34,9 @@ and capacity tests run as part of `Tests/HidReplay/hid_replay_tests.cpp`.
 See `docs/HOST_STALL_TEST_2026-09-22.md` for each failed candidate, new counter
 semantics, verification limits and physical acceptance steps. The current
 candidate is software-tested only; real 1000 Hz passthrough and a long soak
-with the affected RP2350/mouse are still required. No new release is published.
+with the affected RP2350/mouse are still required. Inclusion in the v2.3
+hardware-validation prerelease is not a claim of physical mouse/receiver
+qualification or a confirmed freeze fix.
 
 `pio_usb_host_root_status()` adds read-only root-port and sampled D+/D- state.
 It runs outside the SOF/packet path, does not drive pins or change pull resistors,
