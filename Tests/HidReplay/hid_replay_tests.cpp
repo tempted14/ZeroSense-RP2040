@@ -2,6 +2,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <string>
+#include <vector>
 
 #include "../../RP2040_Firmware/rainbow_recoil/hid_report_decoder.h"
 #include "../../RP2040_Firmware/rainbow_recoil/correction_scheduler.h"
@@ -13,7 +14,11 @@
 #include "../../RP2040_Firmware/rainbow_recoil/protocol_output.h"
 #include "../../RP2040_Firmware/rainbow_recoil/rapid_fire_timing.h"
 #include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_timing.h"
+#include "../../RP2040_Firmware/lib/PicoPIOUSB/src/pio_usb_host_bus_status.h"
 #include "../../RP2040_Firmware/rainbow_recoil/host_core_health.h"
+#include "../../RP2040_Firmware/rainbow_recoil/native_usb_guard.h"
+
+mutex_t __usb_mutex;
 
 namespace {
 int failures = 0;
@@ -31,6 +36,22 @@ void expect(bool condition, const char* name) {
 int main() {
     using namespace ZeroSenseHid;
     testPioHostGuards();
+    for (uint32_t flags = 0; flags < 64; ++flags) {
+        expect(pio_usb_host_pack_root_status(
+            (flags & 1) != 0, (flags & 2) != 0, (flags & 4) != 0,
+            (flags & 8) != 0, (flags & 16) != 0, (flags & 32) != 0) == flags,
+            "read-only root diagnostics preserve every flag combination");
+    }
+    {
+        NativeUsbGuard outer;
+        expect(static_cast<bool>(outer), "native USB guard acquires an idle mutex");
+        {
+            NativeUsbGuard busy;
+            expect(!busy && __usb_mutex.exits == 0, "busy USB guard skips without waiting/unlocking another owner");
+        }
+        expect(__usb_mutex.busy && __usb_mutex.exits == 0, "failed nested guard preserves outer ownership");
+    }
+    expect(!__usb_mutex.busy && __usb_mutex.exits == 1, "successful USB guard releases exactly once");
 
     // Exercise the same click timing/edge policy used by both firmware builds.
     using RapidAction = ZeroSenseRapidFire::Action;
@@ -293,6 +314,34 @@ int main() {
         "movement-only report preserves buttons");
     expect(decoded.deltaX == 300 && decoded.deltaY == -200,
         "signed 16-bit axes decode");
+
+    // Synthetic composite receiver, not a claimed capture of a real dongle.
+    // Vendor feature collections make this descriptor exceed the old 256-byte
+    // enumeration buffer, without changing its split mouse report layouts.
+    const uint8_t vendorFeature[] = {
+        0x06,0x00,0xFF,0x09,0x01,0xA1,0x01,0x85,0x07,
+        0x15,0x00,0x26,0xFF,0x00,0x75,0x08,0x95,0x01,
+        0x09,0x01,0xB1,0x02,0xC0
+    };
+    std::vector<uint8_t> compositeDescriptor;
+    for (int i = 0; i < 20; ++i) {
+        compositeDescriptor.insert(compositeDescriptor.end(),
+            std::begin(vendorFeature), std::end(vendorFeature));
+    }
+    compositeDescriptor.insert(compositeDescriptor.end(),
+        std::begin(splitDescriptor), std::end(splitDescriptor));
+    expect(compositeDescriptor.size() > 256 && compositeDescriptor.size() <= 1024,
+        "composite receiver fixture exercises expanded descriptor capacity");
+    decoder = {};
+    expect(parseDescriptor(decoder, compositeDescriptor.data(),
+        static_cast<uint16_t>(compositeDescriptor.size()), mouseApplication),
+        "large composite receiver mouse layout parses");
+    expect(decodeReport(decoder, movementReport, sizeof(movementReport), decoded) &&
+        decoded.deltaX == 300 && decoded.deltaY == -200,
+        "large receiver descriptor preserves signed mouse movement");
+    const uint8_t vendorReport[] = {0x07, 0xFF};
+    expect(!decodeReport(decoder, vendorReport, sizeof(vendorReport), decoded),
+        "vendor feature reports cannot inject mouse motion");
 
     // Exercise the widest supported relative field plus both scroll axes.
     const uint8_t wideDescriptor[] = {

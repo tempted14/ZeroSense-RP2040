@@ -12,7 +12,8 @@ internal static class SerialReliabilityPolicy
     public const int MaximumResponseAttempts = 3;
     public const int MaximumConsecutiveReadFailures = 3;
     public const int ReadFailureBackoffMilliseconds = 40;
-    public const int MaximumAutomaticReconnectAttempts = 3;
+    public static TimeSpan ReconnectDelay(int attempt) =>
+        TimeSpan.FromMilliseconds(attempt <= 3 ? 500 * Math.Max(1, attempt) : 15000);
 
     public static bool IsTransientReadFailure(Exception exception) =>
         exception is IOException or InvalidOperationException;

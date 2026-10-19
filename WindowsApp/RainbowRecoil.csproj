@@ -44,6 +44,14 @@
              Link="Docs\TROUBLESHOOTING.md"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\docs\RELEASE_NOTES_$(Version).md"
+             Link="Docs\RELEASE_NOTES_$(Version).md"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\tools\read_usb_status.ps1"
+             Link="Tools\read_usb_status.ps1"
+             CopyToOutputDirectory="PreserveNewest"
+             CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- Windows App SDK 1.8 currently omits an unpackaged app's own PRI from

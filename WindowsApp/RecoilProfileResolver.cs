@@ -22,6 +22,20 @@ internal static class RecoilProfileResolver
             .WithAttachmentSetup(setup)
             .WithOpticSetup(settings.ActiveMagnification, operatorName);
 
+        // Refine only the stock Original estimate. Research, experimental,
+        // custom and measured curves keep their existing reference data.
+        if (settings.CompensationMode == CompensationMode.WeaponPattern &&
+            effective is { IsBaseline: true, HasWeaponPattern: true,
+                PatternDataQuality: PatternDataQuality.VideoDerivedEstimate } &&
+            effective.Name.Equals(WeaponPatternCatalog.ScorpionWeaponName, StringComparison.OrdinalIgnoreCase))
+        {
+            effective.Pattern = WeaponPatternCatalog.CreateEstimatedPattern(
+                effective.Name, effective.VerticalCompensation, effective.HorizontalCompensation,
+                effective.Barrel, effective.RoundsPerMinute, effective.MagazineSize,
+                useScorpionReference: true);
+            effective.PatternSource = WeaponPatternCatalog.ScorpionReferenceSource;
+        }
+
         if (settings.CompensationMode == CompensationMode.ResearchEstimate)
         {
             var referenceSource = effective.PatternSource;

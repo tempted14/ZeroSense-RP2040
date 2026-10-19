@@ -82,14 +82,21 @@ class FirmwareContractTests(unittest.TestCase):
         )[0]
         for reset in ("stop_output();", "rollback_configuration_transaction();",
                       "reset_parser();", "protocolOutput.clear();",
+                      "tud_cdc_write_clear();",
                       "rp2350ArmLeaseEnabled = false;"):
             self.assertIn(reset, session)
         self.assertIn("if (connected != wasConnected)", session)
         self.assertIn("if (!connected && TinyUSBDevice.mounted())", session)
         self.assertIn("if (service_cdc_session()) {\n        service_serial();", FIRMWARE)
+        self.assertIn('if (connected) protocolOutput.enqueue("\\n", 1);', session)
+
+    def test_watchdog_distinguishes_hangs_from_requested_bootloader_restarts(self) -> None:
+        self.assertIn("watchdog_enable_caused_reboot()", FIRMWARE)
+        self.assertIn("if (!watchdogRebootPending) watchdog_update();", FIRMWARE)
+        self.assertIn('protocol_println("LAST_RESET:MAIN_LOOP_WATCHDOG")', FIRMWARE)
 
     def test_firmware_build_retains_float_readback_support(self) -> None:
-        self.assertEqual(2, PLATFORMIO.count("-Wl,-u,_printf_float"))
+        self.assertEqual(3, PLATFORMIO.count("-Wl,-u,_printf_float"))
         self.assertIn("PROFILE:%s:MODE=%s:V=%.3f:H=%.3f", FIRMWARE)
         self.assertIn("SENSITIVITY:H=%.3f:V=%.3f", FIRMWARE)
 
@@ -386,7 +393,9 @@ class FirmwareContractTests(unittest.TestCase):
     def test_serial_backpressure_cannot_block_hid_loop(self) -> None:
         self.assertNotRegex(FIRMWARE, r"Serial\.(?:print|printf|println|write|flush)\(")
         self.assertIn("protocolOutput.drain(tud_cdc_write_available(), 128,", FIRMWARE)
-        self.assertIn("while (budget-- > 0 && Serial.available() > 0)", FIRMWARE)
+        self.assertIn("while (budget-- > 0)", FIRMWARE)
+        self.assertIn("if (!usbAccess || tud_cdc_available() == 0) return;", FIRMWARE)
+        self.assertNotIn("Serial.available()", FIRMWARE)
         self.assertIn("service_hid();\n    service_protocol_output();", FIRMWARE)
 
     def test_host_diagnostics_distinguish_loop_and_report_stalls(self) -> None:
@@ -445,7 +454,9 @@ class FirmwareContractTests(unittest.TestCase):
         self.assertLess(len(line), capacity, "METRICS must not silently truncate")
 
     def test_proxy_reports_identity_and_mouse_health(self) -> None:
-        self.assertIn("DEVICE:RP2350-USB-C:MOUSE-PROXY", FIRMWARE)
+        self.assertIn('protocol_println("DEVICE:" ZEROSENSE_BOARD_MODEL ":MOUSE-PROXY")', FIRMWARE)
+        self.assertIn('#define ZEROSENSE_BOARD_MODEL "RP2350-USB-C"', FIRMWARE)
+        self.assertIn('#define ZEROSENSE_BOARD_MODEL "RP2350-USB-A"', FIRMWARE)
         self.assertIn("MOUSE:CONNECTED:VID=%04X:PID=%04X", FIRMWARE)
         self.assertIn("MOUSE:DISCONNECTED", FIRMWARE)
         self.assertIn("MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR", FIRMWARE)

@@ -1,11 +1,14 @@
 # ZeroSense
 
-This project contains a Windows 10/11 desktop application and two independently
+This project contains a Windows 10/11 desktop application and three independently
 built firmware targets:
 
 - TENSTAR/Waveshare RP2040-Zero as a standalone CDC + HID output device.
 - [Waveshare RP2350-USB-C](https://docs.waveshare.com/RP2350-USB-C), SKU
   34641 with two female USB-C ports, as an additive USB mouse proxy.
+- [Waveshare RP2350-USB-A](https://www.waveshare.com/wiki/RP2350-USB-A), with
+  native USB-C for the PC and female USB-A for the mouse. Its own UF2 retains
+  the shared proxy features; see the guide's R13 host hot-plug requirement.
 
 The RP2350 path is `mouse -> female PIO-USB port -> RP2350 -> native USB-C ->
 Windows`. Physical movement, up to eight buttons, vertical wheel, and horizontal
@@ -20,6 +23,7 @@ RainbowRecoil\
 │   ├── rainbow_recoil\rainbow_recoil.ino   Arduino IDE source
 │   ├── src\main.cpp                        PlatformIO entry point
 │   ├── boards\waveshare_rp2350_usb_c.json  Exact 2 MB RP2350 board target
+│   ├── boards\waveshare_rp2350_usb_a.json  Separate USB-A board identity
 │   ├── platformio.ini                      RP2040 and RP2350 environments
 │   ├── build.bat                           PlatformIO build helper
 │   └── flash-firmware.bat                  RPI-RP2 copy helper
@@ -33,7 +37,7 @@ RainbowRecoil\
 └── docs\
 ```
 
-Both firmware targets present one TinyUSB composite device to Windows:
+All three firmware targets present one TinyUSB composite device to Windows:
 
 - CDC ACM provides the `USB Serial Device (COMx)` channel used by the Windows app.
 - HID provides a relative mouse interface.
@@ -51,7 +55,13 @@ mouse fallback. No USB-to-UART bridge or third-party Windows driver is used.
 
 ## Easiest install
 
-Open the repository's [releases page](https://github.com/tempted14/ZeroSense-RP2040/releases) and choose the intended version; validation prereleases may not appear under GitHub's `/latest` link. The recommended download is `ZeroSense-<version>-Starter-Bundle.zip`; it contains the portable app, a short `START_HERE.txt`, and both clearly separated board images. Verify the bundle against `SHA256SUMS.txt`, extract it, then flash exactly one matching firmware image.
+v2.3 adds **Original Pattern Output · This Gun**: values are saved per weapon,
+with the previous global value retained as an inherited default. It also refines
+the Scorpion's stock Original estimate toward the supplied sustained-left-pull
+reference, without changing Research or measured/custom profiles. See the
+[v2.3 notes](docs/RELEASE_NOTES_2.3.0.md) for scope and hardware-validation limits.
+
+Open the repository's [releases page](https://github.com/tempted14/ZeroSense-RP2040/releases) and choose the intended version; validation prereleases may not appear under GitHub's `/latest` link. The recommended download is `ZeroSense-<version>-Starter-Bundle.zip`; it contains the portable app, a short `START_HERE.txt`, and three clearly separated board images. Verify the bundle against `SHA256SUMS.txt`, extract it, then flash exactly one matching firmware image.
 
 The same files are also available separately:
 
@@ -59,6 +69,7 @@ The same files are also available separately:
    A signed `ZeroSense-Setup-<version>-win-x64.exe` is also published when the release runner has the project's Authenticode certificate; verify its publisher before running it.
 2. For TENSTAR/RP2040-Zero: `ZeroSense-RP2040-Zero-<version>.uf2`.
 3. For the two-female-port Waveshare board: `ZeroSense-RP2350-USB-C-<version>.uf2`.
+4. For the Waveshare board with USB-C + female USB-A: `ZeroSense-RP2350-USB-A-<version>.uf2`.
 
 Never flash the RP2350 UF2 to an RP2040 or the RP2040 UF2 to an RP2350. For the
 RP2350 cabling and CC selector check, follow
@@ -129,7 +140,7 @@ pio run -e waveshare_rp2350_usb_c
 ```
 
 `platformio.ini` pins the Arduino-Pico-compatible platform for both boards and
-vendors the reviewed Pico-PIO-USB host source for the RP2350 build. `build.bat` compiles both targets. The
+vendors the reviewed Pico-PIO-USB host source for the RP2350 build. `build.bat` compiles all three targets. The
 first build downloads its compiler, framework, and library dependencies.
 
 ### Arduino IDE

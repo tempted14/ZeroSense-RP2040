@@ -34,4 +34,18 @@ and capacity tests run as part of `Tests/HidReplay/hid_replay_tests.cpp`.
 See `docs/HOST_STALL_TEST_2026-09-22.md` for each failed candidate, new counter
 semantics, verification limits and physical acceptance steps. The current
 candidate is software-tested only; real 1000 Hz passthrough and a long soak
-with the affected RP2350/mouse are still required. No new release is published.
+with the affected RP2350/mouse are still required. Inclusion in the v2.3
+hardware-validation prerelease is not a claim of physical mouse/receiver
+qualification or a confirmed freeze fix.
+
+`pio_usb_host_root_status()` adds read-only root-port and sampled D+/D- state.
+It runs outside the SOF/packet path, does not drive pins or change pull resistors,
+and is not a VBUS power measurement. `pio_usb_host_bus_status.h` packs the status
+bits in a native-testable helper. The firmware samples this at 100 ms intervals
+and reports it separately as `HOST_BUS`, without changing METRICS wire fields.
+It undoes the decoder's input inversion before reporting physical line levels.
+`pio_usb_host_last_in_error()` captures a cached header/address/endpoint only
+on the existing IN error branch; no serial printing, clock reads or buffer
+handling are added to successful packet reception. Firmware also records
+device/configuration descriptor callbacks to distinguish early enumeration
+failure from an unsupported HID report layout.

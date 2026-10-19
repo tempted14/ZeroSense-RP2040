@@ -52,6 +52,8 @@ if (-not $SkipFirmware) {
         -Destination (Join-Path $dist "ZeroSense-RP2040-Zero-$Version.uf2") -Force
     Copy-Item -LiteralPath (Join-Path $repo "RP2040_Firmware\rainbow_recoil_rp2350_usb_c.uf2") `
         -Destination (Join-Path $dist "ZeroSense-RP2350-USB-C-$Version.uf2") -Force
+    Copy-Item -LiteralPath (Join-Path $repo "RP2040_Firmware\rainbow_recoil_rp2350_usb_a.uf2") `
+        -Destination (Join-Path $dist "ZeroSense-RP2350-USB-A-$Version.uf2") -Force
 }
 
 $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source

@@ -11,9 +11,12 @@ if /i "%TARGET%"=="rp2040" (
 ) else if /i "%TARGET%"=="rp2350" (
     set "UF2=%~dp0rainbow_recoil_rp2350_usb_c.uf2"
     set "PIO_UF2=%~dp0.pio\build\waveshare_rp2350_usb_c\firmware.uf2"
+) else if /i "%TARGET%"=="rp2350-usb-a" (
+    set "UF2=%~dp0rainbow_recoil_rp2350_usb_a.uf2"
+    set "PIO_UF2=%~dp0.pio\build\waveshare_rp2350_usb_a\firmware.uf2"
 ) else (
     echo ERROR: Unknown target "%TARGET%".
-    echo Usage: flash-firmware.bat [rp2040^|rp2350]
+    echo Usage: flash-firmware.bat [rp2040^|rp2350^|rp2350-usb-a]
     exit /b 1
 )
 

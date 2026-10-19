@@ -2,17 +2,19 @@
 
 This guide starts with an unconfigured Windows 10 or Windows 11 x64 machine and
 either a TENSTAR/Waveshare RP2040-Zero or the two-female-port Waveshare
-RP2350-USB-C (SKU 34641). Paths are relative to the `RainbowRecoil` directory.
+RP2350-USB-C (SKU 34641), or the Waveshare RP2350-USB-A with native USB-C and
+female USB-A. Paths are relative to the `RainbowRecoil` directory.
 
 ## Recommended release install (no developer tools)
 
 1. Open the [releases page](https://github.com/tempted14/ZeroSense-RP2040/releases) and select the intended version. Validation prereleases may not appear under GitHub's `/latest` link.
 2. Download `SHA256SUMS.txt` and the recommended
    `ZeroSense-<version>-Starter-Bundle.zip`. It contains the portable app,
-   `START_HERE.txt`, and both board images. The same app and firmware files are
+   `START_HERE.txt`, and all three board images. The same app and firmware files are
    also published separately for users who prefer individual downloads:
    - RP2040-Zero: `ZeroSense-RP2040-Zero-<version>.uf2`
    - Waveshare RP2350-USB-C: `ZeroSense-RP2350-USB-C-<version>.uf2`
+   - Waveshare RP2350-USB-A: `ZeroSense-RP2350-USB-A-<version>.uf2`
 3. Run `Get-FileHash -Algorithm SHA256 <downloaded-file>` in PowerShell for each
    downloaded release asset and compare the result with `SHA256SUMS.txt`. Do
    not continue if a hash differs.
@@ -35,15 +37,18 @@ hardware-diagnostics path.
 
 You need:
 
-- A TENSTAR/Waveshare RP2040-Zero, or Waveshare RP2350-USB-C with `BOOT` and `RESET`
+- A TENSTAR/Waveshare RP2040-Zero, or Waveshare RP2350-USB-C/USB-A with `BOOT` and `RESET`
 - A data-capable cable that connects to the board's USB Type-C receptacle
-- RP2350 only: a data-capable mouse cable and CC1/CC2 on the PIO-USB port set to
+- RP2350-USB-C only: a data-capable mouse cable and CC1/CC2 on the PIO-USB port set to
   the silkscreen's `1 / Source` position
+- RP2350-USB-A only: mouse into USB-A; read the official R13 host hot-plug
+  requirement in [RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md). CC selectors do
+  not apply, and firmware cannot change the resistor.
 - A free USB port on the PC
 
 A cable that supplies power but does not carry data can light the board without ever creating an `RPI-RP2` drive or a COM port. If the cable's data capability is unknown, test with one already proven to transfer files from another USB device.
 
-Both boards use native USB toward Windows. Windows 10/11 already includes the
+All boards use native USB toward Windows. Windows 10/11 already includes the
 required composite-device, USB CDC serial, and HID class drivers. Do not install
 a third-party serial driver. RP2350 users must read
 [RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md) before connecting the mouse.
@@ -218,9 +223,25 @@ Set-ExecutionPolicy -Scope Process Bypass
 
 ## 9. Start and verify the app
 
+### v2.3 per-gun Original output
+
+Select an operator and gun, then choose **Original weapon pattern**. Set
+**Original Pattern Output · This Gun** to adjust only that weapon (1–4× after
+the profile limit). Switching guns restores their individual saved values.
+Upgrades inherit the old global setting until a gun is edited. **Use default**
+removes just that gun's override. These settings are shared between operators
+using the same weapon and are saved on close; they do not alter Research,
+Experimental, measured/custom profiles or General mode.
+
+The stock Original Scorpion estimate now uses the supplied screenshot's
+sustained left-pull shape. It is still an uncalibrated estimate, not measured
+game data; tune strength in an explicitly permitted test environment.
+
 1. Confirm that `RPI-RP2` is no longer mounted and **USB Serial Device (COMx)** is present.
-2. RP2350 only: connect the PC to the native port beside `BOOT`/`RESET`, then
-   connect the mouse to the opposite female PIO-USB port.
+2. RP2350-USB-C: connect the PC to the native port beside `BOOT`/`RESET`, then
+   connect the mouse to the opposite female PIO-USB port. RP2350-USB-A: connect
+   USB-C to the PC and the mouse to USB-A. Complete the board-specific power
+   and hot-plug checklist in [RP2350_MOUSE_PROXY.md](RP2350_MOUSE_PROXY.md).
 3. Close Arduino Serial Monitor, PlatformIO Monitor, and any other terminal that may have the COM port open.
 4. Run `WindowsApp\artifacts\win-x64\zerosense.exe`.
 5. Wait for the app's board status to show a connection on the enumerated COM port.

@@ -63,6 +63,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("port", help="CDC port, for example COM7 or /dev/ttyACM0")
     parser.add_argument("--interactive", action="store_true")
+    parser.add_argument("--board", choices=("usb-c", "usb-a"), default="usb-c")
     args = parser.parse_args()
 
     with serial.Serial(args.port, 115200, timeout=0.10, write_timeout=0.5) as port:
@@ -70,7 +71,7 @@ def main() -> int:
         port.write(frame(0xF0))
         lines = read_lines(port, 1.5)
         require(lines, "PONG:RAINBOW-RECOIL:4")
-        require(lines, "DEVICE:RP2350-USB-C:MOUSE-PROXY")
+        require(lines, f"DEVICE:RP2350-{args.board.upper()}:MOUSE-PROXY")
 
         port.write(frame(0xFC))
         require(read_lines(port, 0.6), "STATUS:HASH=")
