@@ -66,9 +66,10 @@ internal static class DiagnosticLog
         builder.AppendLine($"Sensitivity scale: H {scale.Horizontal:F3}, V {scale.Vertical:F3}");
         builder.AppendLine($"Master recoil gain: {settings.MasterRecoilGain:F2}x");
         builder.AppendLine($"2.5x automatic vertical boost: {settings.TwoPointFiveAutoVerticalBoost:F2}x");
-        builder.AppendLine($"Original pattern output multiplier: {settings.OriginalPatternOutputMultiplier:F2}x");
+        builder.AppendLine($"Original pattern inherited default: {settings.OriginalPatternOutputMultiplier:F2}x");
         if (!string.IsNullOrWhiteSpace(selectedProfile?.Name))
         {
+            builder.AppendLine($"Selected gun Original pattern output: {settings.GetWeaponOriginalPatternOutputMultiplier(selectedProfile.Name):F2}x");
             builder.AppendLine(
                 $"Per-weapon output strength: {settings.GetWeaponOutputStrength(selectedProfile.Name):F2}x");
             builder.AppendLine(

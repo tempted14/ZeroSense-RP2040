@@ -1,6 +1,6 @@
 /**
  * ZeroSense firmware for TENSTAR/Waveshare RP2040-Zero and
- * Waveshare RP2350-USB-C. The RP2350 build also proxies a mouse connected to
+ * Waveshare RP2350-USB-C / RP2350-USB-A. The RP2350 builds proxy a mouse connected to
  * the board's female PIO-USB port and adds generated movement to that input.
  */
 
@@ -20,10 +20,23 @@
 #include "first_bullet_kick.h"
 #include "hid_output_math.h"
 #include "rapid_fire_timing.h"
-
-#ifdef ZEROSENSE_RP2350_USB_C
-#include "pio_usb.h"
 #include "hardware/watchdog.h"
+#include "native_usb_guard.h"
+
+#if defined(ZEROSENSE_RP2350_USB_C) || defined(ZEROSENSE_RP2350_USB_A)
+#define ZEROSENSE_RP2350_PROXY
+#ifdef ZEROSENSE_RP2350_USB_A
+#define ZEROSENSE_BOARD_MODEL "RP2350-USB-A"
+#else
+#define ZEROSENSE_BOARD_MODEL "RP2350-USB-C"
+#endif
+#endif
+
+static bool lastResetWasMainWatchdog = false;
+static bool watchdogRebootPending = false;
+
+#ifdef ZEROSENSE_RP2350_PROXY
+#include "pio_usb.h"
 #include "hid_report_decoder.h"
 #include "host_receive_recovery.h"
 #include "host_core_health.h"
@@ -53,6 +66,8 @@ static void protocol_println(const char* line) {
 }
 
 static void service_protocol_output() {
+    NativeUsbGuard usbAccess;
+    if (!usbAccess) return;
     if (!tud_cdc_connected()) {
         protocolOutput.clear();
         return;
@@ -218,7 +233,7 @@ static ZeroSenseDeltaNoise::AxisState deltaNoiseY;
 static const uint32_t hostWatchdogTimeoutMs = 750; // ms - matches original constant value
 static uint32_t rapidButtonReleaseAtUs = 0;
 
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
 // The Windows app grants a short foreground/armed lease, but the RP2350 uses
 // the raw downstream mouse state as the only firing trigger. This keeps
 // synthesized rapid-fire releases out of the activation feedback path.
@@ -228,7 +243,7 @@ static uint32_t lastRp2350ArmLeaseAtMs = 0;
 static constexpr uint32_t rp2350ArmLeaseTimeoutMs = 750;
 #endif
 
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
 // The proxy descriptor keeps the standard relative-mouse packet layout but
 // exposes all eight button bits instead of turning the upper three into
 // padding. X/Y/wheel/pan remain signed 8-bit values and larger deltas are
@@ -279,8 +294,10 @@ static const uint8_t hidReportDescriptor[] = {
 
 static Adafruit_USBD_HID usbHid;
 
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
 static constexpr uint8_t hostMouseDpPin = 12;
+static_assert(CFG_TUH_ENUMERATION_BUFSIZE == 1024,
+    "Build RP2350 proxies with the project's TinyUSB descriptor configuration.");
 static constexpr uint8_t maxHostMouseInterfaces = 4;
 static constexpr uint8_t maxHostReceiveQueueFailures = 8;
 static constexpr int32_t maxHostAccumulator = 32767;
@@ -328,6 +345,14 @@ static std::atomic<uint32_t> hostReceiveRecoveries{0};
 static std::atomic<uint32_t> hostReceiveQueueFailures{0};
 static std::atomic<uint32_t> hostMouseUnmounts{0};
 static std::atomic<uint32_t> hostTaskLastAtMs{0};
+static std::atomic<uint32_t> hostRootStatus{0};
+static std::atomic<uint32_t> hostUsbMounts{0};
+static std::atomic<uint32_t> hostHidMounts{0};
+static std::atomic<uint32_t> hostDeviceDescriptors{0};
+static std::atomic<uint16_t> hostConfigurationLength{0};
+static std::atomic<uint8_t> hostMountedDevices{0};
+static std::atomic<uint16_t> hostLastDeviceVid{0};
+static std::atomic<uint16_t> hostLastDevicePid{0};
 static std::atomic<bool> hostCoreStalled{false};
 static constexpr uint32_t hostWatchdogRebootMagic = 0x5A485354;
 static bool lastResetWasHostWatchdog = false;
@@ -547,11 +572,35 @@ static void service_host_mouse_receive_recovery() {
 }
 
 extern "C" {
+void tuh_enum_descriptor_device_cb(uint8_t, const tusb_desc_device_t* descriptor) {
+    if (descriptor == nullptr) return;
+    hostLastDeviceVid.store(descriptor->idVendor, std::memory_order_relaxed);
+    hostLastDevicePid.store(descriptor->idProduct, std::memory_order_relaxed);
+    hostDeviceDescriptors.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool tuh_enum_descriptor_configuration_cb(
+    uint8_t, uint8_t, const tusb_desc_configuration_t* descriptor) {
+    if (descriptor != nullptr) {
+        hostConfigurationLength.store(descriptor->wTotalLength, std::memory_order_relaxed);
+    }
+    return true; // Preserve TinyUSB's default configuration selection policy.
+}
+
+void tuh_mount_cb(uint8_t deviceAddress) {
+    uint16_t vid = 0, pid = 0;
+    tuh_vid_pid_get(deviceAddress, &vid, &pid);
+    hostLastDeviceVid.store(vid, std::memory_order_relaxed);
+    hostLastDevicePid.store(pid, std::memory_order_relaxed);
+    hostUsbMounts.fetch_add(1, std::memory_order_relaxed);
+}
+
 void tuh_hid_mount_cb(
     uint8_t deviceAddress,
     uint8_t instance,
     const uint8_t* reportDescriptor,
     uint16_t descriptorLength) {
+    hostHidMounts.fetch_add(1, std::memory_order_relaxed);
     HostMouseInterface* mouseInterface = allocate_host_mouse_interface(
         deviceAddress,
         instance);
@@ -593,8 +642,15 @@ void tuh_hid_set_protocol_complete_cb(
     HostMouseInterface* mouseInterface = find_host_mouse_interface(
         deviceAddress,
         instance);
-    if (mouseInterface == nullptr || protocol != HID_PROTOCOL_BOOT ||
-        !mouseInterface->bootProtocolPending) {
+    if (mouseInterface == nullptr || !mouseInterface->bootProtocolPending) {
+        return;
+    }
+    if (protocol != HID_PROTOCOL_BOOT) {
+        // TinyUSB returns the unchanged protocol after a failed SET_PROTOCOL.
+        // Do not leave this interface permanently pending and unpolled.
+        clear_host_mouse_interface(*mouseInterface);
+        hostMouseFaultPending.store(true, std::memory_order_release);
+        mouseProxyEvent.store(MouseProxyEvent::Unsupported, std::memory_order_release);
         return;
     }
 
@@ -970,9 +1026,10 @@ static void parser_crc_byte(uint8_t value) {
 }
 
 static void print_hardware_identity() {
-    protocol_println("BUILD:V2.1.4-RAPID-CADENCE-20260928");
-#ifdef ZEROSENSE_RP2350_USB_C
-    protocol_println("DEVICE:RP2350-USB-C:MOUSE-PROXY");
+    protocol_println("BUILD:V2.3.0-PER-GUN-PATTERN-20261019");
+    if (lastResetWasMainWatchdog) protocol_println("LAST_RESET:MAIN_LOOP_WATCHDOG");
+#ifdef ZEROSENSE_RP2350_PROXY
+    protocol_println("DEVICE:" ZEROSENSE_BOARD_MODEL ":MOUSE-PROXY");
     if (lastResetWasHostWatchdog) {
         protocol_println("LAST_RESET:HOST_WATCHDOG");
     }
@@ -985,6 +1042,30 @@ static void print_hardware_identity() {
             hostMousePid.load(std::memory_order_acquire));
     } else {
         protocol_println("MOUSE:DISCONNECTED");
+    }
+    const uint32_t root = hostRootStatus.load(std::memory_order_acquire);
+    protocol_printf(
+        "HOST_BUS:INITIALIZED=%u:CONNECTED=%u:SUSPENDED=%u:DP=%u:DM=%u:FULL_SPEED=%u:"
+        "DEVICES=%u:USB_MOUNTS=%lu:HID_MOUNTS=%lu:DESC_SEEN=%lu:CONFIG_LEN=%u:"
+        "LAST_VID=%04X:LAST_PID=%04X\n",
+        (root & PIO_USB_HOST_ROOT_INITIALIZED) != 0,
+        (root & PIO_USB_HOST_ROOT_CONNECTED) != 0,
+        (root & PIO_USB_HOST_ROOT_SUSPENDED) != 0,
+        (root & PIO_USB_HOST_DP_HIGH) != 0,
+        (root & PIO_USB_HOST_DM_HIGH) != 0,
+        (root & PIO_USB_HOST_ROOT_FULL_SPEED) != 0,
+        hostMountedDevices.load(std::memory_order_relaxed),
+        static_cast<unsigned long>(hostUsbMounts.load(std::memory_order_relaxed)),
+        static_cast<unsigned long>(hostHidMounts.load(std::memory_order_relaxed)),
+        static_cast<unsigned long>(hostDeviceDescriptors.load(std::memory_order_relaxed)),
+        hostConfigurationLength.load(std::memory_order_relaxed),
+        hostLastDeviceVid.load(std::memory_order_relaxed),
+        hostLastDevicePid.load(std::memory_order_relaxed));
+    const uint32_t inError = pio_usb_host_last_in_error();
+    if (inError != 0) {
+        protocol_printf("HOST_IN_ERROR:SYNC=%02X:PID=%02X:ADDR=%u:READY=%u:EP=%02X\n",
+            inError & 0xffu, (inError >> 8) & 0xffu, (inError >> 16) & 0x7fu,
+            (inError >> 23) & 1u, inError >> 24);
     }
 #else
     protocol_println("DEVICE:RP2040-ZERO:CDC+HID");
@@ -1229,7 +1310,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 protocol_println("ERROR:START:CONFIGURATION_ACTIVE");
                 break;
             }
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
             // RP2350 firing is gated locally from the raw downstream mouse.
             // Accepting host START here would reintroduce the synthesized-HID
             // feedback loop that local activation is designed to remove.
@@ -1307,7 +1388,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
             break;
 
         case CMD_ARM_LEASE:
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
             if (length != 1 || payload[0] > 1) {
                 protocol_println("ERROR:ARM_LEASE:FORMAT");
             } else if (configurationTransactionActive && payload[0] != 0) {
@@ -1347,7 +1428,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 rollback_configuration_transaction();
             }
             stop_output();
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
             rp2350ArmLeaseEnabled = false;
 #endif
             capture_configuration(previousConfiguration);
@@ -1447,7 +1528,7 @@ static void process_command(uint8_t command, const uint8_t* payload, uint16_t le
                 uint32_t hostSofFrames = 0;
                 uint32_t hostInAttempts = 0;
                 uint32_t hostInNaks = 0;
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
                 hostReports = hostReportsReceived.load(std::memory_order_relaxed);
                 hostErrors = hostDecodeErrors.load(std::memory_order_relaxed);
                 hostEmpty = hostEmptyReports.load(std::memory_order_relaxed);
@@ -1548,6 +1629,8 @@ static void service_configuration_transaction() {
 // as protocol-session boundaries so a reconnect cannot inherit a partial frame,
 // staged configuration, generated movement, or replies from the old session.
 static bool service_cdc_session() {
+    NativeUsbGuard usbAccess;
+    if (!usbAccess) return false;
     static bool wasConnected = false;
     const bool connected = tud_cdc_connected();
     if (connected != wasConnected) {
@@ -1555,11 +1638,16 @@ static bool service_cdc_session() {
         rollback_configuration_transaction();
         reset_parser();
         protocolOutput.clear();
+        // Clear native TX FIFO too, not just our software queue. Start the
+        // next session with a newline so any in-flight old partial response
+        // cannot concatenate with a fresh PONG/configuration acknowledgement.
+        tud_cdc_write_clear();
+        if (connected) protocolOutput.enqueue("\n", 1);
         if (!connected && TinyUSBDevice.mounted()) {
             // Flush once on close, not on every idle HID-loop iteration.
             tud_cdc_read_flush();
         }
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
         rp2350ArmLeaseEnabled = false;
         rp2350TriggerLatched = true;
 #endif
@@ -1578,8 +1666,13 @@ static void service_serial() {
 
     // Host traffic must yield to the HID/watchdog services every iteration.
     uint16_t budget = 128;
-    while (budget-- > 0 && Serial.available() > 0) {
-        const int value = Serial.read();
+    while (budget-- > 0) {
+        int value = -1;
+        {
+            NativeUsbGuard usbAccess;
+            if (!usbAccess || tud_cdc_available() == 0) return;
+            value = tud_cdc_read_char();
+        }
         if (value < 0) { return; }
         const uint8_t byte = static_cast<uint8_t>(value);
 
@@ -1715,7 +1808,7 @@ static PreparedDeltaNoise prepare_delta_noise(
     };
 }
 
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
 static void merge_host_delta(int32_t& pending, int32_t incoming) {
     pending = static_cast<int32_t>(std::clamp<int64_t>(
         static_cast<int64_t>(pending) + incoming,
@@ -1813,6 +1906,7 @@ static void service_host_core_watchdog() {
         protocol_println("MOUSE:HOST_WATCHDOG_REBOOT");
         service_protocol_output();
         watchdog_hw->scratch[0] = hostWatchdogRebootMagic;
+        watchdogRebootPending = true;
         watchdog_reboot(0, 0, 100);
     }
 }
@@ -1971,7 +2065,9 @@ static void service_scheduled_correction() {
 }
 
 static void service_hid() {
-#ifdef ZEROSENSE_RP2350_USB_C
+    NativeUsbGuard usbAccess;
+    if (!usbAccess) return;
+#ifdef ZEROSENSE_RP2350_PROXY
     transfer_host_mouse_input();
     cancel_opposing_deltas(pendingMouseX, pendingPhysicalMouseX);
     cancel_opposing_deltas(pendingMouseY, pendingPhysicalMouseY);
@@ -1997,7 +2093,7 @@ static void service_hid() {
     // physical movement, wheel, pan, or button transition immediately selects
     // the 1 ms endpoint, so adaptive idle pacing cannot add pass-through lag.
     bool physical_activity = false;
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
     physical_activity = pendingPhysicalMouseX != 0 || pendingPhysicalMouseY != 0 ||
         pendingPhysicalWheel != 0 || pendingPhysicalPan != 0 ||
         buttons != lastSentButtons || hidStateDirty;
@@ -2058,7 +2154,7 @@ static void service_hid() {
         }
         ZeroSenseDeltaNoise::recordAppliedDelta(deltaNoiseX, noisyX.appliedNoise);
         ZeroSenseDeltaNoise::recordAppliedDelta(deltaNoiseY, noisyY.appliedNoise);
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
         consume_axis_delta(pendingMouseX, pendingPhysicalMouseX, baseDx);
         consume_axis_delta(pendingMouseY, pendingPhysicalMouseY, baseDy);
 #else
@@ -2217,7 +2313,7 @@ static void service_upstream_usb_fail_safe() {
     if (TinyUSBDevice.mounted()) {
         return;
     }
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
     if (rp2350ArmLeaseEnabled || fireActive) {
         rp2350TriggerLatched = true;
     }
@@ -2230,12 +2326,16 @@ static void service_upstream_usb_fail_safe() {
 }
 
 void setup() {
-#ifdef ZEROSENSE_RP2350_USB_C
+    // A UF2/BOOTSEL restart also uses the watchdog. Count only a timeout of
+    // watchdog_enable(), not a requested boot-loader/firmware reboot.
+    lastResetWasMainWatchdog = watchdog_enable_caused_reboot();
+#ifdef ZEROSENSE_RP2350_PROXY
     lastResetWasHostWatchdog =
         watchdog_hw->scratch[0] == hostWatchdogRebootMagic;
     watchdog_hw->scratch[0] = 0;
+    if (lastResetWasHostWatchdog) lastResetWasMainWatchdog = false;
     TinyUSBDevice.setManufacturerDescriptor("Waveshare");
-    TinyUSBDevice.setProductDescriptor("ZeroSense RP2350 Mouse Proxy");
+    TinyUSBDevice.setProductDescriptor("ZeroSense " ZEROSENSE_BOARD_MODEL " Mouse Proxy");
 #else
     TinyUSBDevice.setManufacturerDescriptor("RP2040");
     TinyUSBDevice.setProductDescriptor("RP2040 USB Mouse");
@@ -2252,7 +2352,7 @@ void setup() {
     usbHid.setPollInterval(1);
     usbHid.setReportDescriptor(hidReportDescriptor, sizeof(hidReportDescriptor));
 
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
     usbHid.setStringDescriptor("ZeroSense Mouse Proxy");
 #else
     usbHid.setStringDescriptor("USB Mouse");
@@ -2265,24 +2365,28 @@ void setup() {
         TinyUSBDevice.attach();
     }
 
-#ifdef ZEROSENSE_RP2350_USB_C
-    protocol_println("READY:RP2350-USB-C:MOUSE-PROXY");
+#ifdef ZEROSENSE_RP2350_PROXY
+    protocol_println("READY:" ZEROSENSE_BOARD_MODEL ":MOUSE-PROXY");
 #else
     protocol_println("READY:RP2040-ZERO:CDC+HID");
 #endif
     print_hardware_identity();
+    // Feed only from the real main loop. Quiet mice/CDC sessions do not reset
+    // the board; a genuinely stuck task gets a disarmed whole-board restart.
+    watchdog_enable(2000, true);
 }
 
 void loop() {
-#ifdef TINYUSB_NEED_POLLING_TASK
+    if (!watchdogRebootPending) watchdog_update();
+    // A task IRQ skipped while an application guard owns the USB mutex must
+    // not leave a queued control/CDC event waiting for another hardware IRQ.
     TinyUSBDevice.task();
-#endif
     if (service_cdc_session()) {
         service_serial();
     }
     service_configuration_transaction();
     service_upstream_usb_fail_safe();
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
     service_host_core_watchdog();
     service_mouse_proxy_status();
     service_rp2350_local_activation();
@@ -2299,7 +2403,8 @@ void loop() {
         fireActive && !rapidButtonDown) {
         const uint32_t now = millis();
         static uint32_t last_idle_report = 0;
-        if (now - last_idle_report >= 20U &&
+        NativeUsbGuard usbAccess;
+        if (usbAccess && now - last_idle_report >= 20U &&
             TinyUSBDevice.mounted() && usbHid.ready()) {
             if (usbHid.mouseReport(0, current_output_buttons(), 0, 0, 0, 0)) {
                 hidStateDirty = false;
@@ -2314,7 +2419,7 @@ void loop() {
     delayMicroseconds(100);
 }
 
-#ifdef ZEROSENSE_RP2350_USB_C
+#ifdef ZEROSENSE_RP2350_PROXY
 void setup1() {
     static_assert(
         F_CPU == 120000000L || F_CPU == 240000000L,
@@ -2341,6 +2446,18 @@ void loop1() {
         // CDC alive on core 0 while core 1 can no longer recover mouse input.
         usbHost.task(1);
         service_host_mouse_receive_recovery();
+        // Sample outside the timing-critical PIO frame/packet paths.
+        static uint32_t lastBusSampleAtMs = 0;
+        const uint32_t nowMs = millis();
+        if (static_cast<uint32_t>(nowMs - lastBusSampleAtMs) >= 100U) {
+            uint8_t devices = 0;
+            for (uint8_t address = 1; address <= CFG_TUH_DEVICE_MAX; ++address) {
+                if (tuh_mounted(address)) ++devices;
+            }
+            hostMountedDevices.store(devices, std::memory_order_relaxed);
+            hostRootStatus.store(pio_usb_host_root_status(0), std::memory_order_release);
+            lastBusSampleAtMs = nowMs;
+        }
         hostTaskLastAtMs.store(millis(), std::memory_order_relaxed);
     } else {
         delay(1);

@@ -1,7 +1,7 @@
 ZeroSense quick start
 =====================
 
-This bundle contains the Windows app and firmware for both supported boards.
+This bundle contains the Windows app and firmware for all three supported boards.
 You only flash ONE firmware file. Never flash an RP2350 image to an RP2040, or
 an RP2040 image to an RP2350.
 
@@ -20,6 +20,9 @@ an RP2040 image to an RP2350.
    - Waveshare RP2350-USB-C with two female USB-C ports:
      ZeroSense-RP2350-USB-C-<version>.uf2
 
+   - Waveshare RP2350-USB-A with USB-C for the PC and female USB-A for the mouse:
+     ZeroSense-RP2350-USB-A-<version>.uf2
+
 4. Put the board in boot-loader mode. Hold BOOT, tap RESET, and release BOOT
    after the RPI-RP2 drive appears. Copy the matching UF2 onto RPI-RP2 and wait
    for the board to restart.
@@ -33,7 +36,7 @@ mouse. Select a profile, arm output, then hold physical M1+M2 while the game is
 foreground. The desktop app detects those buttons and sends the start/keepalive
 commands. If the app or board disconnects, generated output stops.
 
-RP2350 users: connect the PC to the USB-C port beside BOOT/RESET and the mouse
+RP2350-USB-C users: connect the PC to the USB-C port beside BOOT/RESET and the mouse
 to the opposite female port. Confirm the board's CC1/CC2 selectors are in the
 silkscreen's 1 / Source position before connecting the mouse. Read the bundled
 RP2350_MOUSE_PROXY.md guide and complete its desktop pass-through test before
@@ -41,6 +44,15 @@ arming output. For hardware-validation prereleases, keep a backup mouse connecte
 directly to the PC and the previously usable UF2 available: software tests
 cannot guarantee this board and mouse will never freeze.
 
+RP2350-USB-A users: connect USB-C to the PC and the mouse to USB-A. The CC1/CC2
+selectors above do NOT apply. Waveshare's official FAQ requires removal of R13
+for host hot-plugging; this cannot be fixed in software. Consult the bundled
+RP2350_MOUSE_PROXY.md before use and do not modify a powered board.
+
 If Windows blocks or cannot launch the app, read the bundled TROUBLESHOOTING.md.
+For USB status, close ZeroSense, open PowerShell in the folder containing
+zerosense.exe, and run .\Tools\read_usb_status.ps1 -Port COM6 -Samples 3.
+Replace COM6 with your board's current port. The capture has a time limit and
+does not arm output or change board settings.
 An unsigned portable ZIP may still show a Windows reputation warning; a user
 clicking through that warning does not create an Authenticode signature.

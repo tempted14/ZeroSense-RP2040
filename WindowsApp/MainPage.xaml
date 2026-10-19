@@ -253,6 +253,28 @@
                                                            Visibility="Collapsed" />
                                             </StackPanel>
                                         </Border>
+                                        <Border Padding="12" CornerRadius="7" Background="#0B0B0B"
+                                                BorderBrush="{StaticResource StrokeBrush}" BorderThickness="1">
+                                            <StackPanel Spacing="8">
+                                                <TextBlock Text="ORIGINAL PATTERN OUTPUT · THIS GUN" TextWrapping="Wrap"
+                                                           Style="{StaticResource LabelStyle}" />
+                                                <TextBlock x:Name="OriginalPatternMultiplierStatusText"
+                                                           Text="Choose a gun to edit its own Original-pattern output; other guns are unchanged."
+                                                           TextWrapping="Wrap" Style="{StaticResource MutedTextStyle}" />
+                                                <Grid ColumnDefinitions="110,*" ColumnSpacing="12">
+                                                    <NumberBox x:Name="OriginalPatternMultiplierBox"
+                                                               Minimum="1" Maximum="4" Value="2"
+                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
+                                                               AutomationProperties.Name="Selected gun Original pattern output multiplier"
+                                                               ValueChanged="OriginalPatternMultiplier_ValueChanged"
+                                                               LostFocus="OriginalPatternMultiplier_LostFocus" />
+                                                    <Button x:Name="ResetOriginalPatternMultiplierButton" Grid.Column="1"
+                                                            Content="Use default" VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                            AutomationProperties.Name="Reset selected gun Original pattern output to inherited default"
+                                                            Click="ResetOriginalPatternMultiplier_Click" />
+                                                </Grid>
+                                            </StackPanel>
+                                        </Border>
                                     </StackPanel>
                                 </Border>
 
@@ -297,27 +319,6 @@
                                                             VerticalAlignment="Center"
                                                             AutomationProperties.Name="Reset master recoil output gain"
                                                             Click="ResetMasterRecoilGain_Click" />
-                                                </Grid>
-                                            </Border>
-                                            <Border Padding="10" CornerRadius="7"
-                                                    Background="#0B0B0B"
-                                                    BorderBrush="{StaticResource StrokeBrush}"
-                                                    BorderThickness="1">
-                                                <Grid ColumnDefinitions="*,110" ColumnSpacing="9">
-                                                    <StackPanel Spacing="2" VerticalAlignment="Center">
-                                                        <TextBlock Text="ORIGINAL PATTERN OUTPUT"
-                                                                   Style="{StaticResource LabelStyle}" />
-                                                        <TextBlock x:Name="OriginalPatternMultiplierStatusText"
-                                                                   Text="Stock estimated automatic patterns start at 2×; source data remains unchanged."
-                                                                   TextWrapping="Wrap"
-                                                                   Style="{StaticResource MutedTextStyle}" />
-                                                    </StackPanel>
-                                                    <NumberBox x:Name="OriginalPatternMultiplierBox" Grid.Column="1"
-                                                               Minimum="1" Maximum="4" Value="2"
-                                                               SmallChange="0.25" SpinButtonPlacementMode="Compact"
-                                                               VerticalAlignment="Center"
-                                                               AutomationProperties.Name="Original automatic recoil pattern output multiplier"
-                                                               ValueChanged="OriginalPatternMultiplier_ValueChanged" />
                                                 </Grid>
                                             </Border>
                                             <Border Padding="10" CornerRadius="7"
@@ -1097,7 +1098,7 @@
                                         </Border>
                                         <StackPanel Grid.Column="1" Spacing="4">
                                             <TextBlock Text="Flash firmware" Style="{StaticResource SectionTitleStyle}" />
-                                            <TextBlock Text="Choose only the UF2 matching RP2040-Zero or RP2350-USB-C and copy it to RPI-RP2."
+                                            <TextBlock Text="Choose only the UF2 matching RP2040-Zero, RP2350-USB-C, or RP2350-USB-A and copy it to RPI-RP2."
                                                        Style="{StaticResource MutedTextStyle}" />
                                         </StackPanel>
                                     </Grid>
@@ -1121,8 +1122,10 @@
                                 <Grid ColumnDefinitions="*,Auto" ColumnSpacing="18">
                                     <StackPanel Spacing="5">
                                         <TextBlock Text="Requirements" Style="{StaticResource SectionTitleStyle}" />
-                                        <TextBlock Text="Windows 10/11 x64 · USB data cable · RP2040-Zero or Waveshare RP2350-USB-C · no developer tools required"
+                                        <TextBlock Text="Windows 10/11 x64 · USB data cable · RP2040-Zero or Waveshare RP2350-USB-C/USB-A · no developer tools required"
                                                    Style="{StaticResource MutedTextStyle}" />
+                                        <TextBlock Text="RP2350-USB-A: PC → USB-C; mouse → USB-A. For host hot-plugging, Waveshare requires removal of R13; consult the full guide before hardware changes. The USB-C board's CC selectors do not apply."
+                                                   TextWrapping="Wrap" Foreground="#D8B45A" FontSize="12" />
                                         <TextBlock x:Name="InstallationStatusText"
                                                    Text="The full Markdown guide is included beside the published app."
                                                    FontSize="11" Foreground="#666666" />

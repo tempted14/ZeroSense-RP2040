@@ -89,6 +89,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private int _deviceStatusPollTicks;
     private CalibrationSnapshot? _calibrationUndo;
     private FirmwareStatusKind? _firmwareDeviceKind;
+    private string? _firmwareBoardModel;
     private readonly DeviceConfigurationSynchronizer _configurationSynchronizer = new();
     private readonly FirmwareTransportMonitor _transportMonitor = new();
     private FirmwareStatusKind? _physicalMouseStatus;
@@ -187,7 +188,6 @@ public sealed partial class MainPage : UserControl, IDisposable
             DeltaNoiseToggle.IsOn = settings.DeltaNoiseEnabled;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
-            OriginalPatternMultiplierBox.Value = settings.OriginalPatternOutputMultiplier;
             WeaponConfidenceSlider.Value = settings.WeaponDetectionConfidence * 100.0;
             WeaponDetectionRegionXBox.Value = settings.WeaponDetectionRegionX;
             WeaponDetectionRegionYBox.Value = settings.WeaponDetectionRegionY;
@@ -392,11 +392,13 @@ public sealed partial class MainPage : UserControl, IDisposable
 
     private async void ConnectButton_Click(object sender, RoutedEventArgs e)
     {
+        Interlocked.Increment(ref _automaticReconnectGeneration);
         await ConnectToDeviceAsync(_lifetimeCancellation.Token);
     }
 
     private async void ConnectSimulatorButton_Click(object sender, RoutedEventArgs e)
     {
+        Interlocked.Increment(ref _automaticReconnectGeneration);
         if (_isConnecting || _isDisposed)
         {
             return;
@@ -594,7 +596,9 @@ public sealed partial class MainPage : UserControl, IDisposable
                 FirmwareBuildText.Text = "Firmware build: " + message[6..];
                 DiagnosticLog.Record("firmware", message);
             }
-            else if (message.StartsWith("STATUS:HASH=", StringComparison.Ordinal))
+            else if (message.StartsWith("STATUS:HASH=", StringComparison.Ordinal) ||
+                message.StartsWith("HOST_BUS:", StringComparison.Ordinal) ||
+                message.StartsWith("HOST_IN_ERROR:", StringComparison.Ordinal))
             {
                 // Protocol readback belongs in the log, not over the clear
                 // human-facing mouse/connection status on every STATUS poll.
@@ -649,14 +653,12 @@ public sealed partial class MainPage : UserControl, IDisposable
 
     private async Task AttemptAutomaticReconnectAsync(int generation)
     {
-        for (var attempt = 1;
-             attempt <= SerialReliabilityPolicy.MaximumAutomaticReconnectAttempts;
-             ++attempt)
+        for (var attempt = 1; !_isDisposed; attempt = Math.Min(attempt + 1, 1000000))
         {
             try
             {
                 await Task.Delay(
-                    TimeSpan.FromMilliseconds(500 * attempt),
+                    SerialReliabilityPolicy.ReconnectDelay(attempt),
                     _lifetimeCancellation.Token);
             }
             catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested)
@@ -676,22 +678,18 @@ public sealed partial class MainPage : UserControl, IDisposable
 
             DiagnosticLog.Record(
                 "device",
-                $"Automatic reconnect attempt {attempt}/" +
-                $"{SerialReliabilityPolicy.MaximumAutomaticReconnectAttempts}.");
+                $"Automatic reconnect attempt {attempt}; output remains disarmed.");
             await ConnectToDeviceAsync(_lifetimeCancellation.Token);
             if (_connection?.IsConnected == true)
             {
                 DiagnosticLog.Record("device", "Automatic reconnect succeeded; output remains safe.");
                 return;
             }
-        }
-
-        if (!_isDisposed && generation == Volatile.Read(ref _automaticReconnectGeneration))
-        {
-            SetConnectionStatus(
-                "Device disconnected",
-                "Automatic reconnect attempts were exhausted. Check the upstream USB cable, then select Scan for device.",
-                DisconnectedBrush);
+            if (!_isDisposed && generation == Volatile.Read(ref _automaticReconnectGeneration))
+            {
+                SetConnectionStatus("Device reconnecting…",
+                    "Output is off. Retrying in the background; Reconnect starts a fresh scan.", WarningBrush);
+            }
         }
     }
 
@@ -718,6 +716,7 @@ public sealed partial class MainPage : UserControl, IDisposable
             case FirmwareStatusKind.Rp2040Device:
             case FirmwareStatusKind.Rp2350MouseProxy:
                 _firmwareDeviceKind = update.Kind;
+                _firmwareBoardModel = update.BoardModel;
                 if (update.Kind == FirmwareStatusKind.Rp2040Device)
                 {
                     _physicalMouseStatus = null;
@@ -828,6 +827,7 @@ public sealed partial class MainPage : UserControl, IDisposable
     private void ResetFirmwareHardwareStatus()
     {
         _firmwareDeviceKind = null;
+        _firmwareBoardModel = null;
         _physicalMouseStatus = null;
         _physicalMouseVendorId = 0;
         _physicalMouseProductId = 0;
@@ -849,7 +849,7 @@ public sealed partial class MainPage : UserControl, IDisposable
 
         HardwareIdentityText.Text = _firmwareDeviceKind switch
         {
-            FirmwareStatusKind.Rp2350MouseProxy => "Hardware: Waveshare RP2350-USB-C mouse proxy",
+            FirmwareStatusKind.Rp2350MouseProxy => $"Hardware: Waveshare {_firmwareBoardModel ?? "RP2350-USB-C"} mouse proxy",
             FirmwareStatusKind.Rp2040Device => "Hardware: TENSTAR/Waveshare RP2040-Zero",
             _ => "Hardware: waiting for firmware identity"
         };
@@ -865,7 +865,7 @@ public sealed partial class MainPage : UserControl, IDisposable
                 "Physical mouse: detected, but its HID report layout could not be decoded",
             FirmwareStatusKind.Rp2350MouseProxy when
                 _physicalMouseStatus == FirmwareStatusKind.MouseHostError =>
-                "Physical mouse: PIO-USB host error; check the cable and CC source configuration",
+                "Physical mouse: PIO-USB host error; check the cable and board-specific host setup guide",
             FirmwareStatusKind.Rp2350MouseProxy =>
                 "Physical mouse: disconnected from the female PIO-USB port",
             _ => "Physical mouse: status will appear after the firmware handshake"
@@ -1214,7 +1214,6 @@ public sealed partial class MainPage : UserControl, IDisposable
         settings.MouseSensitivityMultiplierUnit = 0.001f;
         settings.MasterRecoilGain = RecoilStrengthModel.MasterDefault;
         settings.TwoPointFiveAutoVerticalBoost = 1.0;
-        settings.OriginalPatternOutputMultiplier = 2.0;
         settings.AdsSensitivity = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
         {
             ["1.0x"] = 38.0f,
@@ -1227,11 +1226,12 @@ public sealed partial class MainPage : UserControl, IDisposable
         {
             settings.SetWeaponOutputStrength(selectedWeapon, RecoilStrengthModel.Default);
             settings.SetWeaponFirstBulletKick(selectedWeapon, 1.0);
+            settings.SetWeaponOriginalPatternOutputMultiplier(selectedWeapon, 2.0);
         }
         settings.Normalize();
         RefreshCalibrationControls(settings);
         CalibrationActionStatusText.Text =
-            "Reference sensitivity, master gain, and this weapon's output strength and first bullet kick were reset. Undo is available.";
+            "Reference sensitivity, master gain, and this gun's output strength, Original multiplier and first bullet kick were reset. Undo is available.";
         DiagnosticLog.Record("calibration", $"Reset calibration for {selectedWeapon ?? "no weapon"}.");
         SaveAndSynchronize();
     }
@@ -1268,7 +1268,6 @@ public sealed partial class MainPage : UserControl, IDisposable
             SensitivityMultiplierBox.Value = settings.MouseSensitivityMultiplierUnit;
             MasterRecoilGainBox.Value = settings.MasterRecoilGain;
             TwoPointFiveBoostBox.Value = settings.TwoPointFiveAutoVerticalBoost;
-            OriginalPatternMultiplierBox.Value = settings.OriginalPatternOutputMultiplier;
             AutomaticMagnificationToggle.IsOn = settings.AutomaticMagnificationEnabled;
             MagnificationSelector.SelectedItem = settings.ActiveMagnification;
             AdsSensitivityBox.Value = settings.GetActiveAdsSensitivity();
@@ -2506,24 +2505,51 @@ public sealed partial class MainPage : UserControl, IDisposable
         var applies = settings.CompensationMode == CompensationMode.WeaponPattern &&
             effective is { IsBaseline: true, HasWeaponPattern: true,
                 PatternDataQuality: PatternDataQuality.VideoDerivedEstimate };
+        var available = selected?.Profile is { IsBaseline: true, HasWeaponPattern: true };
+        var multiplier = selected is null ? settings.OriginalPatternOutputMultiplier :
+            settings.GetWeaponOriginalPatternOutputMultiplier(selected.Name);
+        var wasInitializing = _isInitializing;
+        _isInitializing = true;
+        try
+        {
+            OriginalPatternMultiplierBox.Value = multiplier;
+            OriginalPatternMultiplierBox.IsEnabled = available;
+            ResetOriginalPatternMultiplierButton.IsEnabled = available &&
+                settings.WeaponOriginalPatternOutputMultipliers.ContainsKey(selected!.Name);
+        }
+        finally { _isInitializing = wasInitializing; }
         OriginalPatternMultiplierStatusText.Text = applies
-            ? $"Active for {selected!.Name}: {settings.OriginalPatternOutputMultiplier:0.00}× X/Y output after the profile limit."
-            : "Only applies to stock estimated automatic patterns in Original mode; modified and measured profiles are unchanged.";
+            ? $"{selected!.Name}: {multiplier:0.00}× X/Y after the profile limit. Saved for this gun only (all operators)."
+            : selected is not null
+                ? $"{selected.Name}: {multiplier:0.00}× saved. Only active for stock estimated patterns in Original mode; other profile modes are unchanged."
+                : "Select a stock automatic gun to edit its own Original-pattern output.";
     }
 
     private void OriginalPatternMultiplier_ValueChanged(
         NumberBox sender,
         NumberBoxValueChangedEventArgs args)
     {
-        if (_isInitializing)
+        if (_isInitializing || !double.IsFinite(sender.Value) ||
+            WeaponSelector.SelectedItem is not WeaponProfileViewModel selected)
         {
             return;
         }
 
         var settings = SettingsManager.LoadSettings();
-        settings.OriginalPatternOutputMultiplier = double.IsFinite(sender.Value)
-            ? Math.Clamp(sender.Value, 1.0, 4.0)
-            : 2.0;
+        settings.SetWeaponOriginalPatternOutputMultiplier(selected.Name, sender.Value);
+        UpdateOriginalPatternMultiplierStatus(settings);
+        UpdateCalibrationSummary(settings);
+        SaveAndSynchronize();
+    }
+
+    private void OriginalPatternMultiplier_LostFocus(object sender, RoutedEventArgs e) =>
+        UpdateOriginalPatternMultiplierStatus(SettingsManager.LoadSettings());
+
+    private void ResetOriginalPatternMultiplier_Click(object sender, RoutedEventArgs e)
+    {
+        if (WeaponSelector.SelectedItem is not WeaponProfileViewModel selected) return;
+        var settings = SettingsManager.LoadSettings();
+        settings.ResetWeaponOriginalPatternOutputMultiplier(selected.Name);
         UpdateOriginalPatternMultiplierStatus(settings);
         UpdateCalibrationSummary(settings);
         SaveAndSynchronize();
@@ -2895,7 +2921,7 @@ public sealed partial class MainPage : UserControl, IDisposable
         bool AutomaticMagnification,
         double MasterRecoilGain,
         double TwoPointFiveAutoVerticalBoost,
-        double OriginalPatternOutputMultiplier,
+        double? WeaponOriginalPatternOutputMultiplier,
         string? WeaponName,
         double WeaponStrength,
         float FirstBulletKick)
@@ -2910,7 +2936,9 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.AutomaticMagnificationEnabled,
             settings.MasterRecoilGain,
             settings.TwoPointFiveAutoVerticalBoost,
-            settings.OriginalPatternOutputMultiplier,
+            !string.IsNullOrWhiteSpace(weaponName) &&
+                settings.WeaponOriginalPatternOutputMultipliers.TryGetValue(weaponName, out var original)
+                ? original : null,
             weaponName,
             string.IsNullOrWhiteSpace(weaponName)
                 ? RecoilStrengthModel.Default
@@ -2932,11 +2960,14 @@ public sealed partial class MainPage : UserControl, IDisposable
             settings.AutomaticMagnificationEnabled = AutomaticMagnification;
             settings.MasterRecoilGain = MasterRecoilGain;
             settings.TwoPointFiveAutoVerticalBoost = TwoPointFiveAutoVerticalBoost;
-            settings.OriginalPatternOutputMultiplier = OriginalPatternOutputMultiplier;
             if (!string.IsNullOrWhiteSpace(WeaponName))
             {
                 settings.SetWeaponOutputStrength(WeaponName, WeaponStrength);
                 settings.SetWeaponFirstBulletKick(WeaponName, FirstBulletKick);
+                if (WeaponOriginalPatternOutputMultiplier is { } original)
+                    settings.SetWeaponOriginalPatternOutputMultiplier(WeaponName, original);
+                else
+                    settings.ResetWeaponOriginalPatternOutputMultiplier(WeaponName);
             }
         }
     }

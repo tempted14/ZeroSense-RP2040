@@ -9,12 +9,50 @@ param(
     [ValidatePattern('^COM[1-9][0-9]*$')]
     [string]$Port,
     [ValidateRange(1, 10)]
-    [int]$Samples = 3
+    [int]$Samples = 3,
+    [switch]$DiagnosticWorker
 )
 
 $ErrorActionPreference = 'Stop'
 if (Get-Process zerosense -ErrorAction SilentlyContinue) {
     throw 'Close ZeroSense before capturing status; the serial port must have only one reader.'
+}
+
+if (-not $DiagnosticWorker) {
+    # SerialPort.Open/Dispose can hang inside a failed Windows USB driver.
+    # Isolate the entire capture, not just ReadLine, in a bounded child process.
+    $captureOutput = New-TemporaryFile
+    $captureError = New-TemporaryFile
+    $captureProcess = $null
+    $captureTimeout = 10000 + 1500 * $Samples
+    try {
+        Write-Host "Capturing $Port status (maximum $($captureTimeout / 1000) seconds)..."
+        $captureProcess = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `
+            -ArgumentList "-NoProfile -File `"$PSCommandPath`" -Port $Port -Samples $Samples -DiagnosticWorker" `
+            -WindowStyle Hidden -PassThru -RedirectStandardOutput $captureOutput.FullName `
+            -RedirectStandardError $captureError.FullName
+        # Retain the native process handle; Windows PowerShell otherwise may
+        # return a null ExitCode after a short-lived Start-Process child exits.
+        $null = $captureProcess.Handle
+        $finished = $captureProcess.WaitForExit($captureTimeout)
+        if (-not $finished) {
+            $captureProcess.Kill()
+            $captureProcess.WaitForExit(2000) | Out-Null
+        }
+        Get-Content -LiteralPath $captureOutput.FullName
+        if (-not $finished) {
+            throw "Windows stalled while opening, reading, or closing $Port. Capture was stopped; no settings changed. Reconnect the board and retry."
+        }
+        if ($captureProcess.ExitCode -ne 0) {
+            $captureDetail = Get-Content -LiteralPath $captureError.FullName -Raw
+            if (-not $captureDetail) { $captureDetail = "Diagnostic child exited with code $($captureProcess.ExitCode)." }
+            throw $captureDetail
+        }
+    } finally {
+        if ($captureProcess) { $captureProcess.Dispose() }
+        Remove-Item -LiteralPath $captureOutput.FullName, $captureError.FullName -ErrorAction SilentlyContinue
+    }
+    return
 }
 
 $diagnosticPort = [System.IO.Ports.SerialPort]::new($Port, 115200)

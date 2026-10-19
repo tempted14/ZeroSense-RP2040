@@ -51,18 +51,21 @@ jobs:
       - name: Run native HID replay fixtures
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror
+          -I Tests/HidReplay/NativeUsbStub
           Tests/HidReplay/hid_replay_tests.cpp
           -o Tests/HidReplay/hid_replay_tests
           && Tests/HidReplay/hid_replay_tests
-      - name: Build both firmware targets
+      - name: Build all three firmware targets
         run: >-
           pio run -d RP2040_Firmware
           -e waveshare_rp2040_zero
           -e waveshare_rp2350_usb_c
+          -e waveshare_rp2350_usb_a
       - name: Validate UF2 target families
         run: |
           python tools/verify_uf2.py rp2040 RP2040_Firmware/.pio/build/waveshare_rp2040_zero/firmware.uf2
           python tools/verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2
+          python tools/verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_a/firmware.uf2
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: rainbow-recoil-rp2040-zero-uf2
@@ -71,3 +74,7 @@ jobs:
         with:
           name: rainbow-recoil-rp2350-usb-c-uf2
           path: RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rainbow-recoil-rp2350-usb-a-uf2
+          path: RP2040_Firmware/.pio/build/waveshare_rp2350_usb_a/firmware.uf2

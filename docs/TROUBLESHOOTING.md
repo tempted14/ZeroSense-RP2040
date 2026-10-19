@@ -1,14 +1,19 @@
-# Troubleshooting RP2040-Zero and RP2350-USB-C
+# Troubleshooting RP2040-Zero and RP2350 USB mouse proxies
 
 ## RP2350 proxy is online but the mouse is disconnected
 
-- Confirm this is the two-female-port **RP2350-USB-C**, not RP2350-USB-CM.
-- Connect Windows to the native port beside `BOOT`/`RESET` and the mouse to the
-  opposite PIO-USB port.
-- With power removed, confirm both PIO-port CC selectors are in the
-  silkscreen's `1 / Source` position. Never bridge both positions.
+- Confirm the exact board model and flash its matching USB-C or USB-A UF2.
+- **RP2350-USB-C:** connect Windows to the native port beside `BOOT`/`RESET`
+  and the mouse to the opposite female PIO-USB port. With power removed,
+  confirm both PIO-port CC selectors are in the silkscreen's `1 / Source`
+  position. Never bridge both positions. USB-CM is a different board.
+- **RP2350-USB-A:** connect USB-C to Windows and the mouse to female USB-A.
+  The CC selectors above do not apply. Waveshare documents that host
+  hot-plugging requires removal of R13; after removal that port cannot operate
+  as a USB device. This physical change cannot be made by firmware. Follow
+  the official FAQ and never modify a powered board.
 - Use data-capable cables and avoid an unpowered hub.
-- Reflash `rainbow_recoil_rp2350_usb_c.uf2`, not the RP2040 image.
+- Do not flash the RP2040 image onto either RP2350 board.
 
 `MOUSE:UNSUPPORTED:HID_REPORT_DESCRIPTOR` means the device exposed no mouse
 layout the firmware could safely decode and boot-protocol fallback was not
@@ -125,15 +130,19 @@ The app does not search for a bridge-chip description. It considers active COM p
 
 ### COM remains visible, but output stops or reconnect fails
 
-Use the v2.1.3 Windows app together with v2.1.2-or-newer board firmware. Together
-they retry lost startup probes, reset partial firmware sessions on DTR changes,
-and serialize failed-port cleanup before reconnecting. This preserves your
-saved profiles and keeps output stopped until the app synchronizes and arms.
+Use the matching recovery-candidate app and UF2. They retain startup retries,
+transactional configuration readback, and serialized failed-port cleanup.
+Windows CDC uses cancelable overlapped I/O rather than an unbounded close-time
+transmit flush. Native buffers remain alive until cancellation completes; a
+driver that refuses cancellation still requires unplugging the board. Recovery
+never automatically re-arms output or changes your saved profiles.
 
-The v2.1.3 app additionally moves live command writes off the UI, detects hung
-writes, and discards stale/pending output on failure. Even if the board stops
-responding, the app should remain usable for copying diagnostics. A timeout
-does not forcibly cancel Windows' native operation; reconnect waits for cleanup.
+Automatic reconnect makes three quick attempts, then retries every 15 seconds
+in the background. Manual Reconnect supersedes the previous retry loop. The
+firmware coordinates CDC/HID access with the background USB task and has a
+two-second main-loop watchdog for genuine hangs, not idle input. A watchdog
+restart is reported as `LAST_RESET:MAIN_LOOP_WATCHDOG` or
+`LAST_RESET:HOST_WATCHDOG`; include that line when reporting another freeze.
 
 - Export the app's diagnostic report before closing it. Preserve the exact
   connection error, error code, BUILD line, and whether COM disappears.
@@ -146,8 +155,24 @@ does not forcibly cancel Windows' native operation; reconnect waits for cleanup.
   direct PC USB port, changing one variable at a time.
 
 RP2040-Zero is not a passthrough board: keep the physical mouse plugged into
-the PC. Its firmware marker for this patch is
-`BUILD:V2.1.2-CDC-RECOVERY-20260927`.
+the PC. The recovery candidate's firmware marker is
+`BUILD:V2.2.0-USB-RECOVERY-20261007`.
+
+### Capture status without an indefinitely stalled console
+
+Close ZeroSense and any serial monitor first. Open PowerShell in the extracted
+app folder (the folder containing `zerosense.exe`), then run:
+
+```powershell
+.\Tools\read_usb_status.ps1 -Port COM6 -Samples 3
+```
+
+Replace `COM6` with your current board port. From a source checkout the path is
+`.\tools\read_usb_status.ps1`. The capture runs in a hidden child process with
+a whole-operation deadline. It sends read-only STATUS requests; it does not
+arm output or change configuration. Save its BUILD, STATUS, METRICS and any
+LAST_RESET lines. Closing the app before capture is necessary because Windows
+allows only one owner of a COM port.
 
 ## The COM number changed
 

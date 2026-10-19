@@ -53,7 +53,8 @@ public sealed class SerialConnection : IRecoilDeviceConnection
     public string PortName => _portName;
     public bool IsSimulator => false;
 
-    public SerialConnection(string portName) : this(portName, () => new SerialPortTransport(portName.Trim()))
+    public SerialConnection(string portName) : this(portName, () => OperatingSystem.IsWindows()
+        ? new WindowsSerialPortTransport(portName.Trim()) : new SerialPortTransport(portName.Trim()))
     {
     }
 
