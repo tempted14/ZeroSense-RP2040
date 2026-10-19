@@ -44,8 +44,8 @@
              Link="Docs\TROUBLESHOOTING.md"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\docs\RELEASE_NOTES_2.3.0.md"
-             Link="Docs\RELEASE_NOTES_2.3.0.md"
+    <Content Include="..\docs\RELEASE_NOTES_$(Version).md"
+             Link="Docs\RELEASE_NOTES_$(Version).md"
              CopyToOutputDirectory="PreserveNewest"
              CopyToPublishDirectory="PreserveNewest" />
     <Content Include="..\tools\read_usb_status.ps1"

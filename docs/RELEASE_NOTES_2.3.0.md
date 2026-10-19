@@ -51,8 +51,12 @@ features; patterns and per-gun settings are calculated by the Windows app.
 
 Regression tests cover migration/persistence, malformed overrides, gun switching,
 wire values/configuration hashes, full-magazine Scorpion output and isolation of
-other profile sources. Native HID replay, Windows publishing and all three UF2
-build/family checks are also required before publication.
+other profile sources. Local verification passed 60 core tests, 50 Python tests,
+native HID replay, self-contained Windows publishing and all three UF2
+build/family checks. Packaged-app UI checks verified separate SMG-12/C75 values,
+selected-gun reset, the Scorpion estimate label and saved state after restart.
+The tester's original settings were backed up/restored; output was never armed.
+GitHub Windows and firmware CI are required before the release tag is published.
 
 This is a **hardware-validation prerelease**. Automated tests do not prove
 in-game calibration, zero disconnects or every mouse/receiver combination.
