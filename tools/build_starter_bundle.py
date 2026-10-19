@@ -30,7 +30,8 @@ def build_starter_bundle(assets: Path, version: str, quick_start: Path) -> Path:
     portable = assets / f"ZeroSense-{version}-Windows-x64.zip"
     rp2040 = assets / f"ZeroSense-RP2040-Zero-{version}.uf2"
     rp2350 = assets / f"ZeroSense-RP2350-USB-C-{version}.uf2"
-    required = (portable, rp2040, rp2350, quick_start)
+    rp2350_a = assets / f"ZeroSense-RP2350-USB-A-{version}.uf2"
+    required = (portable, rp2040, rp2350, rp2350_a, quick_start)
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         raise FileNotFoundError("Missing starter-bundle input(s): " + ", ".join(missing))
@@ -57,7 +58,7 @@ def build_starter_bundle(assets: Path, version: str, quick_start: Path) -> Path:
                 ) as destination_file:
                     shutil.copyfileobj(source_file, destination_file)
 
-            for firmware in (rp2040, rp2350):
+            for firmware in (rp2040, rp2350, rp2350_a):
                 destination = f"Firmware/{firmware.name}"
                 bundle.write(firmware, destination)
     except BadZipFile as error:

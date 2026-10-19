@@ -105,17 +105,20 @@ jobs:
       - name: Run native HID replay fixtures
         run: >-
           g++ -std=c++17 -Wall -Wextra -Werror
+          -I Tests/HidReplay/NativeUsbStub
           Tests/HidReplay/hid_replay_tests.cpp
           -o Tests/HidReplay/hid_replay_tests
           && Tests/HidReplay/hid_replay_tests
-      - run: pio run -d RP2040_Firmware -e waveshare_rp2040_zero -e waveshare_rp2350_usb_c
+      - run: pio run -d RP2040_Firmware -e waveshare_rp2040_zero -e waveshare_rp2350_usb_c -e waveshare_rp2350_usb_a
       - name: Name and validate UF2s
         run: |
           version="${GITHUB_REF_NAME#v}"
           python tools/verify_uf2.py rp2040 RP2040_Firmware/.pio/build/waveshare_rp2040_zero/firmware.uf2
           python tools/verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2
+          python tools/verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_a/firmware.uf2
           cp RP2040_Firmware/.pio/build/waveshare_rp2040_zero/firmware.uf2 "ZeroSense-RP2040-Zero-$version.uf2"
           cp RP2040_Firmware/.pio/build/waveshare_rp2350_usb_c/firmware.uf2 "ZeroSense-RP2350-USB-C-$version.uf2"
+          cp RP2040_Firmware/.pio/build/waveshare_rp2350_usb_a/firmware.uf2 "ZeroSense-RP2350-USB-A-$version.uf2"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: firmware-uf2
@@ -163,7 +166,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           release_flags=()
-          if [ "${GITHUB_REF_NAME}" = "v1.9.0" ] || [ "${GITHUB_REF_NAME}" = "v2.0.0" ] || [ "${GITHUB_REF_NAME}" = "v2.1.0" ] || [ "${GITHUB_REF_NAME}" = "v2.1.1" ] || [ "${GITHUB_REF_NAME}" = "v2.1.2" ] || [ "${GITHUB_REF_NAME}" = "v2.1.3" ] || [ "${GITHUB_REF_NAME}" = "v2.1.4" ]; then
+          if grep -q '<InformationalVersion>.*-validation</InformationalVersion>' Directory.Build.props; then
             release_flags+=(--prerelease)
           fi
           gh release create "${GITHUB_REF_NAME}" release-assets/* \

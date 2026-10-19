@@ -7,7 +7,7 @@ from tools.build_starter_bundle import build_starter_bundle
 
 
 class StarterBundleTests(unittest.TestCase):
-    def test_bundle_has_guidance_app_and_both_firmware_images(self) -> None:
+    def test_bundle_has_guidance_app_and_all_firmware_images(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             version = "9.8.7"
@@ -16,6 +16,7 @@ class StarterBundleTests(unittest.TestCase):
                 app.writestr("docs/TROUBLESHOOTING.md", b"test guidance")
             (root / f"ZeroSense-RP2040-Zero-{version}.uf2").write_bytes(b"rp2040")
             (root / f"ZeroSense-RP2350-USB-C-{version}.uf2").write_bytes(b"rp2350")
+            (root / f"ZeroSense-RP2350-USB-A-{version}.uf2").write_bytes(b"rp2350-a")
             quick_start = root / "START_HERE.txt"
             quick_start.write_text("quick start", encoding="utf-8")
 
@@ -29,6 +30,7 @@ class StarterBundleTests(unittest.TestCase):
                         "ZeroSense/docs/TROUBLESHOOTING.md",
                         f"Firmware/ZeroSense-RP2040-Zero-{version}.uf2",
                         f"Firmware/ZeroSense-RP2350-USB-C-{version}.uf2",
+                        f"Firmware/ZeroSense-RP2350-USB-A-{version}.uf2",
                     },
                     set(bundle.namelist()),
                 )
@@ -41,6 +43,7 @@ class StarterBundleTests(unittest.TestCase):
                 app.writestr("../outside.exe", b"unsafe")
             (root / f"ZeroSense-RP2040-Zero-{version}.uf2").write_bytes(b"rp2040")
             (root / f"ZeroSense-RP2350-USB-C-{version}.uf2").write_bytes(b"rp2350")
+            (root / f"ZeroSense-RP2350-USB-A-{version}.uf2").write_bytes(b"rp2350-a")
             quick_start = root / "START_HERE.txt"
             quick_start.write_text("quick start", encoding="utf-8")
 

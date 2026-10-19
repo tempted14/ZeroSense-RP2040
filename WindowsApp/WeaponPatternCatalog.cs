@@ -36,7 +36,8 @@ internal enum PatternShape
     Sway,
     Irregular,
     TwoStage,
-    ReaperStages
+    ReaperStages,
+    ScorpionSustainedLeft
 }
 
 internal sealed record WeaponPatternDefinition(
@@ -58,6 +59,10 @@ internal sealed record WeaponPatternDefinition(
 /// </summary>
 internal static class WeaponPatternCatalog
 {
+    public const string ScorpionWeaponName = "SCORPION EVO 3 A1";
+    public const string ScorpionReferenceSource =
+        "Screenshot-guided estimate (2026-10-19): sustained left pull; " +
+        "rightward correction, uncalibrated magnitude";
     private const string PatternData = """
 L85A2|669|30|Low|Sway|Vertical grip|Flash hider
 AR33|748|25|Normal|Centered|Vertical grip|Flash hider
@@ -134,7 +139,8 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
         double generalHorizontal,
         string? selectedBarrel = null,
         int roundsPerMinute = 0,
-        int magazineSize = 0)
+        int magazineSize = 0,
+        bool useScorpionReference = false)
     {
         var definition = Find(weaponName);
         var effectiveRoundsPerMinute = roundsPerMinute > 0
@@ -150,6 +156,8 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
 
         var tier = definition?.Tier ?? RecoilTier.Normal;
         var shape = definition?.Shape ?? PatternShape.Centered;
+        if (useScorpionReference && weaponName.Equals(ScorpionWeaponName, StringComparison.OrdinalIgnoreCase))
+            shape = PatternShape.ScorpionSustainedLeft;
         var pointCount = effectiveMagazineSize;
         var points = new RecoilPatternPoint[pointCount];
         var barrel = selectedBarrel ?? definition?.Barrel ?? "Not applicable";
@@ -201,6 +209,15 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
         bool largeMagazine)
     {
         progress = Math.Clamp(progress, 0.0, 1.0);
+        if (shape == PatternShape.ScorpionSustainedLeft)
+        {
+            // The reference shows a continuing rise, not an increasingly large
+            // late-magazine stage. Absolute shot indices preserve the onset
+            // when a custom magazine length is used. Magnitudes are estimates.
+            return shotIndex < 3
+                ? SmoothInterpolate(1.08, 0.96, Normalize(shotIndex, 0, 3))
+                : SmoothInterpolate(0.96, 1.14, Normalize(shotIndex, 3, 12));
+        }
         if (shape == PatternShape.ReaperStages)
         {
             return ReaperStageScale(shotIndex);
@@ -279,6 +296,14 @@ XK23|676|35|Normal|Sway|Vertical grip|Flash hider
         var attachmentScale = barrel.Equals("Compensator", StringComparison.OrdinalIgnoreCase)
             ? RecoilAttachmentModel.CompensatorHorizontalMultiplier
             : 1.0;
+        if (shape == PatternShape.ScorpionSustainedLeft)
+        {
+            // Leftward impacts require POSITIVE HID X. Do not invent the old
+            // repeating left/right sequence for this screenshot-guided trace.
+            // 0.24 is an adjustable-model estimate, not pixels converted to HID.
+            return vertical * 0.24 * attachmentScale *
+                SmoothInterpolate(0.0, 1.0, Normalize(shotIndex, 3, 9));
+        }
         var amplitude = vertical * (0.035 + 0.07 * progress) * attachmentScale;
 
         return shape switch

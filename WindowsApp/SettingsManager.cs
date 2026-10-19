@@ -211,7 +211,7 @@ public static class SettingsManager
 
 public sealed class Settings
 {
-    public const int CurrentCalibrationVersion = 17;
+    public const int CurrentCalibrationVersion = 18;
 
     [JsonPropertyName("calibrationVersion")]
     public int CalibrationVersion { get; set; } = CurrentCalibrationVersion;
@@ -290,6 +290,12 @@ public sealed class Settings
     // Q8.8 profile has been decoded. Modified/measured profiles remain neutral.
     [JsonPropertyName("originalPatternOutputMultiplier")]
     public double OriginalPatternOutputMultiplier { get; set; } = 2.0;
+
+    // The old global value remains an inherited default for migration only.
+    // Editing one gun never changes the default or another gun's override.
+    [JsonPropertyName("weaponOriginalPatternOutputMultipliers")]
+    public Dictionary<string, double> WeaponOriginalPatternOutputMultipliers { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
 
     // Kept for backward-compatible deserialization of the unfinished v4 setting.
     [JsonPropertyName("autoOperatorTrackingEnabled")]
@@ -540,9 +546,15 @@ public sealed class Settings
         TwoPointFiveAutoVerticalBoost = double.IsFinite(TwoPointFiveAutoVerticalBoost)
             ? Math.Clamp(TwoPointFiveAutoVerticalBoost, 1.0, 4.0)
             : 1.0;
-        OriginalPatternOutputMultiplier = double.IsFinite(OriginalPatternOutputMultiplier)
-            ? Math.Clamp(OriginalPatternOutputMultiplier, 1.0, 4.0)
-            : 2.0;
+        OriginalPatternOutputMultiplier = NormalizeOriginalPatternMultiplier(OriginalPatternOutputMultiplier);
+        WeaponOriginalPatternOutputMultipliers =
+            (WeaponOriginalPatternOutputMultipliers ?? new Dictionary<string, double>())
+            .Where(pair => !string.IsNullOrWhiteSpace(pair.Key) && double.IsFinite(pair.Value))
+            .GroupBy(pair => pair.Key.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(group => new KeyValuePair<string, double>(
+                group.Key, NormalizeOriginalPatternMultiplier(group.Last().Value)))
+            .Where(pair => Math.Abs(pair.Value - OriginalPatternOutputMultiplier) > 0.0001)
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
 
         OperatorDetectionConfidence = double.IsFinite(OperatorDetectionConfidence)
             ? Math.Clamp(OperatorDetectionConfidence, 0.55, 1.0)
@@ -606,6 +618,33 @@ public sealed class Settings
 
     public double GetEffectiveOutputGain(string weaponName) =>
         RecoilStrengthModel.Combine(MasterRecoilGain, GetWeaponOutputStrength(weaponName));
+
+    public double GetWeaponOriginalPatternOutputMultiplier(string weaponName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        return WeaponOriginalPatternOutputMultipliers.TryGetValue(weaponName.Trim(), out var value)
+            ? NormalizeOriginalPatternMultiplier(value)
+            : NormalizeOriginalPatternMultiplier(OriginalPatternOutputMultiplier);
+    }
+
+    public void SetWeaponOriginalPatternOutputMultiplier(string weaponName, double requestedMultiplier)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        var value = NormalizeOriginalPatternMultiplier(requestedMultiplier);
+        if (Math.Abs(value - NormalizeOriginalPatternMultiplier(OriginalPatternOutputMultiplier)) <= 0.0001)
+            WeaponOriginalPatternOutputMultipliers.Remove(weaponName.Trim());
+        else
+            WeaponOriginalPatternOutputMultipliers[weaponName.Trim()] = value;
+    }
+
+    public void ResetWeaponOriginalPatternOutputMultiplier(string weaponName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(weaponName);
+        WeaponOriginalPatternOutputMultipliers.Remove(weaponName.Trim());
+    }
+
+    private static double NormalizeOriginalPatternMultiplier(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 1.0, 4.0) : 2.0;
 
     public float GetWeaponFirstBulletKick(string weaponName)
     {
@@ -686,7 +725,7 @@ public sealed class Settings
         var patternMultiplier = mode == RainbowRecoil.CompensationMode.WeaponPattern &&
             profile is { IsBaseline: true, HasWeaponPattern: true,
                 PatternDataQuality: PatternDataQuality.VideoDerivedEstimate }
-            ? OriginalPatternOutputMultiplier
+            ? GetWeaponOriginalPatternOutputMultiplier(profile.Name)
             : 1.0;
 
         return new SensitivityScale(

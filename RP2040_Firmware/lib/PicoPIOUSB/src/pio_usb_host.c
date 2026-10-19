@@ -29,6 +29,7 @@ static repeating_timer_t sof_rt;
 static volatile uint32_t sof_count = 0;
 static uint32_t host_in_attempts = 0;
 static uint32_t host_in_naks = 0;
+static uint32_t host_last_in_error = 0;
 static bool timer_active;
 
 static volatile bool cancel_timer_flag;
@@ -260,6 +261,19 @@ static int usb_setup_transaction(pio_port_t *pp, endpoint_t *ep);
 static int usb_in_transaction(pio_port_t *pp, endpoint_t *ep);
 static int usb_out_transaction(pio_port_t *pp, endpoint_t *ep);
 
+uint32_t pio_usb_host_root_status(uint8_t root_idx) {
+  if (root_idx >= PIO_USB_ROOT_PORT_CNT) return 0;
+  const root_port_t *root = PIO_USB_ROOT_PORT(root_idx);
+  if (!root->initialized) return 0;
+  // The PIO decoder inverts both input overrides. Undo that for diagnostics,
+  // as pio_usb_bus_get_line_state does, without toggling input enable here.
+  const uint32_t pins = ~gpio_get_all();
+  return pio_usb_host_pack_root_status(
+      root->initialized, root->connected, root->suspended,
+      (pins & (1u << root->pin_dp)) != 0,
+      (pins & (1u << root->pin_dm)) != 0, root->is_fullspeed);
+}
+
 void __not_in_flash_func(pio_usb_host_frame)(void) {
   if (!timer_active) {
     return;
@@ -390,6 +404,10 @@ uint32_t pio_usb_host_in_attempt_count(void) {
 
 uint32_t pio_usb_host_in_nak_count(void) {
   return __atomic_load_n(&host_in_naks, __ATOMIC_RELAXED);
+}
+
+uint32_t pio_usb_host_last_in_error(void) {
+  return __atomic_load_n(&host_last_in_error, __ATOMIC_RELAXED);
 }
 
 void pio_usb_host_port_reset_start(uint8_t root_idx) {
@@ -584,6 +602,12 @@ static int __no_inline_not_in_flash_func(usb_in_transaction)(pio_port_t *pp,
     pio_usb_ll_transfer_complete(ep, PIO_USB_INTS_ENDPOINT_STALLED_BITS);
   } else {
     res = -1;
+    // Fault path only: capture the already-read packet header, never print or
+    // add timestamp reads to the USB turnaround/healthy report path.
+    const uint32_t snapshot = (uint32_t)pp->usb_rx_buffer[0] |
+        ((uint32_t)receive_pid << 8) | ((uint32_t)(ep->dev_addr & 0x7f) << 16) |
+        (ready ? (1u << 23) : 0u) | ((uint32_t)ep->ep_num << 24);
+    __atomic_store_n(&host_last_in_error, snapshot, __ATOMIC_RELAXED);
     if ((pp->pio_usb_rx->irq & IRQ_RX_COMP_MASK) == 0) {
       res = -2;
     }

@@ -30,6 +30,7 @@
     <Compile Include="..\WindowsApp\SerialConnection.cs" Link="Source\SerialConnection.cs" />
     <Compile Include="..\WindowsApp\SerialWritePump.cs" Link="Source\SerialWritePump.cs" />
     <Compile Include="..\WindowsApp\SerialPortTransport.cs" Link="Source\SerialPortTransport.cs" />
+    <Compile Include="..\WindowsApp\WindowsSerialPortTransport.cs" Link="Source\WindowsSerialPortTransport.cs" />
     <Compile Include="..\WindowsApp\SerialLineReader.cs" Link="Source\SerialLineReader.cs" />
     <Compile Include="..\WindowsApp\FirmwareHandshake.cs" Link="Source\FirmwareHandshake.cs" />
     <Compile Include="..\WindowsApp\FirmwareStatusParser.cs" Link="Source\FirmwareStatusParser.cs" />

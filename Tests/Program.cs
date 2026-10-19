@@ -5,6 +5,25 @@ using System.Text;
 using System.Text.Json;
 using RainbowRecoil;
 
+if (args.Length > 0 && args[0] == "--usb-probe")
+{
+    if (args.Length != 3 || !int.TryParse(args[2], out var cycles))
+        throw new ArgumentException("Usage: --usb-probe COM6 30");
+    return await UsbProbe.RunAsync(args[1], cycles);
+}
+if (args.Length > 0 && args[0] == "--usb-config-probe")
+{
+    if (args.Length != 3 || !int.TryParse(args[2], out var transactions))
+        throw new ArgumentException("Usage: --usb-config-probe COM6 30");
+    return await UsbProbe.RunConfigurationAsync(args[1], transactions);
+}
+if (args.Length > 0 && args[0] == "--usb-close-race")
+{
+    if (args.Length != 3 || !int.TryParse(args[2], out var cycles))
+        throw new ArgumentException("Usage: --usb-close-race COM6 100");
+    return await UsbProbe.RunCloseRaceAsync(args[1], cycles);
+}
+
 var tests = new (string Name, Action Run)[]
 {
     ("catalog is complete and unique", CatalogIsCompleteAndUnique),
@@ -24,6 +43,11 @@ var tests = new (string Name, Action Run)[]
     ("settings normalization and scaling are safe", SettingsNormalizationIsSafe),
     ("2.5x automatic boost survives the 127-point profile limit", TwoPointFiveBoostIsScoped),
     ("original pattern output multiplier is scoped and combines safely", OriginalPatternMultiplierIsScoped),
+    ("per-gun Original output migrates and persists without changing other guns", PerWeaponPatternTests.LegacySettingsAndPersistence),
+    ("malformed per-gun Original overrides normalize safely", PerWeaponPatternTests.MalformedOverridesAreNormalized),
+    ("switching guns transfers each Original multiplier and configuration hash", PerWeaponPatternTests.WeaponSwitchingReachesProtocol),
+    ("Scorpion correction follows a sustained left-pull estimate", PerWeaponPatternTests.ScorpionCorrectionIsSustained),
+    ("Scorpion refinement preserves research, custom, measured and other guns", PerWeaponPatternTests.ScorpionRefinementIsIsolated),
     ("operator OCR matching tolerates realistic noise", OperatorOcrMatchingIsRobust),
     ("detection settings normalize safely", DetectionSettingsNormalizeSafely),
     ("weapon slots and defaults are deterministic", WeaponSlotsAndDefaultsAreDeterministic),
@@ -41,6 +65,8 @@ var tests = new (string Name, Action Run)[]
     ("attachment math is applied once", AttachmentMathIsConsistent),
     ("serial packets preserve framing and UTF-8", SerialPacketsAreValid),
     ("serial reliability tolerates isolated read and acknowledgement stalls", SerialReliabilityIsBounded),
+    ("native CDC rejects arbitrary device paths", UsbProbe.InvalidPortsAreRejected),
+    ("native CDC status cannot wait on a stalled driver worker", UsbProbe.StatusDoesNotWaitForNativeOperations),
     ("stalled COM opens time out without overlapping retries", StalledSerialOpensStayBounded),
     ("handshake recovers a lost first reply and rejects other firmware", SerialTransportTests.HandshakeRecoversLostReply),
     ("serial line framing recovers corruption and partial reads", SerialTransportTests.LineFramingRecoversCorruption),
@@ -1421,6 +1447,10 @@ static void ConfigurationTransactionsAreDeterministic()
 
 static void SerialReliabilityIsBounded()
 {
+    Equal(TimeSpan.FromMilliseconds(500), SerialReliabilityPolicy.ReconnectDelay(1), "first retry delay");
+    Equal(TimeSpan.FromMilliseconds(1500), SerialReliabilityPolicy.ReconnectDelay(3), "third retry delay");
+    Equal(TimeSpan.FromSeconds(15), SerialReliabilityPolicy.ReconnectDelay(4), "background retry delay");
+    Equal(TimeSpan.FromSeconds(15), SerialReliabilityPolicy.ReconnectDelay(1000000), "backoff remains bounded");
     True(SerialReliabilityPolicy.MaximumResponseAttempts >= 2,
         "an isolated acknowledgement loss must be retried");
     True(SerialReliabilityPolicy.MaximumResponseAttempts <= 3,
@@ -1742,6 +1772,10 @@ static void FirmwareStatusIsParsed()
             out var rp2350),
         "RP2350 identity should parse");
     Equal(FirmwareStatusKind.Rp2350MouseProxy, rp2350.Kind, "RP2350 identity");
+    Equal("RP2350-USB-C", rp2350.BoardModel, "USB-C board identity");
+    True(FirmwareStatusParser.TryParse("DEVICE:RP2350-USB-A:MOUSE-PROXY", out var usbA), "USB-A identity parses");
+    Equal(FirmwareStatusKind.Rp2350MouseProxy, usbA.Kind, "USB-A shares proxy behavior");
+    Equal("RP2350-USB-A", usbA.BoardModel, "USB-A is not mislabeled USB-C");
 
     True(
         FirmwareStatusParser.TryParse(

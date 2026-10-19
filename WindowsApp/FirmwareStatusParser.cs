@@ -45,7 +45,8 @@ public readonly record struct FirmwareStatusUpdate(
     uint HostSofFrames = 0,
     uint HostInAttempts = 0,
     uint HostInNaks = 0,
-    bool HasHostBusMetrics = false);
+    bool HasHostBusMetrics = false,
+    string? BoardModel = null);
 
 /// <summary>Parses asynchronous hardware identity and RP2350 mouse-host status lines.</summary>
 public static class FirmwareStatusParser
@@ -65,12 +66,17 @@ public static class FirmwareStatusParser
         }
         if (value.Equals("DEVICE:RP2040-ZERO:CDC+HID", StringComparison.Ordinal))
         {
-            update = new(FirmwareStatusKind.Rp2040Device);
+            update = new(FirmwareStatusKind.Rp2040Device, BoardModel: "RP2040-ZERO");
             return true;
         }
         if (value.Equals("DEVICE:RP2350-USB-C:MOUSE-PROXY", StringComparison.Ordinal))
         {
-            update = new(FirmwareStatusKind.Rp2350MouseProxy);
+            update = new(FirmwareStatusKind.Rp2350MouseProxy, BoardModel: "RP2350-USB-C");
+            return true;
+        }
+        if (value.Equals("DEVICE:RP2350-USB-A:MOUSE-PROXY", StringComparison.Ordinal))
+        {
+            update = new(FirmwareStatusKind.Rp2350MouseProxy, BoardModel: "RP2350-USB-A");
             return true;
         }
         if (value.Equals("MOUSE:DISCONNECTED", StringComparison.Ordinal))

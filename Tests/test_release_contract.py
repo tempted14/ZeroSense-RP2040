@@ -52,6 +52,7 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn('ZeroSense-$version-Windows-x64.zip', workflow)
         self.assertIn('ZeroSense-RP2040-Zero-$version.uf2', workflow)
         self.assertIn('ZeroSense-RP2350-USB-C-$version.uf2', workflow)
+        self.assertIn('ZeroSense-RP2350-USB-A-$version.uf2', workflow)
         self.assertIn('docs/START_HERE.txt', workflow)
         self.assertIn('tools/build_starter_bundle.py', workflow)
         self.assertLess(
@@ -65,6 +66,27 @@ class ReleaseContractTests(unittest.TestCase):
         self.assertIn("1 / Source", quick_start)
         bundler = (ROOT / "tools" / "build_starter_bundle.py").read_text()
         self.assertIn('f"ZeroSense-{version}-Starter-Bundle.zip"', bundler)
+        app_project = (ROOT / 'WindowsApp/RainbowRecoil.csproj').read_text()
+        self.assertIn('Link="Tools\\read_usb_status.ps1"', app_project)
+
+    def test_usb_a_has_a_separate_target_and_shared_proxy_features(self) -> None:
+        board = json.loads((ROOT / 'RP2040_Firmware/boards/waveshare_rp2350_usb_a.json').read_text())
+        self.assertEqual('rp2350', board['build']['mcu'])
+        self.assertEqual(2097152, board['upload']['maximum_size'])
+        ini = (ROOT / 'RP2040_Firmware/platformio.ini').read_text()
+        self.assertIn('[env:waveshare_rp2350_usb_a]', ini)
+        self.assertIn('-DZEROSENSE_RP2350_USB_A', ini)
+        for filename in ('ci.yml', 'release.yml'):
+            workflow = (ROOT / '.github/workflows' / filename).read_text()
+            self.assertIn('-e waveshare_rp2350_usb_a', workflow)
+            self.assertIn('verify_uf2.py rp2350 RP2040_Firmware/.pio/build/waveshare_rp2350_usb_a/firmware.uf2', workflow)
+        sketch = (ROOT / 'RP2040_Firmware/rainbow_recoil/rainbow_recoil.ino').read_text()
+        self.assertIn('defined(ZEROSENSE_RP2350_USB_C) || defined(ZEROSENSE_RP2350_USB_A)', sketch)
+        self.assertIn('NativeUsbGuard usbAccess;', sketch)
+        self.assertIn('watchdog_enable(2000, true)', sketch)
+        guide = (ROOT / 'docs/RP2350_MOUSE_PROXY.md').read_text()
+        self.assertIn('R13', guide)
+        self.assertIn('not been qualified', guide)
 
     def test_private_key_formats_are_ignored(self) -> None:
         ignore = (ROOT / ".gitignore").read_text().splitlines()
